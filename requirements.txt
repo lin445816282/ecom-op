@@ -1,0 +1,6 @@
+# 电商运营工作台 Python 依赖
+# 工具脚本主要由标准库实现，无需额外安装即可运行。
+# 如后续需要读取 xlsx/docx/pdf 原始资料，可安装：
+# openpyxl>=3.1
+# python-docx>=1.1
+# pypdfium2>=5.7

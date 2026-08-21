@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>电商运营工作台</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="logo">营</div>
+        <div>电商运营工作台<small>PDD · 单品起店 · ROI</small></div>
+      </div>
+      <button class="nav-item active" data-view="dashboard"><span class="ico">▦</span>运营总览</button>
+      <button class="nav-item" data-view="guide"><span class="ico">?</span>操作手册</button>
+      <button class="nav-item" data-view="products"><span class="ico">✚</span>商品投产</button>
+      <button class="nav-item" data-view="knowledge"><span class="ico">◎</span>知识库</button>
+      <button class="nav-item" data-view="calendar"><span class="ico">▤</span>选品日历</button>
+      <button class="nav-item" data-view="keywords"><span class="ico">⌘</span>关键词库</button>
+      <button class="nav-item" data-view="tasks"><span class="ico">✔</span>SOP 任务</button>
+    </aside>
+
+    <main class="main">
+      <div class="topbar">
+        <div>
+          <h1 id="page-title">运营总览</h1>
+          <p class="subtitle" id="page-subtitle">把资料里的经验，变成每天可执行的运营动作。</p>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <div class="pill" id="shop-pill">
+            <button class="shop-btn active" data-shop="拼多多">拼多多</button>
+            <button class="shop-btn" data-shop="淘宝">淘宝</button>
+          </div>
+          <div class="pill" id="date-pill"></div>
+        </div>
+      </div>
+
+      <div id="view-dashboard" class="view"></div>
+      <div id="view-guide" class="view" hidden></div>
+      <div id="view-products" class="view" hidden></div>
+      <div id="view-knowledge" class="view" hidden></div>
+      <div id="view-calendar" class="view" hidden></div>
+      <div id="view-keywords" class="view" hidden></div>
+      <div id="view-tasks" class="view" hidden></div>
+    </main>
+  </div>
+
+  <div class="toast" id="toast"></div>
+  <script src="app.js"></script>
+</body>
+</html>

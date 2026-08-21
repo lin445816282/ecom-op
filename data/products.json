@@ -1,0 +1,32 @@
+[
+  {
+    "id": "p1",
+    "name": "示例商品 A",
+    "selling_price": 29.9,
+    "gross_profit": 9.0,
+    "ad_cost": 6.0,
+    "refund_rate": 0.2,
+    "ad_spend": 120.0,
+    "orders": 10,
+    "impressions": 5000,
+    "clicks": 250,
+    "sold": 12,
+    "notes": "测试数据",
+    "shop": "拼多多"
+  },
+  {
+    "id": "p1786730253",
+    "name": "未命名商品",
+    "selling_price": 14.9,
+    "gross_profit": 7.5,
+    "ad_cost": 0.0,
+    "refund_rate": 0.15,
+    "ad_spend": 0.0,
+    "orders": 0,
+    "impressions": 0,
+    "clicks": 0,
+    "sold": 0,
+    "notes": "",
+    "shop": "拼多多"
+  }
+]
