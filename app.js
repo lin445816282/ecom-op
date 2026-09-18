@@ -14,14 +14,17 @@ const VIEWS = {
   calendar: {title:'选品日历', sub:'按月提前布局应季商品，建议提前 2-4 周预热。'},
   keywords: {title:'关键词库', sub:'储备核心词、属性词、场景词、规格词，用于标题优化与选品拓词。'},
   tasks: {title:'SOP 任务', sub:'按模块创建每日任务，落地执行并跟踪完成度。'},
+  douyin: {title:'抖店运营', sub:'上架 ≠ 入池。先查流量，再优化标题、核对新品标。'},
+  logs: {title:'运营日志', sub:'每天一条：日期+商品+数据+结论+动作，按天集中追溯。'},
 };
 
-const state = { view:'dashboard', shop:'拼多多', products:[], knowledge:[], calendar:[], templates:[], tasks:[], keywords:[], promotionHistory:[] };
+const state = { view:'dashboard', shop:'拼多多', products:[], knowledge:[], calendar:[], templates:[], tasks:[], keywords:[], promotionHistory:[], logs:[] };
 
 // 店铺过滤辅助（当前店铺视角）
 const shopProducts = () => state.products.filter(p => (p.shop||'拼多多') === state.shop);
 const shopKeywords = () => state.keywords.filter(k => (k.shop||'拼多多') === state.shop);
 const shopTasks = () => state.tasks.filter(t => (t.shop||'拼多多') === state.shop);
+const shopLogs = () => state.logs.filter(l => (l.shop||'拼多多') === state.shop).sort((a,b) => (b.date||'').localeCompare(a.date||''));
 
 function toast(msg) {
   const el = $('#toast');
@@ -63,6 +66,8 @@ function setView(view) {
   if (view === 'calendar') renderCalendar();
   if (view === 'keywords') renderKeywords();
   if (view === 'tasks') renderTasks();
+  if (view === 'douyin') renderDouyin();
+  if (view === 'logs') renderLogs();
 }
 
 /* ---------------- 操作手册 ---------------- */
@@ -142,6 +147,156 @@ function renderGuide() {
       建议今天就从「商品投产」录进第一个真实商品，再到「SOP 任务」建一条「广告冷启动测试」任务。数据越真实，后面放量判断越准。
     </div>
   `;
+}
+
+/* ---------------- 抖店运营 ---------------- */
+function renderDouyin() {
+  $('#view-douyin').innerHTML = `
+    <section class="hero">
+      <div>
+        <h2>抖店新品启动</h2>
+        <p>上架 ≠ 入池。新手没流量，先别急着怀疑选品——先查商品有没有曝光，再优化标题、核对新品标。核心只有两个动作：<b>优化标题</b> + <b>检查新品标</b>。</p>
+      </div>
+      <button class="cta" data-nav="knowledge">查关键公式</button>
+    </section>
+
+    <div class="grid cols-2">
+      <div class="panel">
+        <div class="panel-header"><h2>① 先查新品有没有流量</h2><span class="badge">第一步 · 自查</span></div>
+        <div class="guide-steps">
+          <div class="guide-step"><b>路径</b><div><h3>官方自查路径</h3><p>电商罗盘 → 商品卡数据 → 商品卡列表，时间切「实时」或看近 7 天。</p></div></div>
+          <div class="guide-step"><b>看</b><div><h3>重点看什么</h3><p>有没有曝光、访问、点击；上架了多少、真正开始跑数据的有多少。</p></div></div>
+          <div class="guide-step"><b>判</b><div><h3>查完怎么判断</h3><p><span class="tag green">A 有曝光有访问</span> 继续观察、优化转化。<br><span class="tag red">B 几乎没曝光没访问</span> 别傻等，进入下一步优化。</p></div></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header"><h2>② 检查新品标 + 正确启动</h2><span class="badge">第二步 · 基础</span></div>
+        <div class="guide-steps">
+          <div class="guide-step"><b>去哪</b><div><h3>在哪看新品标</h3><p>商品成长 / 商品优化成长 → 看刚上架商品有没有新品标签。</p></div></div>
+          <div class="guide-step"><b>为什么</b><div><h3>为什么要看</h3><p>新品阶段是平台观察测试期，有新品身份更容易拿到搜索、商城流量测试机会。</p></div></div>
+          <div class="guide-step"><b>别慌</b><div><h3>不要理解错</h3><p>有标 ≠ 一定爆单，没标 ≠ 完全没机会，它只是必须检查的基础动作。</p></div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:16px">
+      <div class="panel-header"><h2>正确启动流程</h2><span class="badge">不是「上架 → 等单」</span></div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:13px">
+        <span class="tag blue">上架商品</span>→<span class="tag">查曝光数据</span>→<span class="tag">优化标题</span>→<span class="tag">查新品标</span>→<span class="tag">做基础动销</span>→<span class="tag">继续看数据</span>→<span class="tag green">再优化</span>
+      </div>
+      <div class="callout" style="margin-bottom:0">⭐ 不是谁上架最多，而是谁能把上架的商品真正跑起来。</div>
+    </div>
+
+    <div class="panel" style="margin-top:16px">
+      <div class="panel-header"><h2>③ 标题优化怎么做</h2><span class="badge">第三步 · 改词</span></div>
+      <div class="guide-steps">
+        <div class="guide-step"><b>找词</b><div><h3>先去哪里找词</h3><p>搜索运营 → 行业搜索词，看当前类目用户正在搜的关键词。</p></div></div>
+        <div class="guide-step"><b>改谁</b><div><h3>先改哪些商品</h3><p>近 7 天曝光低、访问少、刚上架的新品。已有流量的老链接先别乱动。</p></div></div>
+        <div class="guide-step"><b>怎么改</b><div><h3>标题要改什么</h3><p>删掉没人搜的、过时的、与商品不匹配的词；换成相关、又有搜索需求的词。</p></div></div>
+      </div>
+      <table style="margin-top:8px">
+        <tr><th style="width:20%">类型</th><th>冷门词（删）</th><th>行业热词（换）</th></tr>
+        <tr><td class="num">示例</td><td>超美的 · 网红同款 · 2020新款</td><td><span class="tag green">显瘦</span> <span class="tag green">春季新款</span> <span class="tag green">纯棉透气</span></td></tr>
+      </table>
+      <div class="callout" style="margin-bottom:0">⚠ 尽量手动选商品，别一上来全店自动改——老链接本就有曝光，大范围乱改会影响原有搜索表现。稳一点更安全。</div>
+    </div>
+
+    <div class="panel" style="margin-top:16px">
+      <div class="panel-header"><h2>④ 总结：先做这 2 个动作</h2><span class="badge">核心心法</span></div>
+      <div class="stats-grid" style="grid-template-columns:repeat(2,1fr);margin-bottom:14px">
+        <div class="stat-card"><div class="label">动作 1</div><div class="value" style="font-size:20px">优化标题</div><div class="hint">让平台清楚商品是什么、该推给谁</div></div>
+        <div class="stat-card"><div class="label">动作 2</div><div class="value" style="font-size:20px">检查新品标</div><div class="hint">确认拿到新品身份，更容易进流量测试</div></div>
+      </div>
+      <div class="callout" style="margin-bottom:0">💡 先别急着怀疑选品，先查新品有没有真正跑起来。顺序是「上架 → 检查 → 优化」，不是「上架 → 等单」。</div>
+    </div>
+  `;
+  $$('#view-douyin [data-nav]').forEach(b => b.onclick = () => setView(b.dataset.nav));
+}
+
+/* ---------------- 运营日志 ---------------- */
+function renderLogs() {
+  const list = shopLogs();
+  const today = new Date();
+  const todayStr = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+  const prodNames = [...new Set(shopProducts().map(p=>p.name))];
+  const conclColor = c => {
+    if (/继续|健康|放量|达标|稳定|入池|有流量/.test(c||'')) return 'green';
+    if (/暂停|停|亏|超限|下滑|没流量|无曝光/.test(c||'')) return 'red';
+    if (/改|优化|拖价|测试|观察|降/.test(c||'')) return 'amber';
+    return 'blue';
+  };
+  const logHTML = l => `
+    <div class="k-card">
+      <div class="cat">${esc(l.date||'')} · ${esc(l.shop||'拼多多')}</div>
+      <h3>${esc(l.product||'未指定商品')}</h3>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 10px">
+        ${l.impressions ? `<span class="tag gray">曝光 ${fmt(l.impressions,0)}</span>`:''}
+        ${l.clicks ? `<span class="tag gray">点击 ${fmt(l.clicks,0)}</span>`:''}
+        ${l.sold ? `<span class="tag gray">成交 ${fmt(l.sold,0)}</span>`:''}
+        ${l.orders ? `<span class="tag gray">订单 ${fmt(l.orders,0)}</span>`:''}
+        ${l.ad_spend ? `<span class="tag gray">广告 ¥${fmt(l.ad_spend)}</span>`:''}
+      </div>
+      ${l.conclusion ? `<span class="tag ${conclColor(l.conclusion)}">${esc(l.conclusion)}</span>`:''}
+      ${l.actions ? `<div class="k-sop" style="margin-top:10px">${esc(l.actions)}</div>`:''}
+      <div style="margin-top:10px;text-align:right"><button class="btn sm danger" onclick="window.__delLog && window.__delLog('${esc(l.id)}')">删除</button></div>
+    </div>`;
+
+  $('#view-logs').innerHTML = `
+    <div class="panel">
+      <div class="panel-header"><h2>＋ 记一条运营日志</h2><span class="badge">本地持久化</span></div>
+      <form id="log-form">
+        <div class="field-row">
+          <div class="field"><label>日期</label><input name="date" type="date" value="${todayStr}"></div>
+          <div class="field"><label>商品</label><input name="product" list="log-products" placeholder="选择或输入商品名"></div>
+        </div>
+        <datalist id="log-products">${prodNames.map(n=>`<option value="${esc(n)}">`).join('')}</datalist>
+        <div class="field-row">
+          <div class="field"><label>曝光</label><input name="impressions" type="number" value="0"></div>
+          <div class="field"><label>点击</label><input name="clicks" type="number" value="0"></div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label>成交件数</label><input name="sold" type="number" value="0"></div>
+          <div class="field"><label>订单数</label><input name="orders" type="number" value="0"></div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label>广告花费（元）</label><input name="ad_spend" type="number" step="0.01" value="0"></div>
+          <div class="field"><label>结论（继续/暂停/改主图…）</label><input name="conclusion" placeholder="例：继续 / 拖价 / 改主图"></div>
+        </div>
+        <div class="field"><label>动作明细（做了什么）</label><input name="actions" placeholder="例：出价1.5→1.4，换主图"></div>
+        <div class="form-actions"><button type="submit" class="btn primary">保存日志</button></div>
+      </form>
+    </div>
+
+    <div class="panel" style="margin-top:16px">
+      <div class="panel-header"><h2>日志流水</h2><span class="badge">${list.length} 条</span></div>
+      ${list.length ? `<div class="card-grid">${list.map(logHTML).join('')}</div>` : '<div class="empty"><div class="big">📓</div>还没有日志，从上面记第一条。</div>'}
+    </div>
+  `;
+
+  const form = $('#log-form');
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    const fd = new FormData(form);
+    const body = { id: 'log'+Date.now(), shop: state.shop };
+    fd.forEach((v,k)=> body[k]=v);
+    try {
+      await api('/api/logs','POST',body);
+      await loadAll();
+      renderLogs();
+      toast('日志已保存');
+    } catch(err){ toast(err.message); }
+  });
+
+  window.__delLog = async id => {
+    if (!confirm('删除这条日志？')) return;
+    try {
+      await api(`/api/logs/${id}`,'DELETE');
+      state.logs = state.logs.filter(l=>l.id!==id);
+      renderLogs();
+      toast('已删除');
+    } catch(err){ toast(err.message); }
+  };
 }
 
 /* ---------------- 总览 ---------------- */
@@ -413,39 +568,72 @@ function renderKeywords() {
   const bestCount = kws.filter(k=>k.hot==='热' && k.relevance==='高').length;
   const products = ['全部产品', ...new Set(kws.map(k => k.product || '门后挂钩'))];
   const prodCounts = kws.reduce((a,k)=>{const p=k.product||'门后挂钩';a[p]=(a[p]||0)+1;return a;},{});
-  // 标题生成词表
+  // 标题生成词表（含长尾词，充分利用数据资产）
   const coreWords = kws.filter(k=>k.category==='核心词' && k.status!=='弃用');
   const attrWords = kws.filter(k=>k.category==='属性词' && k.status!=='弃用');
   const sceneWords = kws.filter(k=>k.category==='场景词' && k.status!=='弃用');
   const specWords = kws.filter(k=>k.category==='规格词' && k.status!=='弃用');
+  const longtailWords = kws.filter(k=>k.category==='长尾词' && k.status!=='弃用');
+  // 热度 + 关联性加权：热+高关联的词更易被选中（替代纯随机）
+  const hotW = {热:3, 中:2, 长尾:1};
+  const relW = {高:3, 中:2, 低:1};
+  const kScore = k => (hotW[k.hot]||1) + (relW[k.relevance]||1);
+  const weightedPick = (arr, exclude='') => {
+    const pool = arr.filter(k => k.word !== exclude);
+    if (!pool.length) return '';
+    const weights = pool.map(kScore);
+    const total = weights.reduce((a,b)=>a+b,0);
+    let r = Math.random() * total;
+    for (let i=0;i<pool.length;i++){ r -= weights[i]; if (r<=0) return pool[i].word; }
+    return pool[pool.length-1].word;
+  };
+  // 检测标题内是否有词表词重复出现（避免「免打孔免打孔」）
+  const allWords = [...coreWords, ...attrWords, ...sceneWords, ...specWords, ...longtailWords];
+  const hasDup = t => allWords.some(w => w.word.length>=2 && t.split(w.word).length>2);
   const genTitles = (core, n) => {
-    const pick = arr => arr.length ? arr[Math.floor(Math.random()*arr.length)].word : '';
+    // 真实标题结构：核心词前置 → 卖点属性 → 场景/规格
     const templates = [
       (a1,a2,sc,sp) => core + a1 + a2 + sc,
       (a1,a2,sc,sp) => core + a1 + sc + sp,
       (a1,a2,sc,sp) => a1 + core + a2 + sc,
-      (a1,a2,sc,sp) => core + a1 + sp + a2,
-      (a1,a2,sc,sp) => core + sc + a1 + a2,
+      (a1,a2,sc,sp) => core + a1 + sp + sc,
+      (a1,a2,sc,sp) => core + sc + a1 + sp,
     ];
     const titles = new Set();
     let guard = 0;
-    while (titles.size < n && guard < 300) {
+    while (titles.size < n && guard < 400) {
       guard++;
-      const a1 = pick(attrWords), a2 = pick(attrWords), sc = pick(sceneWords), sp = pick(specWords);
+      const a1 = weightedPick(attrWords);
+      const a2 = weightedPick(attrWords, a1);   // 去重：a2 排除 a1
+      const sc = weightedPick(sceneWords);
+      const sp = weightedPick(specWords);
       const t = templates[guard % templates.length](a1, a2, sc, sp);
-      if (t.length <= 30 && t.length >= 6) titles.add(t);
+      if (t.length <= 30 && t.length >= 6 && !hasDup(t)) titles.add(t);
     }
     return [...titles];
   };
+  // 长尾词直推：热长尾词本身就是真实搜索词组，直接作为标题候选
+  const longtailTitles = longtailWords
+    .filter(k => k.hot==='热')
+    .map(k => k.word)
+    .filter(w => w.length >= 4 && w.length <= 30);
   const statusCls = s => ({'待用':'blue','在用':'green','弃用':'gray'}[s]||'blue');
   const hotCls = h => ({'热':'red','中':'amber','长尾':'gray'}[h]||'gray');
   const relCls = r => ({'高':'green','中':'blue','低':'gray'}[r]||'gray');
 
-  const kwRow = k => `
+  const kwRow = k => {
+    const dim = [];
+    if ((k.search_volume||0) > 0) dim.push(`搜索量${k.search_volume}`);
+    if ((k.competition||0) > 0) dim.push(`竞争${k.competition}`);
+    if ((k.ctr||0) > 0) dim.push(`CTR ${(k.ctr*100).toFixed(1)}%`);
+    if ((k.cvr||0) > 0) dim.push(`CVR ${(k.cvr*100).toFixed(1)}%`);
+    if ((k.roi||0) > 0) dim.push(`ROI ${k.roi.toFixed(1)}`);
+    const dimStr = dim.length ? ' · ' + dim.join(' · ') : '';
+    return `
     <div class="task-row" style="align-items:center">
       <div class="task-body" style="flex:1">
         <div class="task-title">${esc(k.word)}</div>
-        <div class="task-meta">${esc(k.source||'')} · ${esc(k.category||'')}</div>
+        <div class="task-meta">${esc(k.source||'')} · ${esc(k.category||'')} · ${esc(k.pool_type||'main')}池 · 权重${esc(k.weight!=null?k.weight:5)}${dimStr}</div>
       </div>
       <span class="tag ${hotCls(k.hot)}" title="热度">🔥${esc(k.hot||'—')}</span>
       <span class="tag ${relCls(k.relevance)}" style="margin:0 4px" title="关联性">${esc(k.relevance||'—')}关联</span>
@@ -453,6 +641,7 @@ function renderKeywords() {
       <button class="btn sm" style="margin-left:6px" onclick="window.__kwStatus && window.__kwStatus('${k.id}')">状态</button>
       <button class="btn sm danger" onclick="window.__delKw && window.__delKw('${k.id}')">删</button>
     </div>`;
+  };
 
   // 四维筛选状态（产品 × 分类 × 热度 × 关联性）
   const f = {product:'全部产品', cat:'全部', hot:'全部热度', rel:'全部关联'};
@@ -477,7 +666,7 @@ function renderKeywords() {
     </div>
 
     <div class="panel" style="margin-bottom:16px">
-      <div class="panel-header"><h2>✨ 标题生成器</h2><span class="badge">核心词 + 属性词 + 场景词 + 规格词</span></div>
+      <div class="panel-header"><h2>✨ 标题生成器</h2><span class="badge">核心词+属性+场景+规格 · 热度加权 · 长尾词直推</span></div>
       <div class="field-row">
         <div class="field"><label>核心词</label>
           <select id="tg-core">${coreWords.map(w=>`<option value="${esc(w.word)}">${esc(w.word)}</option>`).join('') || '<option value="">（无核心词）</option>'}</select>
@@ -485,9 +674,56 @@ function renderKeywords() {
         <div class="field"><label>生成条数</label>
           <select id="tg-n"><option>5</option><option>8</option><option>10</option></select>
         </div>
+        <div class="field"><label>平台</label>
+          <select id="tg-platform"><option value="all">全平台</option><option value="pdd">拼多多</option><option value="taobao">淘宝</option></select>
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>应用到商品（可选）</label>
+          <select id="tg-product">
+            <option value="">（仅生成，不应用）</option>
+            ${shopProducts().map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}
+          </select>
+        </div>
       </div>
       <div class="form-actions"><button class="btn primary" id="tg-btn">✨ 生成标题</button></div>
       <div id="tg-result" style="margin-top:12px"></div>
+    </div>
+
+    <div class="panel" style="margin-bottom:16px">
+      <div class="panel-header"><h2>⚖️ 权重体系</h2><span class="badge">预筛打分 + 标题投放回流 + AI建议审核</span></div>
+      <div class="field-row">
+        <div class="field"><label>预筛打分</label>
+          <button class="btn sm" id="kw-rescore-btn">🎯 批量重跑预筛（备用池词）</button>
+          <div class="task-meta" style="margin-top:4px">按 搜索量/竞争度/相关性/合规 给备用池词算初始权重，蓝海词7-9、基础词4-6、长尾1-3、极限词进黑名单</div>
+        </div>
+        <div class="field"><label>AI 权重建议</label>
+          <button class="btn sm primary" id="sug-generate-btn">🤖 生成建议</button>
+          <button class="btn sm" id="sug-apply-btn" style="margin-left:6px">✅ 全部确认</button>
+          <button class="btn sm" id="sug-reject-btn" style="margin-left:6px">❌ 全部驳回</button>
+          <div class="task-meta" style="margin-top:4px">基于标题投放数据，AI 算权重变更建议（不直接改库），人工一键确认/驳回</div>
+        </div>
+      </div>
+      <div id="kw-baseline" style="margin:8px 0;font-size:12px;color:#888"></div>
+      <div id="sug-list" style="margin-top:8px"></div>
+    </div>
+
+    <div class="panel" style="margin-bottom:16px">
+      <div class="panel-header"><h2>📊 标题投放记录</h2><span class="badge">标题 → 曝光/点击/成交/花费，回流权重</span></div>
+      <form id="tp-form">
+        <div class="field-row">
+          <div class="field"><label>标题</label><input name="title" placeholder="例如：门后挂钩免打孔卧室"></div>
+          <div class="field"><label>曝光</label><input name="impressions" type="number" min="0" placeholder="0"></div>
+          <div class="field"><label>点击</label><input name="clicks" type="number" min="0" placeholder="0"></div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label>成交订单</label><input name="orders" type="number" min="0" placeholder="0"></div>
+          <div class="field"><label>成交金额 GMV</label><input name="gmv" type="number" min="0" step="0.01" placeholder="0"></div>
+          <div class="field"><label>广告花费</label><input name="ad_spend" type="number" min="0" step="0.01" placeholder="0"></div>
+        </div>
+        <div class="form-actions"><button type="submit" class="btn primary">录入投放数据</button></div>
+      </form>
+      <div id="tp-list" style="margin-top:12px"></div>
     </div>
 
     <div class="grid cols-2">
@@ -506,7 +742,11 @@ function renderKeywords() {
             <datalist id="kw-prod-list">${products.filter(p=>p!=='全部产品').map(p=>`<option value="${esc(p)}">`).join('')}</datalist>
           </div>
           <div class="field"><label>来源（可选）</label><input name="source" placeholder="手动 / 拼多多 / 1688"></div>
-          <div class="form-actions"><button type="submit" class="btn primary">添加关键词</button></div>
+          <div class="field-row">
+            <div class="field"><label>搜索量（预筛用）</label><input name="search_volume" type="number" min="0" placeholder="0"></div>
+            <div class="field"><label>竞争度 0-100（预筛用）</label><input name="competition" type="number" min="0" max="100" placeholder="50"></div>
+          </div>
+          <div class="form-actions"><button type="submit" class="btn primary">添加关键词</button><button type="button" class="btn sm" id="kw-score-btn" style="margin-left:8px">🎯 预筛打分预览</button></div>
         </form>
       </div>
       <div class="panel">
@@ -526,6 +766,7 @@ function renderKeywords() {
         <div style="margin-top:10px;display:flex;gap:8px">
           <button class="btn sm primary" id="kw-best-btn">🔥 热 + 高关联</button>
           <button class="btn sm" id="kw-clear-btn">清除筛选</button>
+          <button class="btn sm" id="kw-clean-btn">🧹 批量清洗</button>
         </div>
         <div id="kw-list" style="margin-top:12px;max-height:360px;overflow-y:auto"></div>
       </div>
@@ -563,24 +804,212 @@ function renderKeywords() {
     $$('#kw-rel-tabs .tab').forEach(x=>x.classList.toggle('active', x.dataset.v==='全部关联'));
     renderList();
   };
+  // 批量清洗（去重+标准化+脏词标记）
+  $('#kw-clean-btn').onclick = async () => {
+    if (!confirm('批量清洗：去重 + 文本标准化 + 脏词标记（移入黑名单池）。确定？')) return;
+    try {
+      const r = await api('/api/keywords/clean', 'POST', {});
+      await loadKeywordsOnly();
+      renderKeywords();
+      toast(`清洗完成：去重 ${r.deduped} 个，标记脏词 ${r.dirty} 个，剩余 ${r.total} 个`);
+    } catch(err) { toast(err.message); }
+  };
 
   renderList();
 
-  // 标题生成
-  $('#tg-btn').onclick = () => {
+  // ---- 权重体系：预筛重跑 + AI建议 + 投放记录 ----
+
+  // 渲染类目均值基线
+  const renderBaseline = async () => {
+    try {
+      const b = await api('/api/keywords/baseline');
+      $('#kw-baseline').innerHTML = b.total_impressions
+        ? `类目均值基线：CTR ${(b.ctr_avg*100).toFixed(2)}% · CVR ${(b.cvr_avg*100).toFixed(2)}% · ROI ${b.roi_avg.toFixed(2)} · 总曝光 ${b.total_impressions} / 点击 ${b.total_clicks} / 订单 ${b.total_orders} / GMV ${b.total_gmv} / 花费 ${b.total_spend}`
+        : '暂无投放数据，录入标题投放记录后可生成基线';
+    } catch(err) {}
+  };
+
+  // 渲染权重建议列表
+  const renderSuggestions = async () => {
+    try {
+      const r = await api('/api/weight-suggestions');
+      const sugs = r.items || [];
+      const pending = sugs.filter(s=>s.status==='pending');
+      window.__pendingSugs = pending.map(s=>s.id);
+      $('#sug-list').innerHTML = pending.length
+        ? pending.map(s => `<div class="task-row" style="align-items:center">
+            <div class="task-body" style="flex:1">
+              <div class="task-title">${esc(s.word)} <span class="tag blue">${esc(s.category||'')}</span></div>
+              <div class="task-meta">权重 ${s.current_weight} → <b style="color:${s.delta>0?'green':'red'}">${s.suggested_weight}</b> (Δ${s.delta>0?'+':''}${s.delta}) · ${esc(s.reason)}</div>
+              <div class="task-meta">CTR ${(s.ctr*100).toFixed(2)}% · CVR ${(s.cvr*100).toFixed(2)}% · ROI ${s.roi.toFixed(2)} · 命中${s.title_count}条标题</div>
+            </div>
+            <button class="btn sm" onclick="window.__sugOne && window.__sugOne('${s.id}','apply')">✅</button>
+            <button class="btn sm" style="margin-left:4px" onclick="window.__sugOne && window.__sugOne('${s.id}','reject')">❌</button>
+          </div>`).join('')
+        : '<div class="empty">暂无待审核建议，点「生成建议」</div>';
+    } catch(err) { toast(err.message); }
+  };
+
+  // 渲染投放记录列表
+  const renderTitlePerf = async () => {
+    try {
+      const r = await api('/api/title-perf');
+      const items = r.items || [];
+      $('#tp-list').innerHTML = items.length
+        ? items.map(t => `<div class="task-row" style="align-items:center">
+            <div class="task-body" style="flex:1">
+              <div class="task-title">${esc(t.title)}</div>
+              <div class="task-meta">曝光${t.impressions} · 点击${t.clicks} · 订单${t.orders} · GMV ${t.gmv} · 花费${t.ad_spend}</div>
+              <div class="task-meta">CTR ${(t.ctr*100).toFixed(2)}% · CVR ${(t.cvr*100).toFixed(2)}% · ROI ${t.roi.toFixed(2)}</div>
+            </div>
+            <button class="btn sm danger" onclick="window.__delTp && window.__delTp('${t.id}')">删</button>
+          </div>`).join('')
+        : '<div class="empty">暂无投放记录</div>';
+    } catch(err) { toast(err.message); }
+  };
+
+  renderBaseline();
+  renderSuggestions();
+  renderTitlePerf();
+
+  // 批量重跑预筛打分
+  $('#kw-rescore-btn').onclick = async () => {
+    if (!confirm('对备用池词批量重跑预筛打分？主池已上线词不受影响。')) return;
+    try {
+      const r = await api('/api/keywords/rescore', 'POST', {});
+      await loadKeywordsOnly();
+      renderKeywords();
+      toast(`预筛完成：重打分 ${r.scored} 个备用池词`);
+    } catch(err) { toast(err.message); }
+  };
+
+  // 生成权重建议
+  $('#sug-generate-btn').onclick = async () => {
+    try {
+      const r = await api('/api/weight-suggestions/generate', 'POST', {});
+      renderBaseline();
+      renderSuggestions();
+      toast(r.generated ? `已生成 ${r.generated} 条建议，待审核` : '无数据变化，未生成建议');
+    } catch(err) { toast(err.message); }
+  };
+
+  // 全部确认 / 全部驳回
+  $('#sug-apply-btn').onclick = async () => {
+    const ids = window.__pendingSugs || [];
+    if (!ids.length) { toast('暂无待审核建议'); return; }
+    try {
+      const r = await api('/api/weight-suggestions/apply', 'POST', {ids});
+      await loadKeywordsOnly();
+      renderSuggestions();
+      toast(`已确认 ${r.applied} 条建议，权重已更新`);
+    } catch(err) { toast(err.message); }
+  };
+  $('#sug-reject-btn').onclick = async () => {
+    const ids = window.__pendingSugs || [];
+    if (!ids.length) { toast('暂无待审核建议'); return; }
+    try {
+      const r = await api('/api/weight-suggestions/reject', 'POST', {ids});
+      renderSuggestions();
+      toast(`已驳回 ${r.rejected} 条建议`);
+    } catch(err) { toast(err.message); }
+  };
+
+  // 单条确认/驳回
+  window.__sugOne = async (id, action) => {
+    try {
+      const path = action === 'apply' ? '/api/weight-suggestions/apply' : '/api/weight-suggestions/reject';
+      const r = await api(path, 'POST', {ids:[id]});
+      if (action === 'apply') await loadKeywordsOnly();
+      renderSuggestions();
+      toast(action === 'apply' ? `已确认 1 条` : `已驳回 1 条`);
+    } catch(err) { toast(err.message); }
+  };
+
+  // 投放记录表单提交
+  $('#tp-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const body = {
+      title: fd.get('title'), impressions: parseInt(fd.get('impressions')||0)||0,
+      clicks: parseInt(fd.get('clicks')||0)||0, orders: parseInt(fd.get('orders')||0)||0,
+      gmv: parseFloat(fd.get('gmv')||0)||0, ad_spend: parseFloat(fd.get('ad_spend')||0)||0,
+    };
+    if (!body.title) { toast('请填标题'); return; }
+    try {
+      await api('/api/title-perf', 'POST', body);
+      e.target.reset();
+      renderBaseline();
+      renderTitlePerf();
+      toast('已录入投放数据');
+    } catch(err) { toast(err.message); }
+  });
+
+  // 删除投放记录
+  window.__delTp = async id => {
+    if (!confirm('删除该投放记录？')) return;
+    try { await api('/api/title-perf/'+id, 'DELETE'); renderBaseline(); renderTitlePerf(); toast('已删除'); }
+    catch(err) { toast(err.message); }
+  };
+
+  // 标题生成（后端模板引擎 + 长尾词直推，去重后展示，可一键应用到商品）
+  $('#tg-btn').onclick = async () => {
     const core = $('#tg-core').value;
     const n = parseInt($('#tg-n').value) || 5;
+    const platform = $('#tg-platform').value || 'all';
     if (!core) { $('#tg-result').innerHTML = '<div class="empty">请先添加核心词</div>'; return; }
-    const titles = genTitles(core, n);
-    $('#tg-result').innerHTML = titles.length
-      ? titles.map((t,i)=>`<div class="task-row"><span class="tag green">${i+1}</span><div class="task-body"><div class="task-title">${esc(t)}</div><div class="task-meta">${t.length} 字</div></div><button class="btn sm" onclick="navigator.clipboard&&navigator.clipboard.writeText('${esc(t)}')">复制</button></div>`).join('')
-      : '<div class="empty">属性词/场景词不足，请先补充关键词</div>';
+    $('#tg-result').innerHTML = '<div class="empty">生成中…</div>';
+    try {
+      const resp = await api('/api/titles/generate', 'POST', {core, n, platform});
+      const combined = resp.items || [];       // 后端模板+结构化词库生成
+      const direct = platform === 'all' ? longtailTitles : longtailTitles;  // 长尾词直推
+      const titles = [...new Set([...combined, ...direct])];
+      window.__tgTitles = titles;
+      $('#tg-result').innerHTML = titles.length
+        ? titles.map((t,i)=>{
+            const isDirect = direct.includes(t);
+            const srcTag = isDirect ? '<span class="tag amber">长尾词</span>' : '<span class="tag blue">模板组合</span>';
+            return `<div class="task-row">
+              <span class="tag green">${i+1}</span>
+              <div class="task-body"><div class="task-title">${esc(t)}</div><div class="task-meta">${t.length} 字 · ${isDirect?'真实搜索词':'模板组合'}</div></div>
+              ${srcTag}
+              <button class="btn sm" onclick="window.__feedbackTitle && window.__feedbackTitle(${i},'good')" title="表现好，词权重+1">👍</button>
+              <button class="btn sm" style="margin-left:4px" onclick="window.__feedbackTitle && window.__feedbackTitle(${i},'bad')" title="表现差，词权重-1">👎</button>
+              <button class="btn sm" onclick="window.__applyTitle && window.__applyTitle(${i})">应用</button>
+              <button class="btn sm" style="margin-left:4px" onclick="navigator.clipboard&&navigator.clipboard.writeText('${esc(t)}')">复制</button>
+            </div>`;
+          }).join('')
+        : '<div class="empty">词表不足，请先补充关键词</div>';
+    } catch(err) {
+      $('#tg-result').innerHTML = '<div class="empty">' + esc(err.message) + '</div>';
+    }
+  };
+
+  // 把选中标题应用到商品（改 name，走商品 POST 接口持久化）
+  window.__applyTitle = async idx => {
+    const t = window.__tgTitles && window.__tgTitles[idx];
+    if (!t) return;
+    const pid = $('#tg-product').value;
+    if (!pid) { toast('请先选择要应用的商品'); return; }
+    const p = state.products.find(x => x.id === pid);
+    if (!p) { toast('商品不存在'); return; }
+    p.name = t;
+    try { await api('/api/products','POST',p); toast('已应用标题：' + t); }
+    catch(err){ toast(err.message); }
+  };
+  // 标题表现回流：拆解标题关键词，调整权重（👍+1 / 👎-1）
+  window.__feedbackTitle = async (idx, perf) => {
+    const t = window.__tgTitles && window.__tgTitles[idx];
+    if (!t) return;
+    try {
+      const r = await api('/api/keywords/feedback', 'POST', {title: t, performance: perf});
+      toast((perf==='good'?'👍':'👎') + ` 已回流，${r.matched} 个词权重${r.delta>0?'+':''}${r.delta}`);
+    } catch(err){ toast(err.message); }
   };
 
   $('#kw-form').addEventListener('submit', async e => {
     e.preventDefault();
     const fd = new FormData(e.target);
-    const body = {word: fd.get('word'), category: fd.get('category'), source: fd.get('source')||'manual', product: fd.get('product')||'门后挂钩'};
+    const body = {word: fd.get('word'), category: fd.get('category'), source: fd.get('source')||'manual', product: fd.get('product')||'门后挂钩', search_volume: parseInt(fd.get('search_volume')||0)||0, competition: parseInt(fd.get('competition')||0)||0};
     try {
       await api('/api/keywords','POST',body);
       await loadKeywordsOnly();
@@ -588,6 +1017,19 @@ function renderKeywords() {
       toast('已添加关键词');
     } catch(err){ toast(err.message); }
   });
+
+  // 预筛打分预览：填了搜索量/竞争度后，调用后端打分展示建议权重/池
+  $('#kw-score-btn').onclick = async () => {
+    const fd = new FormData($('#kw-form'));
+    const word = fd.get('word');
+    if (!word) { toast('请先填关键词'); return; }
+    const body = {word, category: fd.get('category'), product: fd.get('product')||'门后挂钩', search_volume: parseInt(fd.get('search_volume')||0)||0, competition: parseInt(fd.get('competition')||0)||0};
+    // 关联性：按现有词库同词/产品判断，简单起见先传后端算
+    try {
+      const r = await api('/api/keywords/score', 'POST', body);
+      toast(`预筛结果：权重 ${r.weight} → ${r.pool_type==='black'?'黑名单':r.pool_type==='main'?'主池':'备用池'}（${r.reason}）`);
+    } catch(err){ toast(err.message); }
+  };
 
   window.__delKw = async id => {
     if (!confirm('删除该关键词？')) return;
@@ -677,10 +1119,10 @@ function renderTasks() {
 }
 
 async function loadAll() {
-  const [p,k,c,tpl,tasks,kw,ph] = await Promise.all([
+  const [p,k,c,tpl,tasks,kw,ph,lg] = await Promise.all([
     api('/api/products'), api('/api/knowledge'), api('/api/calendar'),
     api('/api/task-templates'), api('/api/tasks'), api('/api/keywords'),
-    api('/api/promotion-history'),
+    api('/api/promotion-history'), api('/api/logs'),
   ]);
   state.products = p.items || [];
   state.knowledge = k.items || [];
@@ -689,6 +1131,7 @@ async function loadAll() {
   state.tasks = tasks.items || [];
   state.keywords = kw.items || [];
   state.promotionHistory = ph.items || [];
+  state.logs = lg.items || [];
 }
 
 async function loadKeywordsOnly() {

@@ -100,7 +100,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/keywords" and self.command == "POST":
             item = self._read_body()
-            cleaned = {k: item.get(k) for k in ["id", "word", "category", "source", "status", "notes", "hot", "product", "shop"]}
+            cleaned = {k: item.get(k) for k in ["id", "word", "category", "source", "status", "notes", "hot", "product", "shop", "weight", "pool_type", "platform_scope", "mutually_exclude", "max_occur", "search_volume", "competition", "ctr", "cvr", "roi"]}
             cleaned["id"] = cleaned.get("id") or ""
             cleaned["word"] = (cleaned.get("word") or "").strip()
             cleaned["category"] = cleaned.get("category") or "核心词"
@@ -110,15 +110,137 @@ class Handler(BaseHTTPRequestHandler):
             cleaned["hot"] = cleaned.get("hot") or "中"
             cleaned["product"] = cleaned.get("product") or "门后挂钩"
             cleaned["shop"] = cleaned.get("shop") or "拼多多"
+            # 新字段：权重/池子/平台/互斥/最大出现次数
+            cleaned["pool_type"] = cleaned.get("pool_type") or "main"
+            cleaned["platform_scope"] = cleaned.get("platform_scope") or "all"
+            try:
+                cleaned["weight"] = int(cleaned.get("weight") if cleaned.get("weight") is not None else 5)
+            except Exception:
+                cleaned["weight"] = 5
+            try:
+                cleaned["max_occur"] = int(cleaned.get("max_occur") if cleaned.get("max_occur") is not None else 1)
+            except Exception:
+                cleaned["max_occur"] = 1
+            # 数据维度：搜索量/竞争度 int，ctr/cvr/roi float
+            for k in ["search_volume", "competition"]:
+                try:
+                    cleaned[k] = int(cleaned.get(k) if cleaned.get(k) is not None else 0)
+                except Exception:
+                    cleaned[k] = 0
+            for k in ["ctr", "cvr", "roi"]:
+                try:
+                    cleaned[k] = float(cleaned.get(k) if cleaned.get(k) is not None else 0)
+                except Exception:
+                    cleaned[k] = 0.0
+            me = cleaned.get("mutually_exclude")
+            cleaned["mutually_exclude"] = me if isinstance(me, list) else []
             if not cleaned["word"]:
                 return _json(self, {"error": "关键词不能为空"}, 400)
             data.add_keyword(cleaned)
             return _json(self, {"item": cleaned})
 
+        # 批量清洗：去重 + 标准化 + 脏词标记
+        if path == "/api/keywords/clean" and self.command == "POST":
+            result = data.clean_keywords()
+            return _json(self, {"ok": True, **result})
+
+        # 批量更新：打标签 / 池子迁移 / 权重（body: {ids:[], fields:{weight:8,pool_type:"main"}}）
+        if path == "/api/keywords/batch" and self.command == "POST":
+            body = self._read_body()
+            ids = body.get("ids") or []
+            fields = body.get("fields") or {}
+            if not fields:
+                return _json(self, {"error": "fields 不能为空"}, 400)
+            n = data.batch_update_keywords(ids, fields)
+            return _json(self, {"ok": True, "updated": n})
+
+        # 预筛打分：单词打分（body: 关键词 dict）
+        if path == "/api/keywords/score" and self.command == "POST":
+            body = self._read_body()
+            if not body.get("word"):
+                return _json(self, {"error": "word 不能为空"}, 400)
+            r = data.score_keyword(body)
+            return _json(self, r)
+
+        # 批量重跑预筛打分（spare 池词）
+        if path == "/api/keywords/rescore" and self.command == "POST":
+            r = data.rescore_all_keywords()
+            return _json(self, {"ok": True, **r})
+
+        # 类目均值基线
+        if path == "/api/keywords/baseline" and self.command == "GET":
+            return _json(self, data.class_baselines())
+
+        # 标题投放记录（标题 → 曝光/点击/成交/花费）
+        if path == "/api/title-perf" and self.command == "GET":
+            return _json(self, {"items": data.load_title_perf()})
+
+        if path == "/api/title-perf" and self.command == "POST":
+            item = self._read_body()
+            if not (item.get("title") or "").strip():
+                return _json(self, {"error": "标题不能为空"}, 400)
+            saved = data.add_title_perf(item)
+            return _json(self, {"item": saved})
+
+        if path.startswith("/api/title-perf/") and self.command == "DELETE":
+            tid = path.split("/")[-1]
+            ok = data.delete_title_perf(tid)
+            return _json(self, {"ok": ok}, 200 if ok else 404)
+
+        # 按词聚合表现（特殊词 CTR 判定）
+        if path == "/api/keywords/metrics" and self.command == "GET":
+            return _json(self, {"items": data.aggregate_word_metrics()})
+
+        # 权重变更建议（AI 计算，人工审核）
+        if path == "/api/weight-suggestions" and self.command == "GET":
+            return _json(self, {"items": data.load_suggestions()})
+
+        if path == "/api/weight-suggestions/generate" and self.command == "POST":
+            r = data.generate_weight_suggestions()
+            return _json(self, {"ok": True, **r})
+
+        if path == "/api/weight-suggestions/apply" and self.command == "POST":
+            body = self._read_body()
+            ids = body.get("ids") or []
+            r = data.apply_suggestions(ids)
+            return _json(self, {"ok": True, **r})
+
+        if path == "/api/weight-suggestions/reject" and self.command == "POST":
+            body = self._read_body()
+            ids = body.get("ids") or []
+            r = data.reject_suggestions(ids)
+            return _json(self, {"ok": True, **r})
+
         if path.startswith("/api/keywords/") and self.command == "DELETE":
             kid = path.split("/")[-1]
             ok = data.delete_keyword(kid)
             return _json(self, {"ok": ok}, 200 if ok else 404)
+
+        # 标题模板库
+        if path == "/api/title-templates" and self.command == "GET":
+            return _json(self, {"items": data.TITLE_TEMPLATES})
+
+        # 标题生成（模板+结构化词库加权随机，含互斥/权重/长度校验）
+        if path == "/api/titles/generate" and self.command == "POST":
+            body = self._read_body()
+            core = (body.get("core") or "").strip()
+            if not core:
+                return _json(self, {"error": "核心词不能为空"}, 400)
+            n = int(body.get("n") or 10)
+            platform = body.get("platform") or "all"
+            template_ids = body.get("template_ids") or None
+            titles = data.generate_titles(core, n=n, platform=platform, template_ids=template_ids)
+            return _json(self, {"items": titles})
+
+        # 标题表现回流（商品投产数据 → 关键词权重升降）
+        if path == "/api/keywords/feedback" and self.command == "POST":
+            body = self._read_body()
+            title = (body.get("title") or "").strip()
+            perf = body.get("performance") or "good"
+            if not title:
+                return _json(self, {"error": "标题不能为空"}, 400)
+            result = data.feedback_title(title, perf)
+            return _json(self, {"ok": True, **result})
 
         # 推广历史（趋势图数据源）
         if path == "/api/promotion-history" and self.command == "GET":
@@ -159,6 +281,39 @@ class Handler(BaseHTTPRequestHandler):
                 return _json(self, {"ok": False}, 404)
             data.save_tasks(new_items)
             return _json(self, {"ok": True})
+
+        # 运营日志
+        if path == "/api/logs" and self.command == "GET":
+            return _json(self, {"items": data.load_logs()})
+
+        if path == "/api/logs" and self.command == "POST":
+            item = self._read_body()
+            cleaned = {k: item.get(k) for k in [
+                "id", "date", "product", "impressions", "clicks", "sold",
+                "orders", "ad_spend", "conclusion", "actions", "shop"]}
+            cleaned["id"] = cleaned.get("id") or ""
+            cleaned["date"] = cleaned.get("date") or ""
+            cleaned["product"] = cleaned.get("product") or ""
+            cleaned["conclusion"] = cleaned.get("conclusion") or ""
+            cleaned["actions"] = cleaned.get("actions") or ""
+            cleaned["shop"] = cleaned.get("shop") or "拼多多"
+            for k in ["ad_spend"]:
+                try:
+                    cleaned[k] = float(cleaned.get(k) or 0)
+                except Exception:
+                    cleaned[k] = 0.0
+            for k in ["impressions", "clicks", "sold", "orders"]:
+                try:
+                    cleaned[k] = int(cleaned.get(k) or 0)
+                except Exception:
+                    cleaned[k] = 0
+            data.add_log(cleaned)
+            return _json(self, {"item": cleaned})
+
+        if path.startswith("/api/logs/") and self.command == "DELETE":
+            lid = path.split("/")[-1]
+            ok = data.delete_log(lid)
+            return _json(self, {"ok": ok}, 200 if ok else 404)
 
         # 导出 CSV
         if path == "/api/products/export" and self.command == "GET":

@@ -1,7 +1,7 @@
 [
   {
     "id": "p1",
-    "name": "示例商品 A",
+    "name": "门后挂钩铁艺五钩强力",
     "selling_price": 29.9,
     "gross_profit": 9.0,
     "ad_cost": 6.0,
@@ -12,6 +12,10 @@
     "clicks": 250,
     "sold": 12,
     "notes": "测试数据",
+    "cost": 0.0,
+    "shipping": 0.0,
+    "commission_rate": 0.0,
+    "freight_insurance": 0.0,
     "shop": "拼多多"
   },
   {
@@ -27,6 +31,25 @@
     "clicks": 0,
     "sold": 0,
     "notes": "",
+    "shop": "拼多多"
+  },
+  {
+    "id": "p1789697710",
+    "name": "未命名商品",
+    "selling_price": 11.9,
+    "gross_profit": 0.0,
+    "ad_cost": 0.0,
+    "refund_rate": 0.05,
+    "ad_spend": 0.0,
+    "orders": 0,
+    "impressions": 0,
+    "clicks": 0,
+    "sold": 0,
+    "notes": "",
+    "cost": 2.9,
+    "shipping": 2.5,
+    "commission_rate": 0.0,
+    "freight_insurance": 0.0,
     "shop": "拼多多"
   }
 ]

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 from dataclasses import dataclass
 from typing import Optional
 
@@ -362,6 +363,95 @@ def knowledge_base() -> list[dict]:
             ],
             "sop": "1. 搭建 FAQ 话术\n2. 设置值班与提醒\n3. 真实处理售后\n4. 复盘差评与投诉",
         },
+        {
+            "id": "formula-sales",
+            "title": "销售指标",
+            "category": "关键公式",
+            "summary": "评估团队业绩、判断活动效果、发现趋势与问题的核心口径。",
+            "points": [
+                "GMV（交易总额）= 订单数 × 客单价（例：150 单 × 75 元 = 11,250 元）",
+                "客单价 = 销售额 ÷ 订单数（例：210,000 ÷ 1,200 = 175 元）",
+                "UV 价值 = 销售额 ÷ 访问人数（例：48,000 ÷ 1,600 = 30 元，越高流量质量越好）",
+                "月环比增长率 =（本月 − 上月）÷ 上月 × 100%（例：(320,000−280,000)÷280,000 ≈ 14.3%）",
+            ],
+            "sop": "1. 按月固定口径统计\n2. 与上月/同期对比\n3. 定位增长或下滑点",
+        },
+        {
+            "id": "formula-profit",
+            "title": "利润与成本",
+            "category": "关键公式",
+            "summary": "判断盈利能力、定价与成本控制的依据。",
+            "points": [
+                "利润 = 毛利 − 推广费 − 平台佣金 − 物流及包装成本（例：120,000−30,000−6,000−8,000 = 76,000 元）",
+                "净利率 = 净利润 ÷ 销售额 × 100%（例：36,000 ÷ 200,000 = 18%，越高盈利能力越强）",
+                "毛利率 =（销售额 − 成本）÷ 销售额 × 100%（例：(90,000−54,000)÷90,000 = 40%）",
+                "盈亏平衡点 = 1 ÷ 毛利率（例：毛利率 30% → 1÷0.30 ≈ 3.33 倍，销售额达成本 3.33 倍开始盈利）",
+                "定价倍率 = 售价 ÷ 成本（例：480 ÷ 160 = 3.0 倍）",
+                "推广费率比 = 广告投入 ÷ 营业额 × 100%（例：45,000 ÷ 450,000 = 10%，越低广告效率越高）",
+            ],
+            "sop": "1. 逐项算成本\n2. 得出毛利/净利\n3. 结合毛利率判断是否可持续",
+        },
+        {
+            "id": "formula-ad",
+            "title": "推广效果",
+            "category": "关键公式",
+            "summary": "衡量广告获取流量与成交效率，指导出价和预算。",
+            "points": [
+                "PPC（单次点击成本）= 广告花费 ÷ 点击次数（例：5,000 ÷ 1,000 = 5 元/次，越低获客成本越低）",
+                "ROI（投资回报率）= 成交金额 ÷ 广告花费（例：90,000 ÷ 15,000 = 6.0，越高收益越好）",
+                "CPM（千次展示成本）= 广告花费 ÷ 展示量 × 1000（例：3,000 ÷ 100,000 × 1000 = 30 元/千次）",
+                "eCPM（千次展示收益）= CTR × CVR × 出价 × 1000（例：0.07×0.05×2×1000 = 7 元/千次）",
+                "CTR（点击率）= 点击量 ÷ 展示量 × 100%（例：1,200 ÷ 40,000 = 3%，反映广告吸引力）",
+            ],
+            "sop": "1. 记录花费/点击/展示/成交\n2. 逐项算 PPC/ROI/CTR\n3. 对比毛利判断是否放量",
+        },
+        {
+            "id": "formula-conversion",
+            "title": "用户转化与行为",
+            "category": "关键公式",
+            "summary": "衡量商品、详情页与直播间对用户的打动与承接能力。",
+            "points": [
+                "CVR（广告转化率）= 转化人数 ÷ 点击人数 × 100%（例：200 ÷ 2,500 = 8.0%）",
+                "转化率 = 订单数 ÷ 访客数 × 100%（例：200 ÷ 8,000 = 2.5%，越高详情页越能打动用户）",
+                "直播带货转化率 = 订单人数 ÷ 观看人数 × 100%（例：160 ÷ 4,000 = 4%）",
+                "加购率 = 加购人数 ÷ 访客数 × 100%（例：720 ÷ 9,000 = 8%，反映吸引力与价格竞争力）",
+                "涨粉率 = 新增粉丝数 ÷ 观看人数 × 100%（例：360 ÷ 6,000 = 6%）",
+                "咨询率 = 咨询人数 ÷ 访客数 × 100%（例：210 ÷ 7,000 = 3%，越高兴趣越强需及时响应）",
+                "访问深度 = 总浏览量 ÷ 访客数（例：36,000 ÷ 10,000 = 3.6 页/人）",
+                "曝光进入率 = 进入直播间人数 ÷ 曝光人数 × 100%（例：480 ÷ 15,000 = 3.2%，反映封面/标题吸引力）",
+            ],
+            "sop": "1. 按周/月统计转化链路\n2. 定位点击→加购→成交短板\n3. 针对性优化主图/详情/直播",
+        },
+        {
+            "id": "kw-sources",
+            "title": "关键词来源清单（7大来源）",
+            "category": "关键词库",
+            "summary": "按优先级排序的词库来源，区分「直接进词库」和「素材拆解」，所有新词先进备用池验证。",
+            "points": [
+                "① 平台官方搜索源（最高优先）：搜索下拉/联想词、拼多多搜索词分析、淘宝生意参谋。自带搜索量/点击率，直接导入备用池。",
+                "② 竞品标题&引流词：不整词入库，AI 分词拆成核心/属性/卖点/营销词；完整标题提取为模板。",
+                "③ 自家店铺入店词（价值最高）：访客搜索词/成交词/广告词，权重直接拉高。",
+                "④ 评价/问大家（痛点词宝库）：反向变卖点（易生锈→不易生锈），适合标题钩子。",
+                "⑤ 类目词表/平台属性库：颜色/尺寸/材质/人群，填充属性词/材质词，几乎不违规。",
+                "⑥ 第三方工具词库（谨慎）：数据有延迟，仅补充素材，权重不可采信。",
+                "⑦ AI 同义词扩充（仅多样性）：全部进备用池，测试后再定权重。",
+            ],
+            "sop": "1. 多来源采集词\n2. 自动清洗去重标准化\n3. AI 分词打词角色 + 预筛初始权重\n4. 新词进备用池\n5. 生成标题上架测试\n6. 拉投产数据回流迭代权重",
+        },
+        {
+            "id": "formula-risk",
+            "title": "运营与风险监控",
+            "category": "关键公式",
+            "summary": "监控页面承接、售后、商品结构健康度的风险指标。",
+            "points": [
+                "跳失率 = 跳失人数 ÷ 访问人数 × 100%（例：1,900 ÷ 6,000 ≈ 31.7%，越低页面吸引力越强）",
+                "退货率 = 退货订单数 ÷ 总订单数 × 100%（例：28 ÷ 800 = 3.5%，反映售后体验与商品匹配度）",
+                "纠纷计入率 = 30 天内纠纷订单数 ÷ 30 天支付订单数 × 100%（例：20 ÷ 350 ≈ 5.7%）",
+                "动销率 = 近 30 天实际销售商品数 ÷ 在售商品总数 × 100%（例：110 ÷ 160 ≈ 68.8%，越高商品结构越健康）",
+                "商品点击率 = 商品被点击次数 ÷ 商品被展现次数 × 100%（例：630 ÷ 2,100 = 30%，影响推荐权重）",
+            ],
+            "sop": "1. 定期统计跳失/退货/纠纷\n2. 排查滞销与问题商品\n3. 优化主图标题与售后流程",
+        },
     ]
 
 
@@ -463,6 +553,49 @@ def save_tasks(items: list[dict]) -> None:
         json.dump(items, f, ensure_ascii=False, indent=2)
 
 
+# ----------------------------- 运营日志 -----------------------------
+
+LOGS_PATH = os.path.join(DATA_DIR, "logs.json")
+
+
+def load_logs() -> list[dict]:
+    if not os.path.exists(LOGS_PATH):
+        return []
+    try:
+        with open(LOGS_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def save_logs(items: list[dict]) -> None:
+    with open(LOGS_PATH, "w", encoding="utf-8") as f:
+        json.dump(items, f, ensure_ascii=False, indent=2)
+
+
+def add_log(item: dict) -> dict:
+    items = load_logs()
+    if "id" not in item or not item["id"]:
+        item["id"] = "log" + str(int(__import__("time").time()))
+    # 覆盖式更新
+    idx = next((i for i, t in enumerate(items) if t.get("id") == item["id"]), None)
+    if idx is None:
+        items.append(item)
+    else:
+        items[idx] = item
+    save_logs(items)
+    return item
+
+
+def delete_log(lid: str) -> bool:
+    items = load_logs()
+    new_items = [t for t in items if t.get("id") != lid]
+    if len(new_items) == len(items):
+        return False
+    save_logs(new_items)
+    return True
+
+
 # ----------------------------- 关键词库 -----------------------------
 
 KEYWORDS_PATH = os.path.join(DATA_DIR, "keywords.json")
@@ -549,6 +682,30 @@ def _seed_keywords() -> list[dict]:
     ]
 
 
+# 关键词新字段默认值（标题生成结构化元数据，向后兼容旧数据）
+KEYWORD_DEFAULTS = {
+    "weight": 5,               # 0-10 权重，0=禁用不参与生成
+    "pool_type": "main",       # main主池 / spare备用池 / black黑名单
+    "platform_scope": "all",   # all / pdd / taobao
+    "mutually_exclude": [],    # 互斥词列表（命中 A 则禁抽 B）
+    "max_occur": 1,            # 单条标题最大出现次数
+    # ---- 数据维度（权重体系核心，预筛打分 + 线上数据验证用）----
+    "search_volume": 0,        # 搜索量（平台行业数据，预筛用）
+    "competition": 0,          # 竞争度 0-100（越高越红海）
+    "ctr": 0.0,                # 真实点击率（0-1，线上数据）
+    "cvr": 0.0,                # 真实转化率（0-1，线上数据）
+    "roi": 0.0,                # 投产比（成交金额/广告花费）
+}
+
+
+def normalize_keyword(item: dict) -> dict:
+    """给关键词补全新字段默认值（旧数据无这些字段）。"""
+    for k, v in KEYWORD_DEFAULTS.items():
+        if k not in item or item[k] is None:
+            item[k] = list(v) if isinstance(v, list) else v
+    return item
+
+
 def load_keywords() -> list[dict]:
     if not os.path.exists(KEYWORDS_PATH):
         items = _seed_keywords()
@@ -556,7 +713,8 @@ def load_keywords() -> list[dict]:
         return items
     try:
         with open(KEYWORDS_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
+            items = json.load(f)
+        return [normalize_keyword(k) for k in items]
     except Exception:
         return []
 
@@ -574,6 +732,7 @@ def add_keyword(item: dict) -> dict:
     item.setdefault("shop", "拼多多")
     item.setdefault("hot", "中")
     item.setdefault("relevance", classify_keyword(item.get("word", ""), item.get("category", ""), item.get("product", "门后挂钩")))
+    normalize_keyword(item)
     # 去重：同词已存在则覆盖更新
     idx = next((i for i, k in enumerate(items) if k.get("word") == item.get("word")), None)
     if idx is None:
@@ -591,6 +750,538 @@ def delete_keyword(kid: str) -> bool:
         return False
     save_keywords(new_items)
     return True
+
+
+def clean_keywords() -> dict:
+    """批量清洗：去重 + 文本标准化 + 脏词标记（移 black 池）。返回统计。"""
+    import re
+    items = load_keywords()
+    # 1. 文本标准化：全角空格/标点转半角，去多余空格
+    for k in items:
+        w = (k.get("word") or "").strip()
+        w = w.replace("\u3000", " ").replace("\uff0c", ",").replace("\u3002", ".")
+        w = " ".join(w.split())
+        k["word"] = w
+    # 2. 去重：完全相同词只保留第一个
+    seen = {}
+    deduped = []
+    dup_count = 0
+    for k in items:
+        w = k.get("word")
+        if not w:
+            continue
+        if w in seen:
+            dup_count += 1
+            continue
+        seen[w] = True
+        deduped.append(k)
+    # 3. 脏词标记：超长(>30字) 或 纯非中文 → black 池
+    dirty_count = 0
+    for k in deduped:
+        w = k.get("word", "")
+        has_cjk = bool(re.search(r"[\u4e00-\u9fff]", w))
+        if len(w) > 30 or (len(w) > 1 and not has_cjk):
+            k["pool_type"] = "black"
+            dirty_count += 1
+    save_keywords(deduped)
+    return {"total": len(deduped), "deduped": dup_count, "dirty": dirty_count}
+
+
+def batch_update_keywords(ids: list, fields: dict) -> int:
+    """批量更新关键词字段（打标签/池子迁移/权重）。返回更新数量。"""
+    items = load_keywords()
+    updated = 0
+    for k in items:
+        if ids and k.get("id") not in ids:
+            continue
+        for f, v in fields.items():
+            if f in KEYWORD_DEFAULTS or f in ("category", "status", "hot", "relevance", "notes", "product", "shop", "source"):
+                k[f] = v
+        normalize_keyword(k)
+        updated += 1
+    save_keywords(items)
+    return updated
+
+
+# ----------------------------- 权重体系：预筛打分 + 动态权重 -----------------------------
+
+# 广告法极限词（命中即黑名单，不参与标题生成）
+AD_ILLEGAL_WORDS = [
+    "最", "第一", "唯一", "顶级", "极品", "国家级", "世界级", "史无前例",
+    "100%", "百分百", "绝对", "无敌", "最佳", "领先", "销量第一", "冠军",
+    "全网最低", "极致", "巅峰", "永久", "万能", "特效", "纯天然", "无副作用",
+]
+
+# 特殊词角色：这类词搜索量低但负责提升点击率，判定用 CTR 而非搜索量
+SPECIAL_ROLES = ("营销词", "痛点词", "功能卖点", "卖点词", "人群", "季节时效", "材质")
+
+
+def _is_illegal_word(word: str) -> bool:
+    """命中广告法极限词 → 违禁。"""
+    return any(il in word for il in AD_ILLEGAL_WORDS)
+
+
+def score_keyword(item: dict) -> dict:
+    """预筛打分：新词入库前，按搜索量/竞争度/相关性/合规 → 初始权重(0-10) + 建议池。
+
+    规则（来自方案：备用池初始权重示例）：
+    - 高搜索 + 低竞争 = 蓝海词 → 7~9
+    - 行业通用基础词 → 4~6
+    - 长尾小众词 → 1~3
+    - 搜索量=0 → 0（禁用，仅保留词库）
+    - 命中广告法极限词 → 直接黑名单，weight=0
+    返回 {weight, pool_type, reason}
+    """
+    word = item.get("word", "")
+    category = item.get("category", "")
+    sv = int(item.get("search_volume", 0) or 0)
+    comp = int(item.get("competition", 0) or 0)
+    relevance = item.get("relevance", "中")
+
+    # 1. 合规校验：命中极限词 → 黑名单
+    if _is_illegal_word(word):
+        return {"weight": 0, "pool_type": "black", "reason": "命中广告法极限词，移黑名单"}
+
+    # 2. 跨类目/低关联 → 直接丢弃
+    if relevance == "低":
+        return {"weight": 0, "pool_type": "black", "reason": "与类目关联度低，丢弃"}
+
+    # 3. 搜索量=0 → 无效
+    if sv <= 0:
+        return {"weight": 0, "pool_type": "spare", "reason": "搜索量为0，置0观察"}
+
+    # 4. 蓝海判定：高搜索 + 低竞争
+    base = 0
+    reason = []
+    if sv >= 10000:
+        base = 6
+        reason.append("搜索量≥1万")
+    elif sv >= 1000:
+        base = 5
+        reason.append("搜索量1千-1万")
+    elif sv >= 100:
+        base = 3
+        reason.append("搜索量100-1000")
+    else:
+        base = 2
+        reason.append("搜索量<100")
+
+    # 竞争度修正
+    if comp < 30:
+        base += 2
+        reason.append("低竞争(蓝海)+2")
+    elif comp < 70:
+        base += 0
+        reason.append("中竞争")
+    else:
+        base -= 1
+        reason.append("高竞争(红海)-1")
+
+    # 词角色修正：核心主词高价值，属性/材质稳定中等
+    if category == "核心词":
+        base += 1
+        reason.append("核心主词+1")
+    elif category in ("属性词", "材质", "规格词"):
+        base += 0
+    elif category in SPECIAL_ROLES:
+        # 营销/痛点/卖点词：搜索量低但点击意向强，保底中等
+        base = max(base, 4)
+        reason.append("特殊词(看CTR)保底4")
+
+    weight = max(0, min(10, base))
+    pool = "main" if weight >= 4 else "spare"
+    return {"weight": weight, "pool_type": pool, "reason": "，".join(reason)}
+
+
+def rescore_all_keywords() -> dict:
+    """批量重跑预筛打分（仅对 spare 池或未上线词；main 池已上线词保留人工权重）。"""
+    items = load_keywords()
+    scored = 0
+    for k in items:
+        if k.get("pool_type", "main") == "main":
+            continue  # 已上线词不重打分，靠线上数据动态迭代
+        r = score_keyword(k)
+        k["weight"] = r["weight"]
+        k["pool_type"] = r["pool_type"]
+        scored += 1
+    save_keywords(items)
+    return {"scored": scored}
+
+
+def update_weight_by_metrics(item: dict, ctr_avg: float, cvr_avg: float) -> dict:
+    """公式化动态权重：基础分 + CTR加分 + CVR加分 + ROI加分 - 惩罚扣分，钳位 0-10。
+
+    用于主词池已上线词，依据店铺真实数据（ctr/cvr/roi 字段）迭代权重。
+    ctr_avg/cvr_avg = 类目均值（所有标题的加权平均）。
+    返回 {weight, delta, reason}
+    """
+    base = int(item.get("weight", 5) or 0)
+    ctr = float(item.get("ctr", 0) or 0)
+    cvr = float(item.get("cvr", 0) or 0)
+    roi = float(item.get("roi", 0) or 0)
+    category = item.get("category", "")
+
+    delta = 0
+    reasons = []
+    # CTR 加分（高于类目均值）
+    if ctr_avg > 0 and ctr > 0:
+        if ctr >= ctr_avg * 1.3:
+            delta += 2
+            reasons.append(f"CTR {ctr:.1%} 显著高于均值 {ctr_avg:.1%} +2")
+        elif ctr >= ctr_avg:
+            delta += 1
+            reasons.append(f"CTR {ctr:.1%} 高于均值 {ctr_avg:.1%} +1")
+        elif ctr <= ctr_avg * 0.5:
+            delta -= 2
+            reasons.append(f"CTR {ctr:.1%} 显著低于均值 {ctr_avg:.1%} -2")
+        elif ctr < ctr_avg:
+            delta -= 1
+            reasons.append(f"CTR {ctr:.1%} 低于均值 {ctr_avg:.1%} -1")
+    # CVR 加分
+    if cvr_avg > 0 and cvr > 0:
+        if cvr >= cvr_avg * 1.3:
+            delta += 2
+            reasons.append(f"CVR {cvr:.1%} 显著高于均值 {cvr_avg:.1%} +2")
+        elif cvr >= cvr_avg:
+            delta += 1
+            reasons.append(f"CVR {cvr:.1%} 高于均值 {cvr_avg:.1%} +1")
+        elif cvr <= cvr_avg * 0.5:
+            delta -= 2
+            reasons.append(f"CVR {cvr:.1%} 显著低于均值 {cvr_avg:.1%} -2")
+        elif cvr < cvr_avg:
+            delta -= 1
+            reasons.append(f"CVR {cvr:.1%} 低于均值 {cvr_avg:.1%} -1")
+    # ROI 加分
+    if roi > 0:
+        if roi >= 3:
+            delta += 1
+            reasons.append(f"ROI {roi:.1f} ≥3 +1")
+        elif roi < 1:
+            delta -= 1
+            reasons.append(f"ROI {roi:.1f} <1 亏损 -1")
+    # 特殊词（营销/痛点/卖点）只看 CTR，不看搜索量
+    if category in SPECIAL_ROLES and ctr > 0:
+        # 这类词价值在点击率，CTR 高直接拉权重
+        if ctr >= 0.03:
+            delta += 1
+            reasons.append("特殊词高CTR +1")
+        elif ctr < 0.01:
+            delta -= 1
+            reasons.append("特殊词低CTR -1")
+
+    new_weight = max(0, min(10, base + delta))
+    if not reasons:
+        reasons.append("无线上数据，维持")
+    return {"weight": new_weight, "delta": delta, "reason": "；".join(reasons)}
+
+
+# 标题模板库（占位符对应 category 词角色）
+TITLE_TEMPLATES = [
+    {"id": "tpl1", "name": "核心+属性+场景", "pattern": "{核心词}{属性词}{场景词}"},
+    {"id": "tpl2", "name": "核心+属性+规格", "pattern": "{核心词}{属性词}{规格词}"},
+    {"id": "tpl3", "name": "属性+核心+场景", "pattern": "{属性词}{核心词}{场景词}"},
+    {"id": "tpl4", "name": "核心+场景+属性+规格", "pattern": "{核心词}{场景词}{属性词}{规格词}"},
+    {"id": "tpl5", "name": "核心+属性+属性+场景", "pattern": "{核心词}{属性词}{属性词}{场景词}"},
+]
+
+
+def _weighted_pick(pool, exclude_words=()):
+    """按 weight 加权随机抽取，排除 exclude_words（词文本）。"""
+    pool = [k for k in pool if k.get("word") not in exclude_words and k.get("weight", 5) > 0]
+    if not pool:
+        return None
+    weights = [max(1, int(k.get("weight", 5))) for k in pool]
+    total = sum(weights)
+    r = random.uniform(0, total)
+    for i, k in enumerate(pool):
+        r -= weights[i]
+        if r <= 0:
+            return k
+    return pool[-1]
+
+
+def _has_repeat(title, words):
+    """检测词表词是否在标题中重复出现（避免「免打孔免打孔」）。"""
+    for w in words:
+        if len(w) >= 2 and title.count(w) > 1:
+            return True
+    return False
+
+
+def generate_titles(core, n=10, platform="all", template_ids=None):
+    """模板+结构化词库的加权随机标题生成（权重/互斥/max_occur/长度校验）。"""
+    import re
+    kws = load_keywords()
+    # 过滤：main 池 + weight>0 + 平台匹配
+    pool = [k for k in kws if k.get("pool_type", "main") == "main" and k.get("weight", 5) > 0]
+    if platform != "all":
+        pool = [k for k in pool if k.get("platform_scope", "all") in ("all", platform)]
+    by_cat = {}
+    for k in pool:
+        by_cat.setdefault(k.get("category", ""), []).append(k)
+    templates = [t for t in TITLE_TEMPLATES if not template_ids or t["id"] in template_ids] or TITLE_TEMPLATES
+    titles = set()
+    guard = 0
+    while len(titles) < n and guard < 500:
+        guard += 1
+        tpl = random.choice(templates)
+        tokens = re.findall(r"\{([^}]+)\}", tpl["pattern"])
+        parts = []
+        picked = []   # 已选词对象
+        used = {}     # 词文本 → 出现次数
+        ok = True
+        for role in tokens:
+            if role == "核心词":
+                parts.append(core)
+                continue
+            cand = _weighted_pick(by_cat.get(role, []), exclude_words=[p["word"] for p in picked])
+            if cand is None:
+                ok = False
+                break
+            w = cand.get("word", "")
+            # max_occur 检查
+            if used.get(w, 0) >= cand.get("max_occur", 1):
+                ok = False
+                break
+            # 互斥检查：cand 的 mutually_exclude 命中已选词，或已选词的 mutually_exclude 命中 cand
+            conflict = any(me in [p["word"] for p in picked] for me in cand.get("mutually_exclude", []))
+            if not conflict:
+                conflict = any(w in p.get("mutually_exclude", []) for p in picked)
+            if conflict:
+                ok = False
+                break
+            parts.append(w)
+            picked.append(cand)
+            used[w] = used.get(w, 0) + 1
+        if not ok:
+            continue
+        t = "".join(parts)
+        if 6 <= len(t) <= 30 and not _has_repeat(t, [p["word"] for p in picked]):
+            titles.add(t)
+    return list(titles)
+
+
+def feedback_title(title, performance):
+    """标题表现回流：拆解标题关键词，调整 weight（good +1 / bad -1，0-10 夹逼）。
+
+    用子串匹配（词库词 ∈ 标题），高表现标题里的词权重 +1，低表现 -1。
+    """
+    items = load_keywords()
+    delta = 1 if performance == "good" else -1
+    matched = 0
+    for k in items:
+        w = k.get("word", "")
+        if len(w) >= 2 and w in title:
+            k["weight"] = max(0, min(10, int(k.get("weight", 5)) + delta))
+            matched += 1
+    save_keywords(items)
+    return {"matched": matched, "delta": delta}
+
+
+# ----------------------------- 标题投放记录表（标题 → 曝光/点击/成交/花费） -----------------------------
+
+TITLE_PERF_PATH = os.path.join(DATA_DIR, "title_perf.json")
+
+
+def load_title_perf() -> list[dict]:
+    if not os.path.exists(TITLE_PERF_PATH):
+        return []
+    try:
+        with open(TITLE_PERF_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def save_title_perf(items: list[dict]) -> None:
+    with open(TITLE_PERF_PATH, "w", encoding="utf-8") as f:
+        json.dump(items, f, ensure_ascii=False, indent=2)
+
+
+def add_title_perf(item: dict) -> dict:
+    """新增/覆盖一条标题投放记录。自动算 ctr/cvr/roi。"""
+    items = load_title_perf()
+    if "id" not in item or not item["id"]:
+        item["id"] = "tp" + str(int(__import__("time").time())) + str(len(items))
+    title = (item.get("title") or "").strip()
+    imp = int(item.get("impressions", 0) or 0)
+    clk = int(item.get("clicks", 0) or 0)
+    ords = int(item.get("orders", 0) or 0)
+    gmv = float(item.get("gmv", 0) or 0)
+    spend = float(item.get("ad_spend", 0) or 0)
+    item["title"] = title
+    item["impressions"] = imp
+    item["clicks"] = clk
+    item["orders"] = ords
+    item["gmv"] = gmv
+    item["ad_spend"] = spend
+    item["ctr"] = round(clk / imp, 4) if imp else 0.0
+    item["cvr"] = round(ords / clk, 4) if clk else 0.0
+    item["roi"] = round(gmv / spend, 4) if spend else 0.0
+    idx = next((i for i, t in enumerate(items) if t.get("id") == item["id"]), None)
+    if idx is None:
+        items.append(item)
+    else:
+        items[idx] = item
+    save_title_perf(items)
+    return item
+
+
+def delete_title_perf(tid: str) -> bool:
+    items = load_title_perf()
+    new_items = [t for t in items if t.get("id") != tid]
+    if len(new_items) == len(items):
+        return False
+    save_title_perf(new_items)
+    return True
+
+
+def class_baselines() -> dict:
+    """类目均值：所有标题的加权平均 CTR/CVR/ROI（特殊词判定 + 公式化权重的基准）。"""
+    perfs = load_title_perf()
+    total_imp = sum(t.get("impressions", 0) or 0 for t in perfs)
+    total_clk = sum(t.get("clicks", 0) or 0 for t in perfs)
+    total_ords = sum(t.get("orders", 0) or 0 for t in perfs)
+    total_gmv = sum(t.get("gmv", 0) or 0 for t in perfs)
+    total_spend = sum(t.get("ad_spend", 0) or 0 for t in perfs)
+    ctr_avg = round(total_clk / total_imp, 4) if total_imp else 0.0
+    cvr_avg = round(total_ords / total_clk, 4) if total_clk else 0.0
+    roi_avg = round(total_gmv / total_spend, 4) if total_spend else 0.0
+    return {"ctr_avg": ctr_avg, "cvr_avg": cvr_avg, "roi_avg": roi_avg,
+            "total_impressions": total_imp, "total_clicks": total_clk,
+            "total_orders": total_ords, "total_gmv": total_gmv, "total_spend": total_spend}
+
+
+def aggregate_word_metrics() -> dict:
+    """按词聚合表现：统计每个词库词出现在哪些标题里，加权平均出该词的 CTR/CVR/ROI。
+
+    特殊词（营销/痛点/卖点）的价值在此体现：用「含该词标题的平均CTR」判断，不看搜索量。
+    返回 {word: {impressions, clicks, orders, gmv, spend, ctr, cvr, roi, title_count}}
+    """
+    perfs = load_title_perf()
+    kws = load_keywords()
+    words = {k.get("word", ""): k for k in kws if len(k.get("word", "")) >= 2}
+    agg = {}
+    for t in perfs:
+        title = t.get("title", "")
+        if not title:
+            continue
+        # 找出标题里包含的所有词库词
+        for w, kw in words.items():
+            if w in title:
+                a = agg.setdefault(w, {
+                    "impressions": 0, "clicks": 0, "orders": 0,
+                    "gmv": 0.0, "spend": 0.0, "title_count": 0,
+                    "category": kw.get("category", ""),
+                    "current_weight": kw.get("weight", 5),
+                })
+                a["impressions"] += t.get("impressions", 0) or 0
+                a["clicks"] += t.get("clicks", 0) or 0
+                a["orders"] += t.get("orders", 0) or 0
+                a["gmv"] += t.get("gmv", 0) or 0
+                a["spend"] += t.get("ad_spend", 0) or 0
+                a["title_count"] += 1
+    for w, a in agg.items():
+        a["ctr"] = round(a["clicks"] / a["impressions"], 4) if a["impressions"] else 0.0
+        a["cvr"] = round(a["orders"] / a["clicks"], 4) if a["clicks"] else 0.0
+        a["roi"] = round(a["gmv"] / a["spend"], 4) if a["spend"] else 0.0
+    return agg
+
+
+# ----------------------------- AI 建议 + 人工审核（HITL） -----------------------------
+
+SUGGESTIONS_PATH = os.path.join(DATA_DIR, "weight_suggestions.json")
+
+
+def load_suggestions() -> list[dict]:
+    if not os.path.exists(SUGGESTIONS_PATH):
+        return []
+    try:
+        with open(SUGGESTIONS_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def save_suggestions(items: list[dict]) -> None:
+    with open(SUGGESTIONS_PATH, "w", encoding="utf-8") as f:
+        json.dump(items, f, ensure_ascii=False, indent=2)
+
+
+def generate_weight_suggestions() -> dict:
+    """AI 计算权重变更建议（不直接改主词库，生成待审核建议）。
+
+    基于标题投放记录 + 词聚合表现 + 类目均值，算出每个词的权重调整建议。
+    返回 {suggestions: [...], baseline: {...}, generated: n}
+    """
+    baseline = class_baselines()
+    agg = aggregate_word_metrics()
+    suggestions = []
+    now = __import__("time").strftime("%Y-%m-%d %H:%M:%S")
+    for word, a in agg.items():
+        item = {"word": word, "category": a["category"], "ctr": a["ctr"],
+                "cvr": a["cvr"], "roi": a["roi"], "weight": a["current_weight"]}
+        r = update_weight_by_metrics(item, baseline["ctr_avg"], baseline["cvr_avg"])
+        # 长期 0 曝光 → 直接置 0，移出主池
+        if a["impressions"] == 0:
+            r = {"weight": 0, "delta": -int(a["current_weight"]), "reason": "长期0曝光，置0"}
+        if r["delta"] == 0:
+            continue  # 无变化不生成建议
+        suggestions.append({
+            "id": "sug_" + word.replace(" ", ""),
+            "word": word,
+            "category": a["category"],
+            "current_weight": a["current_weight"],
+            "suggested_weight": r["weight"],
+            "delta": r["delta"],
+            "reason": r["reason"],
+            "ctr": a["ctr"],
+            "cvr": a["cvr"],
+            "roi": a["roi"],
+            "title_count": a["title_count"],
+            "status": "pending",
+            "created_at": now,
+        })
+    save_suggestions(suggestions)
+    return {"suggestions": suggestions, "baseline": baseline, "generated": len(suggestions)}
+
+
+def apply_suggestions(ids: list) -> dict:
+    """人工确认：把选中建议的权重写入主词库，标记 applied。"""
+    sugs = load_suggestions()
+    items = load_keywords()
+    applied = 0
+    for s in sugs:
+        if ids and s.get("id") not in ids:
+            continue
+        if s.get("status") != "pending":
+            continue
+        for k in items:
+            if k.get("word") == s.get("word"):
+                k["weight"] = s.get("suggested_weight", 5)
+                if s.get("suggested_weight", 5) == 0:
+                    k["pool_type"] = "spare"  # 置0 移出主池
+                break
+        s["status"] = "applied"
+        applied += 1
+    save_keywords(items)
+    save_suggestions(sugs)
+    return {"applied": applied}
+
+
+def reject_suggestions(ids: list) -> dict:
+    """人工驳回建议。"""
+    sugs = load_suggestions()
+    rejected = 0
+    for s in sugs:
+        if ids and s.get("id") not in ids:
+            continue
+        if s.get("status") != "pending":
+            continue
+        s["status"] = "rejected"
+        rejected += 1
+    save_suggestions(sugs)
+    return {"rejected": rejected}
 
 
 if __name__ == "__main__":
