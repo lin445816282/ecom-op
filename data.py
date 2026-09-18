@@ -854,8 +854,13 @@ def score_keyword(item: dict) -> dict:
     if relevance == "低":
         return {"weight": 0, "pool_type": "black", "reason": "与类目关联度低，丢弃"}
 
-    # 3. 搜索量=0 → 无效
+    # 3. 搜索量=0 → 若有热度（1688联想词等按热度采集的词），按热度保底，不直接置0
     if sv <= 0:
+        hot = item.get("hot", "")
+        hot_weight = {"热": 6, "中": 4, "长尾": 3}.get(hot, 0)
+        if hot_weight > 0:
+            return {"weight": hot_weight, "pool_type": "spare",
+                    "reason": f"无搜索量但热度{hot}，按热度保底{hot_weight}"}
         return {"weight": 0, "pool_type": "spare", "reason": "搜索量为0，置0观察"}
 
     # 4. 蓝海判定：高搜索 + 低竞争
