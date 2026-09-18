@@ -11,6 +11,7 @@ import os
 import random
 import subprocess
 import time
+import urllib.request
 from dataclasses import dataclass
 from typing import Optional
 
@@ -1227,6 +1228,131 @@ def collect_1688_keywords(core_words):
         collected.append({"word": w, "hot": meta["hot"], "src": meta["src"]})
 
     return {"collected": collected, "added": added, "skipped": skipped, "error": None}
+
+
+# ----------------------------- 竞品标题 AI 分词拆解（DeepSeek） -----------------------------
+
+def _load_keys_env() -> dict:
+    """读 ~/.keys.env 环境变量（DeepSeek key 等）。"""
+    env = {}
+    p = os.path.expanduser("~/.keys.env")
+    if os.path.isfile(p):
+        for line in open(p, encoding="utf-8"):
+            line = line.strip()
+            if "=" in line and not line.startswith("#"):
+                k, v = line.split("=", 1)
+                env[k.strip()] = v.strip()
+    return env
+
+
+DEEPSEEK_API_KEY = _load_keys_env().get("DEEPSEEK_API_KEY", "")
+
+
+def split_competitor_title(title):
+    """AI 拆解竞品标题 → 词角色词组（核心词/属性词/材质/卖点/营销词/场景词）。
+
+    返回 {words: [{word, role}], template: str, error: str|None}
+    """
+    import re
+    title = (title or "").strip()
+    if not title:
+        return {"words": [], "template": "", "error": "标题不能为空"}
+    if not DEEPSEEK_API_KEY:
+        return {"words": [], "template": "", "error": "未配置 DeepSeek API key"}
+
+    prompt = (
+        "你是电商标题分词专家。把下面的商品标题拆解成词角色词组，用于关键词库和标题模板生成。\n"
+        f"标题：{title}\n\n"
+        "词角色枚举（只能选这些）：核心主词、属性词、材质、功能卖点、场景、营销词、规格词。\n"
+        "规则：\n"
+        "1. 核心主词 = 商品是什么（如：门后挂钩、挂衣钩、置物架）\n"
+        "2. 属性词 = 修饰特征（免打孔、无痕、强力、加粗加厚、铁艺）\n"
+        "3. 材质 = 材料（不锈钢、实木、塑料、亚克力）\n"
+        "4. 功能卖点 = 解决什么问题（承重、防滑、可折叠）\n"
+        "5. 场景 = 使用地点/场合（卧室、宿舍、卫生间、厨房）\n"
+        "6. 营销词 = 促销/钩子词（清仓、爆款、新款、买一送一）\n"
+        "7. 规格词 = 数量/尺寸（五钩、4个装、加大号）\n\n"
+        "只输出 JSON 对象，格式：{\"words\":[{\"word\":\"词\",\"role\":\"核心主词\"}],\"template\":\"{核心主词}+{属性词}+{场景}\"}。"
+        "词用简短词组（2-6字），不要把整段标题当一个词。不要输出 markdown 代码块。"
+    )
+    body = json.dumps({
+        "model": "deepseek-chat",
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.2,
+        "stream": False,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        "https://api.deepseek.com/chat/completions",
+        data=body,
+        headers={
+            "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        resp = json.loads(urllib.request.urlopen(req, timeout=60).read())
+        content = resp["choices"][0]["message"]["content"]
+    except Exception as e:
+        return {"words": [], "template": "", "error": f"DeepSeek 调用失败：{e}"}
+
+    m = re.search(r"\{.*\}", content, re.DOTALL)
+    if m:
+        try:
+            data = json.loads(m.group(0))
+            words = data.get("words", [])
+            template = data.get("template", "")
+            # 过滤非法词角色 + 规范词
+            valid_roles = {"核心主词", "属性词", "材质", "功能卖点", "场景", "营销词", "规格词"}
+            cleaned = []
+            for w in words:
+                word = (w.get("word") or "").strip()
+                role = (w.get("role") or "").strip()
+                if word and role in valid_roles:
+                    cleaned.append({"word": word, "role": role})
+            return {"words": cleaned, "template": template, "error": None}
+        except Exception:
+            pass
+    return {"words": [], "template": "", "error": f"AI 输出解析失败：{content[:200]}"}
+
+
+# 词角色 → 关键词库 category 映射
+ROLE_TO_CATEGORY = {
+    "核心主词": "核心词",
+    "属性词": "属性词",
+    "材质": "属性词",
+    "功能卖点": "长尾词",
+    "场景": "场景词",
+    "营销词": "长尾词",
+    "规格词": "规格词",
+}
+
+
+def import_split_words(title, words):
+    """把拆解出的词导入关键词库（新词进备用池），返回 {added, skipped}。"""
+    added = 0
+    skipped = 0
+    imported = []
+    for w in words:
+        word = w.get("word", "").strip()
+        role = w.get("role", "")
+        category = ROLE_TO_CATEGORY.get(role, "长尾词")
+        if not word:
+            continue
+        # 已存在跳过（不覆盖）
+        existing = [k for k in load_keywords() if k.get("word") == word]
+        if existing:
+            skipped += 1
+            continue
+        item = {
+            "word": word, "category": category, "source": "竞品标题",
+            "status": "待用", "notes": f"拆解自:{title}", "hot": "中",
+            "product": "门后挂钩", "shop": "拼多多",
+            "pool_type": "spare", "weight": 4,
+        }
+        add_keyword(item)
+        added += 1
+        imported.append({"word": word, "role": role, "category": category})
+    return {"added": added, "skipped": skipped, "imported": imported}
 
 
 # ----------------------------- 标题投放记录表（标题 → 曝光/点击/成交/花费） -----------------------------

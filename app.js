@@ -724,6 +724,20 @@ function renderKeywords() {
     </div>
 
     <div class="panel" style="margin-bottom:16px">
+      <div class="panel-header"><h2>🔬 竞品标题拆解</h2><span class="badge">AI 分词 · 拆词进备用池</span></div>
+      <div class="field-row">
+        <div class="field" style="flex:1"><label>竞品标题</label>
+          <input id="split-title" placeholder="粘贴竞品标题，例如：门后挂钩免打孔强力不锈钢卧室挂衣钩加大号5钩">
+        </div>
+        <div class="field"><label>操作</label>
+          <button class="btn primary" id="split-btn">🔬 AI 拆解</button>
+        </div>
+      </div>
+      <div class="task-meta" style="margin-bottom:6px">AI 把标题拆成核心主词/属性词/材质/卖点/场景/规格词，可勾选导入备用池，标题结构自动提取为模板</div>
+      <div id="split-result" style="margin-top:8px"></div>
+    </div>
+
+    <div class="panel" style="margin-bottom:16px">
       <div class="panel-header"><h2>⚖️ 权重体系</h2><span class="badge">预筛打分 + 标题投放回流 + AI建议审核</span></div>
       <div class="field-row">
         <div class="field"><label>预筛打分</label>
@@ -887,6 +901,58 @@ function renderKeywords() {
     } finally {
       $('#collect-btn').disabled = false;
       $('#collect-btn').textContent = '🔍 开始采集';
+    }
+  };
+
+  // ---- 竞品标题 AI 拆解 ----
+  const roleCls = role => ({'核心主词':'green','属性词':'blue','材质':'amber','功能卖点':'amber','场景':'blue','营销词':'red','规格词':'gray'}[role]||'gray');
+  window.__splitWords = [];
+  window.__splitTitle = '';
+  $('#split-btn').onclick = async () => {
+    const title = $('#split-title').value.trim();
+    if (!title) { toast('请先粘贴竞品标题'); return; }
+    $('#split-btn').disabled = true;
+    $('#split-btn').textContent = '🔬 拆解中…';
+    $('#split-result').innerHTML = '<div class="empty">AI 拆解中，约 5-10 秒…</div>';
+    try {
+      const r = await api('/api/titles/split', 'POST', {title});
+      if (r.error) {
+        $('#split-result').innerHTML = `<div class="callout" style="border-color:#e74c3c">❌ ${esc(r.error)}</div>`;
+      } else {
+        window.__splitWords = r.words || [];
+        window.__splitTitle = title;
+        const words = r.words.map((w, i) => `
+          <label class="task-row" style="align-items:center;cursor:pointer">
+            <input type="checkbox" checked data-split-idx="${i}" style="margin-right:8px">
+            <div class="task-body" style="flex:1">
+              <div class="task-title">${esc(w.word)}</div>
+              <div class="task-meta">${esc(w.role)}</div>
+            </div>
+            <span class="tag ${roleCls(w.role)}">${esc(w.role)}</span>
+          </label>`).join('');
+        $('#split-result').innerHTML = `
+          ${r.template ? `<div class="callout" style="border-color:#27ae60">📐 标题模板：<b>${esc(r.template)}</b></div>` : ''}
+          <div style="margin-top:8px">${words || '<div class="empty">未拆出词</div>'}</div>
+          <div class="form-actions" style="margin-top:8px">
+            <button class="btn primary" id="split-import-btn">✅ 导入选中词（备用池）</button>
+          </div>`;
+        $('#split-import-btn').onclick = async () => {
+          const checked = [...document.querySelectorAll('#split-result input[type=checkbox]:checked')].map(c => parseInt(c.dataset.splitIdx));
+          const selWords = checked.map(i => window.__splitWords[i]).filter(Boolean);
+          if (!selWords.length) { toast('请先勾选要导入的词'); return; }
+          try {
+            const ir = await api('/api/titles/split/import', 'POST', {title: window.__splitTitle, words: selWords});
+            await loadKeywordsOnly();
+            renderKeywords();
+            toast(`导入完成：新增 ${ir.added} 个，跳过 ${ir.skipped} 个（已存在）`);
+          } catch(err) { toast(err.message); }
+        };
+      }
+    } catch(err) {
+      $('#split-result').innerHTML = `<div class="callout" style="border-color:#e74c3c">❌ ${esc(err.message)}</div>`;
+    } finally {
+      $('#split-btn').disabled = false;
+      $('#split-btn').textContent = '🔬 AI 拆解';
     }
   };
 

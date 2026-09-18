@@ -253,6 +253,25 @@ class Handler(BaseHTTPRequestHandler):
             result = data.collect_1688_keywords(core_words)
             return _json(self, {"ok": result["error"] is None, **result})
 
+        # 竞品标题 AI 分词拆解（body: {title: "..."}）
+        if path == "/api/titles/split" and self.command == "POST":
+            body = self._read_body()
+            title = (body.get("title") or "").strip()
+            if not title:
+                return _json(self, {"error": "标题不能为空"}, 400)
+            result = data.split_competitor_title(title)
+            return _json(self, {"ok": result["error"] is None, **result})
+
+        # 拆解词导入关键词库（body: {title: "...", words: [{word, role}]}）
+        if path == "/api/titles/split/import" and self.command == "POST":
+            body = self._read_body()
+            title = (body.get("title") or "").strip()
+            words = body.get("words") or []
+            if not title or not words:
+                return _json(self, {"error": "title 和 words 不能为空"}, 400)
+            result = data.import_split_words(title, words)
+            return _json(self, {"ok": True, **result})
+
         # 推广历史（趋势图数据源）
         if path == "/api/promotion-history" and self.command == "GET":
             items = []
