@@ -738,6 +738,20 @@ function renderKeywords() {
     </div>
 
     <div class="panel" style="margin-bottom:16px">
+      <div class="panel-header"><h2>💬 评价痛点词</h2><span class="badge">竞品评价 → 痛点反转卖点 · 进备用池</span></div>
+      <div class="field-row">
+        <div class="field" style="flex:1"><label>竞品评价 / 问大家文本</label>
+          <textarea id="review-text" rows="3" placeholder="粘贴竞品评价或问大家内容，可多行多条。例如：&#10;买回来两周就生锈了，挂重东西会掉，钩子有点小，浴室门后粘不住会脱落&#10;问大家：会掉漆吗？承重多少？"></textarea>
+        </div>
+        <div class="field"><label>操作</label>
+          <button class="btn primary" id="review-btn">💬 AI 拆痛点</button>
+        </div>
+      </div>
+      <div class="task-meta" style="margin-bottom:6px">AI 提炼买家抱怨的痛点（生锈/易脱落），反转成标题可用的正面卖点词（防锈/牢固），卖点词进备用池、痛点词单独归档供参考</div>
+      <div id="review-result" style="margin-top:8px"></div>
+    </div>
+
+    <div class="panel" style="margin-bottom:16px">
       <div class="panel-header"><h2>⚖️ 权重体系</h2><span class="badge">预筛打分 + 标题投放回流 + AI建议审核</span></div>
       <div class="field-row">
         <div class="field"><label>预筛打分</label>
@@ -953,6 +967,57 @@ function renderKeywords() {
     } finally {
       $('#split-btn').disabled = false;
       $('#split-btn').textContent = '🔬 AI 拆解';
+    }
+  };
+
+  // ---- 竞品评价/问大家 痛点词 AI 拆解 ----
+  window.__reviewPairs = [];
+  window.__reviewText = '';
+  $('#review-btn').onclick = async () => {
+    const text = $('#review-text').value.trim();
+    if (!text) { toast('请先粘贴竞品评价/问大家文本'); return; }
+    $('#review-btn').disabled = true;
+    $('#review-btn').textContent = '💬 拆解中…';
+    $('#review-result').innerHTML = '<div class="empty">AI 分析痛点中，约 5-10 秒…</div>';
+    try {
+      const r = await api('/api/titles/split-review', 'POST', {text});
+      if (r.error) {
+        $('#review-result').innerHTML = `<div class="callout" style="border-color:#e74c3c">❌ ${esc(r.error)}</div>`;
+      } else {
+        window.__reviewPairs = r.pairs || [];
+        window.__reviewText = text;
+        const rows = r.pairs.map((p, i) => `
+          <label class="task-row" style="align-items:center;cursor:pointer">
+            <input type="checkbox" checked data-review-idx="${i}" style="margin-right:8px">
+            <div class="task-body" style="flex:1">
+              <div class="task-title">痛点「${esc(p.pain)}」 → 卖点 <b>${esc(p.selling)}</b></div>
+            </div>
+            <span class="tag amber">卖点词</span>
+          </label>`).join('');
+        $('#review-result').innerHTML = `
+          ${r.summary ? `<div class="callout" style="border-color:#e67e22">📋 竞品短板：${esc(r.summary)}</div>` : ''}
+          <div style="margin-top:8px">${rows || '<div class="empty">未提炼出痛点</div>'}</div>
+          <div class="task-meta" style="margin-top:6px">导入时：卖点词进备用池（功能卖点），痛点词归档为「痛点词」供竞品分析参考，不进标题生成</div>
+          <div class="form-actions" style="margin-top:8px">
+            <button class="btn primary" id="review-import-btn">✅ 导入选中（卖点进备用池）</button>
+          </div>`;
+        $('#review-import-btn').onclick = async () => {
+          const checked = [...document.querySelectorAll('#review-result input[type=checkbox]:checked')].map(c => parseInt(c.dataset.reviewIdx));
+          const selPairs = checked.map(i => window.__reviewPairs[i]).filter(Boolean);
+          if (!selPairs.length) { toast('请先勾选要导入的痛点'); return; }
+          try {
+            const ir = await api('/api/titles/split-review/import', 'POST', {text: window.__reviewText, pairs: selPairs});
+            await loadKeywordsOnly();
+            renderKeywords();
+            toast(`导入完成：新增 ${ir.added} 个，跳过 ${ir.skipped} 个（已存在）`);
+          } catch(err) { toast(err.message); }
+        };
+      }
+    } catch(err) {
+      $('#review-result').innerHTML = `<div class="callout" style="border-color:#e74c3c">❌ ${esc(err.message)}</div>`;
+    } finally {
+      $('#review-btn').disabled = false;
+      $('#review-btn').textContent = '💬 AI 拆痛点';
     }
   };
 

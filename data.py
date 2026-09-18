@@ -1355,6 +1355,111 @@ def import_split_words(title, words):
     return {"added": added, "skipped": skipped, "imported": imported}
 
 
+def split_review_painpoints(text):
+    """AI 拆解竞品评价/问大家文本 → 痛点词 + 反转卖点词。
+
+    输入：评价文本（多行，可含多条评价）
+    返回 {pairs: [{pain, selling}], summary: str, error: str|None}
+    pain = 负面痛点词（生锈/易脱落），selling = 正面反转卖点词（防锈/牢固）
+    """
+    import re
+    text = (text or "").strip()
+    if not text:
+        return {"pairs": [], "summary": "", "error": "评价文本不能为空"}
+    if not DEEPSEEK_API_KEY:
+        return {"pairs": [], "summary": "", "error": "未配置 DeepSeek API key"}
+
+    prompt = (
+        "你是电商竞品评价分析专家。下面是一段竞品商品的买家评价/问大家文本，请提炼出买家抱怨的痛点，并反转为可用于标题的正面卖点词。\n"
+        f"评价文本：\n{text[:3000]}\n\n"
+        "规则：\n"
+        "1. 痛点词 = 买家抱怨的负面问题，简短词组（如：生锈、易脱落、掉色、承重不够、有异味）\n"
+        "2. 卖点词 = 把痛点反转成正面表述（如：生锈→防锈不生锈、易脱落→牢固不掉、承重不够→承重强）\n"
+        "3. 每个痛点对应一个卖点，卖点词要能在标题里直接使用（2-6字，正面、具体）\n"
+        "4. 只提炼高频、真实、可落地的痛点，不要臆造\n"
+        "5. summary = 一句话概括竞品主要短板\n\n"
+        '只输出 JSON 对象，格式：{"pairs":[{"pain":"生锈","selling":"防锈不生锈"}],"summary":"竞品主要短板是..."}。'
+        "不要输出 markdown 代码块。"
+    )
+    body = json.dumps({
+        "model": "deepseek-chat",
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.2,
+        "stream": False,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        "https://api.deepseek.com/chat/completions",
+        data=body,
+        headers={
+            "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        resp = json.loads(urllib.request.urlopen(req, timeout=60).read())
+        content = resp["choices"][0]["message"]["content"]
+    except Exception as e:
+        return {"pairs": [], "summary": "", "error": f"DeepSeek 调用失败：{e}"}
+
+    m = re.search(r"\{.*\}", content, re.DOTALL)
+    if m:
+        try:
+            data = json.loads(m.group(0))
+            pairs = data.get("pairs", [])
+            summary = data.get("summary", "")
+            cleaned = []
+            for p in pairs:
+                pain = (p.get("pain") or "").strip()
+                selling = (p.get("selling") or "").strip()
+                if pain and selling:
+                    cleaned.append({"pain": pain, "selling": selling})
+            return {"pairs": cleaned, "summary": summary, "error": None}
+        except Exception:
+            pass
+    return {"pairs": [], "summary": "", "error": f"AI 输出解析失败：{content[:200]}"}
+
+
+def import_painpoint_words(text, pairs):
+    """把痛点反推的卖点词导入关键词库（卖点词进备用池，痛点词进痛点分类）。
+
+    卖点词 → category=功能卖点（可参与标题生成）
+    痛点词 → category=痛点词（仅作竞品短板参考，不进标题生成）
+    返回 {added, skipped, imported}。
+    """
+    added = 0
+    skipped = 0
+    imported = []
+    existing_words = {k.get("word") for k in load_keywords()}
+    for p in pairs:
+        pain = (p.get("pain") or "").strip()
+        selling = (p.get("selling") or "").strip()
+        # 卖点词
+        if selling and selling not in existing_words:
+            add_keyword({
+                "word": selling, "category": "功能卖点", "source": "竞品评价",
+                "status": "待用", "notes": f"痛点反推:{pain}｜{text[:20]}", "hot": "中",
+                "product": "门后挂钩", "shop": "拼多多",
+                "pool_type": "spare", "weight": 4,
+            })
+            existing_words.add(selling)
+            added += 1
+            imported.append({"word": selling, "role": "卖点词", "category": "功能卖点", "from_pain": pain})
+        elif selling:
+            skipped += 1
+        # 痛点词（单独存，供参考）
+        if pain and pain not in existing_words:
+            add_keyword({
+                "word": pain, "category": "痛点词", "source": "竞品评价",
+                "status": "待用", "notes": f"竞品痛点｜{text[:20]}", "hot": "低",
+                "product": "门后挂钩", "shop": "拼多多",
+                "pool_type": "spare", "weight": 1,
+            })
+            existing_words.add(pain)
+            added += 1
+            imported.append({"word": pain, "role": "痛点词", "category": "痛点词", "from_pain": pain})
+    return {"added": added, "skipped": skipped, "imported": imported}
+
+
 # ----------------------------- 标题投放记录表（标题 → 曝光/点击/成交/花费） -----------------------------
 
 TITLE_PERF_PATH = os.path.join(DATA_DIR, "title_perf.json")

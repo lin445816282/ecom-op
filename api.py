@@ -272,6 +272,25 @@ class Handler(BaseHTTPRequestHandler):
             result = data.import_split_words(title, words)
             return _json(self, {"ok": True, **result})
 
+        # 竞品评价/问大家 痛点词 AI 拆解（body: {text: "..."}）
+        if path == "/api/titles/split-review" and self.command == "POST":
+            body = self._read_body()
+            text = (body.get("text") or "").strip()
+            if not text:
+                return _json(self, {"error": "评价文本不能为空"}, 400)
+            result = data.split_review_painpoints(text)
+            return _json(self, {"ok": result["error"] is None, **result})
+
+        # 痛点反推词导入关键词库（body: {text: "...", pairs: [{pain, selling}]}）
+        if path == "/api/titles/split-review/import" and self.command == "POST":
+            body = self._read_body()
+            text = (body.get("text") or "").strip()
+            pairs = body.get("pairs") or []
+            if not text or not pairs:
+                return _json(self, {"error": "text 和 pairs 不能为空"}, 400)
+            result = data.import_painpoint_words(text, pairs)
+            return _json(self, {"ok": True, **result})
+
         # 推广历史（趋势图数据源）
         if path == "/api/promotion-history" and self.command == "GET":
             items = []
