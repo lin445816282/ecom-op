@@ -242,6 +242,17 @@ class Handler(BaseHTTPRequestHandler):
             result = data.feedback_title(title, perf)
             return _json(self, {"ok": True, **result})
 
+        # 1688 搜索联想词采集（body: {core_words: ["门后挂钩", ...]}）
+        if path == "/api/keywords/collect" and self.command == "POST":
+            body = self._read_body()
+            core_words = body.get("core_words") or []
+            if isinstance(core_words, str):
+                core_words = [core_words]
+            if not core_words:
+                return _json(self, {"error": "core_words 不能为空"}, 400)
+            result = data.collect_1688_keywords(core_words)
+            return _json(self, {"ok": result["error"] is None, **result})
+
         # 推广历史（趋势图数据源）
         if path == "/api/promotion-history" and self.command == "GET":
             items = []

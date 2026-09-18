@@ -691,6 +691,28 @@ function renderKeywords() {
     </div>
 
     <div class="panel" style="margin-bottom:16px">
+      <div class="panel-header"><h2>🔍 1688 联想词采集</h2><span class="badge">免费拓词源 · CDP 直采 · 自动入库</span></div>
+      <div class="field-row">
+        <div class="field" style="flex:1"><label>核心词（多个用逗号/空格分隔）</label>
+          <input id="collect-words" placeholder="例如：门后挂钩 挂衣钩 置物架">
+        </div>
+        <div class="field"><label>常用核心词</label>
+          <select id="collect-preset">
+            <option value="">— 选择 —</option>
+            <option value="门后挂钩 挂衣钩 挂衣架 衣钩 门后收纳 置物架">门后挂钩（全量）</option>
+            <option value="免打孔挂钩 吸盘挂钩 铁艺挂钩">挂钩类型</option>
+            <option value="收纳架 置物架 挂架">收纳架</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-actions">
+        <button class="btn primary" id="collect-btn">🔍 开始采集</button>
+        <span class="task-meta" style="margin-left:8px">调用 Edge 浏览器采集 1688 搜索联想词，约 10 秒/词</span>
+      </div>
+      <div id="collect-result" style="margin-top:12px"></div>
+    </div>
+
+    <div class="panel" style="margin-bottom:16px">
       <div class="panel-header"><h2>⚖️ 权重体系</h2><span class="badge">预筛打分 + 标题投放回流 + AI建议审核</span></div>
       <div class="field-row">
         <div class="field"><label>预筛打分</label>
@@ -816,6 +838,40 @@ function renderKeywords() {
   };
 
   renderList();
+
+  // ---- 1688 联想词采集 ----
+  $('#collect-preset').onchange = () => {
+    const v = $('#collect-preset').value;
+    if (v) $('#collect-words').value = v;
+  };
+  $('#collect-btn').onclick = async () => {
+    const raw = $('#collect-words').value.trim();
+    if (!raw) { toast('请先填核心词'); return; }
+    const core_words = raw.split(/[,，\s]+/).filter(Boolean);
+    $('#collect-btn').disabled = true;
+    $('#collect-btn').textContent = '🔍 采集中…';
+    $('#collect-result').innerHTML = '<div class="empty">正在调用 Edge 采集 1688 联想词，约 10 秒/词，请稍候…</div>';
+    try {
+      const r = await api('/api/keywords/collect', 'POST', {core_words});
+      if (r.error) {
+        $('#collect-result').innerHTML = `<div class="callout" style="border-color:#e74c3c">❌ ${esc(r.error)}</div>`;
+      } else {
+        const items = (r.collected || []).map(c =>
+          `<span class="tag ${c.hot==='热'?'red':c.hot==='中'?'amber':'gray'}" style="margin:3px">${esc(c.word)} 🔥${esc(c.hot)}</span>`
+        ).join('');
+        $('#collect-result').innerHTML = `
+          <div class="callout" style="border-color:#27ae60">✅ 采集完成：新增 ${r.added} 个，跳过 ${r.skipped} 个（已存在）</div>
+          <div style="margin-top:8px">${items || '<div class="empty">未采集到新词</div>'}</div>`;
+        await loadKeywordsOnly();
+        renderKeywords();
+      }
+    } catch(err) {
+      $('#collect-result').innerHTML = `<div class="callout" style="border-color:#e74c3c">❌ ${esc(err.message)}</div>`;
+    } finally {
+      $('#collect-btn').disabled = false;
+      $('#collect-btn').textContent = '🔍 开始采集';
+    }
+  };
 
   // ---- 权重体系：预筛重跑 + AI建议 + 投放记录 ----
 

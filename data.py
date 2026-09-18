@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 import os
 import random
+import subprocess
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -1076,6 +1078,147 @@ def feedback_title(title, performance):
             matched += 1
     save_keywords(items)
     return {"matched": matched, "delta": delta}
+
+
+# ----------------------------- 1688 搜索联想词采集（CDP） -----------------------------
+
+NODE_EXE = "/mnt/d/Program Files/nodejs/node.exe"
+CDP_EVAL_JS = r"C:\tmp\cdp_eval.js"
+EDGE_RESTART_PS1 = r"C:\tmp\restart_edge2.ps1"
+_1688_SEARCH_URL = "https://s.1688.com/selloffer/offer_search.htm?keywords={kw}"
+
+
+def _cdp_eval(js, timeout=30):
+    """通过 node.exe + cdp_eval.js 在 Edge 里执行 JS，返回 value（失败返回 None）。"""
+    try:
+        r = subprocess.run([NODE_EXE, CDP_EVAL_JS], input=js,
+                           capture_output=True, text=True, timeout=timeout)
+        d = json.loads(r.stdout)
+        return d["result"]["value"]
+    except Exception:
+        return None
+
+
+def _edge_cdp_alive():
+    """Edge CDP（9222）是否可用。"""
+    return _cdp_eval("(() => 'OK')()", timeout=8) == "OK"
+
+
+def _start_edge_cdp():
+    """启动 Edge CDP（独立 profile，9222）。"""
+    try:
+        subprocess.run(["powershell.exe", "-ExecutionPolicy", "Bypass",
+                        "-File", EDGE_RESTART_PS1],
+                       capture_output=True, timeout=60)
+    except Exception:
+        pass
+    time.sleep(2)
+
+
+def _hot_of(rank):
+    """联想词排序 → 热度分档：前3热，4-8中，9+长尾。"""
+    if rank <= 3:
+        return "热"
+    if rank <= 8:
+        return "中"
+    return "长尾"
+
+
+def _navigate_1688(word):
+    """导航到 1688 搜索页（用首个核心词）。"""
+    import urllib.parse
+    kw = urllib.parse.quote(word)
+    js = f"(() => {{ location.href = '{_1688_SEARCH_URL.format(kw=kw)}'; return 'nav'; }})()"
+    _cdp_eval(js, timeout=15)
+    time.sleep(5)
+
+
+def _collect_1688_suggest(word):
+    """采集单个核心词的联想词，返回 [(词, 排序), ...]（排序越前越热）。"""
+    js = f'''(() => {{
+      const input = document.querySelector('#alisearch-input');
+      if (!input) return 'NO_INPUT';
+      input.focus();
+      const ns = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+      ns.call(input, '{word}');
+      input.dispatchEvent(new Event('input', {{bubbles:true}}));
+      input.dispatchEvent(new Event('keyup', {{bubbles:true}}));
+      return 'OK';
+    }})()'''
+    _cdp_eval(js, timeout=15)
+    time.sleep(2.5)
+    js2 = '''(() => {
+      const items = [...document.querySelectorAll('.suggestion-item')].map(el => (el.textContent||'').replace(/\\s+/g,''));
+      return JSON.stringify(items);
+    })()'''
+    v = _cdp_eval(js2, timeout=15)
+    if not v:
+        return []
+    try:
+        items = json.loads(v)
+    except Exception:
+        return []
+    result = []
+    for idx, w in enumerate(items):
+        if word in w and w != word:
+            result.append((w, idx + 1))
+    return result
+
+
+def collect_1688_keywords(core_words):
+    """1688 搜索联想词采集 → 入库（长尾词，含热度排序 + 关联性）。
+
+    参数 core_words：核心词列表（如 ["门后挂钩", "挂衣钩"]）。
+    返回 {collected: [...], added: n, skipped: n, error: str|None}
+    """
+    # 1. 确保 Edge CDP 可用（无则启动）
+    if not _edge_cdp_alive():
+        _start_edge_cdp()
+        if not _edge_cdp_alive():
+            return {"collected": [], "added": 0, "skipped": 0,
+                    "error": "Edge CDP 启动失败（9222 端口不可用），请检查 Windows Edge"}
+
+    words = [w.strip() for w in core_words if w and w.strip()]
+    if not words:
+        return {"collected": [], "added": 0, "skipped": 0, "error": "核心词不能为空"}
+
+    # 2. 导航到 1688 搜索页（首个词）
+    _navigate_1688(words[0])
+
+    # 3. 逐词采集
+    all_words = {}  # word -> {src, hot}
+    for word in words:
+        sugs = _collect_1688_suggest(word)
+        for w, rank in sugs:
+            hot = _hot_of(rank)
+            if w not in all_words:
+                all_words[w] = {"src": word, "hot": hot}
+            else:
+                old = all_words[w]
+                if hot == "热" or (hot == "中" and old["hot"] == "长尾"):
+                    all_words[w] = {"src": word, "hot": hot}
+        time.sleep(1.0)
+
+    # 4. 入库（长尾词，source=1688联想词，notes=核心词）
+    added = 0
+    skipped = 0
+    collected = []
+    for w, meta in all_words.items():
+        item = {
+            "word": w, "category": "长尾词", "source": "1688联想词",
+            "status": "待用", "notes": f"核心词:{meta['src']}", "hot": meta["hot"],
+            "product": "门后挂钩", "shop": "拼多多",
+        }
+        # 已存在则跳过（不覆盖现有词的分类/权重）
+        existing = [k for k in load_keywords() if k.get("word") == w]
+        if existing:
+            skipped += 1
+            continue
+        add_keyword(item)
+        added += 1
+        collected.append({"word": w, "hot": meta["hot"], "src": meta["src"]})
+
+    return {"collected": collected, "added": added, "skipped": skipped, "error": None}
 
 
 # ----------------------------- 标题投放记录表（标题 → 曝光/点击/成交/花费） -----------------------------
