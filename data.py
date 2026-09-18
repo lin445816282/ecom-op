@@ -729,7 +729,12 @@ def save_keywords(items: list[dict]) -> None:
 def add_keyword(item: dict) -> dict:
     items = load_keywords()
     if "id" not in item or not item["id"]:
-        item["id"] = "kw" + str(int(__import__("time").time()))[-6:] + str(len(items))
+        import uuid
+        item["id"] = "kw" + uuid.uuid4().hex[:10]
+    # 兜底：如果传入的 id 与现有词重复（历史脏数据），强制换新 id
+    while any(k.get("id") == item["id"] for k in items):
+        import uuid
+        item["id"] = "kw" + uuid.uuid4().hex[:10]
     item.setdefault("product", "门后挂钩")
     item.setdefault("shop", "拼多多")
     item.setdefault("hot", "中")
@@ -1200,6 +1205,8 @@ def collect_1688_keywords(core_words):
         time.sleep(1.0)
 
     # 4. 入库（长尾词，source=1688联想词，notes=核心词）
+    # 新词进备用池（spare），初始权重按热度映射：热6/中4/长尾3（保守，等线上数据迭代）
+    hot_weight = {"热": 6, "中": 4, "长尾": 3}
     added = 0
     skipped = 0
     collected = []
@@ -1208,6 +1215,7 @@ def collect_1688_keywords(core_words):
             "word": w, "category": "长尾词", "source": "1688联想词",
             "status": "待用", "notes": f"核心词:{meta['src']}", "hot": meta["hot"],
             "product": "门后挂钩", "shop": "拼多多",
+            "pool_type": "spare", "weight": hot_weight.get(meta["hot"], 3),
         }
         # 已存在则跳过（不覆盖现有词的分类/权重）
         existing = [k for k in load_keywords() if k.get("word") == w]

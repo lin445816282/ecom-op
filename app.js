@@ -629,27 +629,38 @@ function renderKeywords() {
     if ((k.cvr||0) > 0) dim.push(`CVR ${(k.cvr*100).toFixed(1)}%`);
     if ((k.roi||0) > 0) dim.push(`ROI ${k.roi.toFixed(1)}`);
     const dimStr = dim.length ? ' · ' + dim.join(' · ') : '';
+    const poolTag = k.pool_type === 'black' ? '<span class="tag" style="background:#333;color:#fff">黑名单</span>'
+                  : k.pool_type === 'spare' ? '<span class="tag amber">备用池</span>'
+                  : '<span class="tag green">主池</span>';
+    const poolBtn = k.pool_type === 'spare'
+      ? `<button class="btn sm" style="margin-left:4px" onclick="window.__kwPool && window.__kwPool('${k.id}','main')" title="迁入主池">→主池</button>`
+      : (k.pool_type === 'main'
+        ? `<button class="btn sm" style="margin-left:4px" onclick="window.__kwPool && window.__kwPool('${k.id}','spare')" title="移入备用池">→备用</button>`
+        : `<button class="btn sm" style="margin-left:4px" onclick="window.__kwPool && window.__kwPool('${k.id}','spare')" title="移出黑名单">解除</button>`);
     return `
     <div class="task-row" style="align-items:center">
       <div class="task-body" style="flex:1">
         <div class="task-title">${esc(k.word)}</div>
-        <div class="task-meta">${esc(k.source||'')} · ${esc(k.category||'')} · ${esc(k.pool_type||'main')}池 · 权重${esc(k.weight!=null?k.weight:5)}${dimStr}</div>
+        <div class="task-meta">${esc(k.source||'')} · ${esc(k.category||'')} · 权重${esc(k.weight!=null?k.weight:5)}${dimStr}</div>
       </div>
-      <span class="tag ${hotCls(k.hot)}" title="热度">🔥${esc(k.hot||'—')}</span>
+      ${poolTag}
+      <span class="tag ${hotCls(k.hot)}" style="margin:0 4px" title="热度">🔥${esc(k.hot||'—')}</span>
       <span class="tag ${relCls(k.relevance)}" style="margin:0 4px" title="关联性">${esc(k.relevance||'—')}关联</span>
       <span class="tag ${statusCls(k.status)}">${esc(k.status||'待用')}</span>
-      <button class="btn sm" style="margin-left:6px" onclick="window.__kwStatus && window.__kwStatus('${k.id}')">状态</button>
+      ${poolBtn}
+      <button class="btn sm" style="margin-left:4px" onclick="window.__kwStatus && window.__kwStatus('${k.id}')">状态</button>
       <button class="btn sm danger" onclick="window.__delKw && window.__delKw('${k.id}')">删</button>
     </div>`;
   };
 
-  // 四维筛选状态（产品 × 分类 × 热度 × 关联性）
-  const f = {product:'全部产品', cat:'全部', hot:'全部热度', rel:'全部关联'};
+  // 筛选状态（产品 × 分类 × 热度 × 关联性 × 池）
+  const f = {product:'全部产品', cat:'全部', hot:'全部热度', rel:'全部关联', pool:'全部池'};
   const applyFilter = () => kws.filter(k =>
     (f.product==='全部产品' || (k.product||'门后挂钩')===f.product) &&
     (f.cat==='全部' || k.category===f.cat) &&
     (f.hot==='全部热度' || k.hot===f.hot) &&
-    (f.rel==='全部关联' || k.relevance===f.rel)
+    (f.rel==='全部关联' || k.relevance===f.rel) &&
+    (f.pool==='全部池' || (k.pool_type||'main')===f.pool)
   );
   const renderList = () => {
     const list = applyFilter();
@@ -785,10 +796,14 @@ function renderKeywords() {
         <div class="tabs" id="kw-rel-tabs" style="margin-top:6px">
           ${relOpts.map(r=>`<button class="tab ${r==='全部关联'?'active':''}" data-v="${esc(r)}">${r==='全部关联'?'关联':esc(r)}${r==='全部关联'?'':` (${relCounts[r]||0})`}</button>`).join('')}
         </div>
+        <div class="tabs" id="kw-pool-tabs" style="margin-top:6px">
+          ${['全部池','main','spare','black'].map(p=>`<button class="tab ${p==='全部池'?'active':''}" data-v="${p}">${p==='全部池'?'池':p==='main'?'主池':p==='spare'?'备用池':'黑名单'}</button>`).join('')}
+        </div>
         <div style="margin-top:10px;display:flex;gap:8px">
           <button class="btn sm primary" id="kw-best-btn">🔥 热 + 高关联</button>
           <button class="btn sm" id="kw-clear-btn">清除筛选</button>
           <button class="btn sm" id="kw-clean-btn">🧹 批量清洗</button>
+          <button class="btn sm" id="kw-spare-to-main-btn">⏫ 备用池全迁主池</button>
         </div>
         <div id="kw-list" style="margin-top:12px;max-height:360px;overflow-y:auto"></div>
       </div>
@@ -809,6 +824,7 @@ function renderKeywords() {
   bindTabs('#kw-cat-tabs', 'cat');
   bindTabs('#kw-hot-tabs', 'hot');
   bindTabs('#kw-rel-tabs', 'rel');
+  bindTabs('#kw-pool-tabs', 'pool');
 
   // 一键热+高关联
   $('#kw-best-btn').onclick = () => {
@@ -819,11 +835,12 @@ function renderKeywords() {
   };
   // 清除筛选
   $('#kw-clear-btn').onclick = () => {
-    f.product='全部产品'; f.cat='全部'; f.hot='全部热度'; f.rel='全部关联';
+    f.product='全部产品'; f.cat='全部'; f.hot='全部热度'; f.rel='全部关联'; f.pool='全部池';
     $$('#kw-prod-tabs .tab').forEach(x=>x.classList.toggle('active', x.dataset.v==='全部产品'));
     $$('#kw-cat-tabs .tab').forEach(x=>x.classList.toggle('active', x.dataset.v==='全部'));
     $$('#kw-hot-tabs .tab').forEach(x=>x.classList.toggle('active', x.dataset.v==='全部热度'));
     $$('#kw-rel-tabs .tab').forEach(x=>x.classList.toggle('active', x.dataset.v==='全部关联'));
+    $$('#kw-pool-tabs .tab').forEach(x=>x.classList.toggle('active', x.dataset.v==='全部池'));
     renderList();
   };
   // 批量清洗（去重+标准化+脏词标记）
@@ -1098,6 +1115,28 @@ function renderKeywords() {
     k.status = order[(order.indexOf(k.status||'待用')+1)%order.length];
     try { await api('/api/keywords','POST',k); renderKeywords(); }
     catch(err){ toast(err.message); }
+  };
+  // 池子迁移：main↔spare↔black
+  window.__kwPool = async (id, pool) => {
+    const k = kws.find(x=>x.id===id); if(!k) return;
+    try {
+      await api('/api/keywords/batch','POST',{ids:[id], fields:{pool_type: pool}});
+      await loadKeywordsOnly();
+      renderKeywords();
+      toast(pool==='main' ? '已迁入主池' : pool==='spare' ? '已移入备用池' : '已移入黑名单');
+    } catch(err){ toast(err.message); }
+  };
+  // 备用池全迁主池
+  $('#kw-spare-to-main-btn').onclick = async () => {
+    const spareIds = kws.filter(k=>k.pool_type==='spare').map(k=>k.id);
+    if (!spareIds.length) { toast('备用池无词'); return; }
+    if (!confirm(`将 ${spareIds.length} 个备用池词全部迁入主池？`)) return;
+    try {
+      const r = await api('/api/keywords/batch','POST',{ids: spareIds, fields:{pool_type: 'main'}});
+      await loadKeywordsOnly();
+      renderKeywords();
+      toast(`已迁入主池 ${r.updated} 个`);
+    } catch(err){ toast(err.message); }
   };
 }
 
