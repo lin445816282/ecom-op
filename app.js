@@ -752,6 +752,21 @@ function renderKeywords() {
     </div>
 
     <div class="panel" style="margin-bottom:16px">
+      <div class="panel-header"><h2>🧠 AI 同义词扩充</h2><span class="badge">核心词 → 同义词/长尾/场景 · 进备用池</span></div>
+      <div class="field-row">
+        <div class="field" style="flex:1"><label>核心词</label>
+          <input id="expand-core" list="kw-expand-list" placeholder="例如：门后挂钩 / 置物架">
+          <datalist id="kw-expand-list">${products.filter(p=>p!=='全部产品').map(p=>`<option value="${esc(p)}">`).join('')}</datalist>
+        </div>
+        <div class="field"><label>操作</label>
+          <button class="btn primary" id="expand-btn">🧠 AI 扩充</button>
+        </div>
+      </div>
+      <div class="task-meta" style="margin-bottom:6px">AI 生成核心词的近义词/同义表达 + 长尾组合 + 场景词，勾选导入备用池（同义词→核心词、长尾→长尾词、场景→场景词）</div>
+      <div id="expand-result" style="margin-top:8px"></div>
+    </div>
+
+    <div class="panel" style="margin-bottom:16px">
       <div class="panel-header"><h2>⚖️ 权重体系</h2><span class="badge">预筛打分 + 标题投放回流 + AI建议审核</span></div>
       <div class="field-row">
         <div class="field"><label>预筛打分</label>
@@ -1018,6 +1033,61 @@ function renderKeywords() {
     } finally {
       $('#review-btn').disabled = false;
       $('#review-btn').textContent = '💬 AI 拆痛点';
+    }
+  };
+
+  // ---- AI 同义词/长尾变体扩充 ----
+  window.__expandWords = [];
+  window.__expandCore = '';
+  $('#expand-btn').onclick = async () => {
+    const core = $('#expand-core').value.trim();
+    if (!core) { toast('请先输入核心词'); return; }
+    $('#expand-btn').disabled = true;
+    $('#expand-btn').textContent = '🧠 扩充中…';
+    $('#expand-result').innerHTML = '<div class="empty">AI 扩充中，约 5-10 秒…</div>';
+    try {
+      const r = await api('/api/keywords/expand', 'POST', {core_word: core});
+      if (r.error) {
+        $('#expand-result').innerHTML = `<div class="callout" style="border-color:#e74c3c">❌ ${esc(r.error)}</div>`;
+      } else {
+        const build = (label, words, role, cls) => {
+          if (!words || !words.length) return '';
+          const rows = words.map((w, i) => {
+            const idx = window.__expandWords.push({word: w, role}) - 1;
+            return `<label class="task-row" style="align-items:center;cursor:pointer">
+              <input type="checkbox" checked data-expand-idx="${idx}" style="margin-right:8px">
+              <div class="task-body" style="flex:1"><div class="task-title">${esc(w)}</div></div>
+              <span class="tag ${cls}">${role}</span>
+            </label>`;
+          }).join('');
+          return `<div style="margin-top:8px"><div class="task-meta" style="margin-bottom:4px">${label}（${words.length}）</div>${rows}</div>`;
+        };
+        window.__expandWords = [];
+        window.__expandCore = core;
+        $('#expand-result').innerHTML = `
+          ${build('🔄 同义词', r.synonyms, '同义词', 'green')}
+          ${build('📏 长尾词', r.variants, '长尾词', 'blue')}
+          ${build('🏠 场景词', r.scenes, '场景词', 'amber')}
+          <div class="form-actions" style="margin-top:8px">
+            <button class="btn primary" id="expand-import-btn">✅ 导入选中词（备用池）</button>
+          </div>`;
+        $('#expand-import-btn').onclick = async () => {
+          const checked = [...document.querySelectorAll('#expand-result input[type=checkbox]:checked')].map(c => parseInt(c.dataset.expandIdx));
+          const selWords = checked.map(i => window.__expandWords[i]).filter(Boolean);
+          if (!selWords.length) { toast('请先勾选要导入的词'); return; }
+          try {
+            const ir = await api('/api/keywords/expand/import', 'POST', {core_word: window.__expandCore, words: selWords});
+            await loadKeywordsOnly();
+            renderKeywords();
+            toast(`导入完成：新增 ${ir.added} 个，跳过 ${ir.skipped} 个（已存在）`);
+          } catch(err) { toast(err.message); }
+        };
+      }
+    } catch(err) {
+      $('#expand-result').innerHTML = `<div class="callout" style="border-color:#e74c3c">❌ ${esc(err.message)}</div>`;
+    } finally {
+      $('#expand-btn').disabled = false;
+      $('#expand-btn').textContent = '🧠 AI 扩充';
     }
   };
 

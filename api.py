@@ -291,6 +291,25 @@ class Handler(BaseHTTPRequestHandler):
             result = data.import_painpoint_words(text, pairs)
             return _json(self, {"ok": True, **result})
 
+        # AI 同义词/长尾变体扩充（body: {core_word: "..."}）
+        if path == "/api/keywords/expand" and self.command == "POST":
+            body = self._read_body()
+            core_word = (body.get("core_word") or "").strip()
+            if not core_word:
+                return _json(self, {"error": "core_word 不能为空"}, 400)
+            result = data.expand_synonyms(core_word)
+            return _json(self, {"ok": result["error"] is None, **result})
+
+        # AI 扩充词导入关键词库（body: {core_word: "...", words: [{word, role}]}）
+        if path == "/api/keywords/expand/import" and self.command == "POST":
+            body = self._read_body()
+            core_word = (body.get("core_word") or "").strip()
+            words = body.get("words") or []
+            if not core_word or not words:
+                return _json(self, {"error": "core_word 和 words 不能为空"}, 400)
+            result = data.import_expanded_words(core_word, words)
+            return _json(self, {"ok": True, **result})
+
         # 推广历史（趋势图数据源）
         if path == "/api/promotion-history" and self.command == "GET":
             items = []

@@ -1460,6 +1460,108 @@ def import_painpoint_words(text, pairs):
     return {"added": added, "skipped": skipped, "imported": imported}
 
 
+def expand_synonyms(core_word):
+    """AI 同义词/长尾变体扩充：给定核心词，生成近义词 + 长尾组合 + 场景词。
+
+    返回 {synonyms: [{word}], variants: [{word}], scenes: [{word}], error: str|None}
+    """
+    import re
+    core_word = (core_word or "").strip()
+    if not core_word:
+        return {"synonyms": [], "variants": [], "scenes": [], "error": "核心词不能为空"}
+    if not DEEPSEEK_API_KEY:
+        return {"synonyms": [], "variants": [], "scenes": [], "error": "未配置 DeepSeek API key"}
+
+    prompt = (
+        "你是电商关键词拓展专家。给定一个核心词，生成同义词和长尾变体，用于关键词库和标题生成。\n"
+        f"核心词：{core_word}\n\n"
+        "规则：\n"
+        "1. 同义词 = 核心词的近义/同义表达（换个说法，2-6字），如「门后挂钩」→「门后挂架」「门上挂钩」「免打孔挂钩」\n"
+        "2. 长尾词 = 核心词 + 修饰/场景/人群/材质的长尾组合（4-10字），如「门后挂钩免打孔」「卧室门后挂钩」「不锈钢门后挂钩」\n"
+        "3. 场景词 = 核心词适用的使用场景（2-4字），如「卧室」「浴室」「宿舍」「厨房」\n"
+        "4. 每个词简短、真实、可搜索，不要臆造不存在的词，不要重复\n"
+        "5. 数量：同义词 3-5 个，长尾词 5-10 个，场景词 3-5 个\n\n"
+        '只输出 JSON 对象，格式：{"synonyms":["词1","词2"],"variants":["词1","词2"],"scenes":["词1","词2"]}。'
+        "不要输出 markdown 代码块。"
+    )
+    body = json.dumps({
+        "model": "deepseek-chat",
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.5,
+        "stream": False,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        "https://api.deepseek.com/chat/completions",
+        data=body,
+        headers={
+            "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        resp = json.loads(urllib.request.urlopen(req, timeout=60).read())
+        content = resp["choices"][0]["message"]["content"]
+    except Exception as e:
+        return {"synonyms": [], "variants": [], "scenes": [], "error": f"DeepSeek 调用失败：{e}"}
+
+    m = re.search(r"\{.*\}", content, re.DOTALL)
+    if m:
+        try:
+            data = json.loads(m.group(0))
+            def _clean(arr):
+                return [(w or "").strip() for w in (arr or []) if (w or "").strip()]
+            return {
+                "synonyms": _clean(data.get("synonyms")),
+                "variants": _clean(data.get("variants")),
+                "scenes": _clean(data.get("scenes")),
+                "error": None,
+            }
+        except Exception:
+            pass
+    return {"synonyms": [], "variants": [], "scenes": [], "error": f"AI 输出解析失败：{content[:200]}"}
+
+
+def import_expanded_words(core_word, words):
+    """把 AI 扩充的词导入关键词库（新词进备用池）。
+
+    words: [{word, role}]，role ∈ 同义词/长尾词/场景词
+    同义词 → 核心词(weight5)、长尾词 → 长尾词(weight3)、场景词 → 场景词(weight4)
+    返回 {added, skipped, imported}。
+    """
+    ROLE_MAP = {
+        "同义词": ("核心词", 5),
+        "长尾词": ("长尾词", 3),
+        "场景词": ("场景词", 4),
+    }
+    added = 0
+    skipped = 0
+    imported = []
+    existing_words = {k.get("word") for k in load_keywords()}
+    for w in words:
+        word = (w.get("word") or "").strip()
+        role = (w.get("role") or "长尾词").strip()
+        if not word:
+            continue
+        # 过滤：AI 偶尔把核心词本身当同义词返回，跳过
+        if word == core_word:
+            skipped += 1
+            continue
+        category, weight = ROLE_MAP.get(role, ("长尾词", 3))
+        if word in existing_words:
+            skipped += 1
+            continue
+        add_keyword({
+            "word": word, "category": category, "source": "AI同义词",
+            "status": "待用", "notes": f"同义词扩充:{core_word}", "hot": "长尾",
+            "product": "门后挂钩", "shop": "拼多多",
+            "pool_type": "spare", "weight": weight,
+        })
+        existing_words.add(word)
+        added += 1
+        imported.append({"word": word, "role": role, "category": category})
+    return {"added": added, "skipped": skipped, "imported": imported}
+
+
 # ----------------------------- 标题投放记录表（标题 → 曝光/点击/成交/花费） -----------------------------
 
 TITLE_PERF_PATH = os.path.join(DATA_DIR, "title_perf.json")
