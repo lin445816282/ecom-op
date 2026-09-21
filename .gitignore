@@ -4,3 +4,7 @@ __pycache__/
 .venv/
 venv/
 .DS_Store
+
+# 可重建的数据库 + 临时备份
+catalog.db
+*.bak_reorder

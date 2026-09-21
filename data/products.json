@@ -51,5 +51,24 @@
     "commission_rate": 0.0,
     "freight_insurance": 0.0,
     "shop": "拼多多"
+  },
+  {
+    "id": "p1789955477",
+    "name": "门后挂钩/19.9",
+    "selling_price": 19.9,
+    "gross_profit": 0.0,
+    "ad_cost": 0.0,
+    "refund_rate": 0.15,
+    "ad_spend": 0.0,
+    "orders": 0,
+    "impressions": 0,
+    "clicks": 0,
+    "sold": 0,
+    "notes": "",
+    "cost": 5.0,
+    "shipping": 3.0,
+    "commission_rate": 0.006,
+    "freight_insurance": 0.0,
+    "shop": "拼多多"
   }
 ]

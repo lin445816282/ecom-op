@@ -1024,6 +1024,7 @@ def _has_repeat(title, words):
 def generate_titles(core, n=10, platform="all", template_ids=None):
     """模板+结构化词库的加权随机标题生成（权重/互斥/max_occur/长度校验）。"""
     import re
+    n = max(1, min(50, int(n or 10)))  # 钳位 1-50，防超大请求
     kws = load_keywords()
     # 过滤：main 池 + weight>0 + 平台匹配
     pool = [k for k in kws if k.get("pool_type", "main") == "main" and k.get("weight", 5) > 0]
@@ -1144,9 +1145,35 @@ def _navigate_1688(word):
     time.sleep(5)
 
 
+def _check_1688_login():
+    """检查 1688 是否已登录。返回 (ok, errmsg)。
+
+    1688 登录态失效时会跳转 login.taobao.com，搜索框 #alisearch-input 不存在，
+    导致联想词静默采不到。这里提前检测，返回明确错误而非 0 个词。
+    """
+    js = ("(() => JSON.stringify({href: location.href, "
+          "hasInput: !!document.querySelector('#alisearch-input')}))()")
+    v = _cdp_eval(js, timeout=8)
+    if v:
+        try:
+            d = json.loads(v)
+            href = d.get("href", "")
+            if "login" in href.lower() or not d.get("hasInput"):
+                return False, "1688 登录态失效（已跳转登录页），请扫码登录后重试"
+            return True, ""
+        except Exception:
+            pass
+    return True, ""  # 检测失败不阻塞（避免误杀正常采集）
+
+
+
 def _collect_1688_suggest(word):
-    """采集单个核心词的联想词，返回 [(词, 排序), ...]（排序越前越热）。"""
-    js = f'''(() => {{
+    """采集单个核心词的联想词，返回 [(词, 排序), ...]（排序越前越热）。
+
+    优先从 .suggestion-item 的 data-aplus-report 属性解析 suggests（完整干净），
+    fallback 到 textContent（过滤「复制下拉词」杂质）。空结果重试 3 次（导航后页面偶发未就绪）。
+    """
+    js_set = f'''(() => {{
       const input = document.querySelector('#alisearch-input');
       if (!input) return 'NO_INPUT';
       input.focus();
@@ -1156,30 +1183,61 @@ def _collect_1688_suggest(word):
       input.dispatchEvent(new Event('keyup', {{bubbles:true}}));
       return 'OK';
     }})()'''
-    _cdp_eval(js, timeout=15)
-    time.sleep(2.5)
-    js2 = '''(() => {
-      const items = [...document.querySelectorAll('.suggestion-item')].map(el => (el.textContent||'').replace(/\\s+/g,''));
-      return JSON.stringify(items);
+    js_read = '''(() => {
+      const items = [...document.querySelectorAll('.suggestion-item')];
+      const repEl = items.find(el => el.getAttribute('data-aplus-report'));
+      if (repEl) {
+        const rep = repEl.getAttribute('data-aplus-report') || '';
+        const m = rep.match(/suggests=([^&]+)/);
+        if (m) {
+          try {
+            const words = decodeURIComponent(m[1]).split(';').filter(w => w && w.trim());
+            if (words.length) return JSON.stringify(words);
+          } catch(e) {}
+        }
+      }
+      const raw = items.map(el => (el.textContent||'').replace(/\\s+/g,'').replace(/复制下拉词/g,'')).filter(w => w);
+      return JSON.stringify(raw);
     })()'''
-    v = _cdp_eval(js2, timeout=15)
-    if not v:
-        return []
-    try:
-        items = json.loads(v)
-    except Exception:
-        return []
-    result = []
-    for idx, w in enumerate(items):
-        if word in w and w != word:
-            result.append((w, idx + 1))
-    return result
+
+    for attempt in range(3):
+        _cdp_eval(js_set, timeout=15)
+        time.sleep(2.5 if attempt == 0 else 3.0)
+        v = _cdp_eval(js_read, timeout=15)
+        items = []
+        if v:
+            try:
+                items = json.loads(v)
+            except Exception:
+                items = []
+        result = []
+        # 优先完整核心词匹配（联想词包含完整核心词且非核心词本身）
+        for idx, w in enumerate(items):
+            if word in w and w != word:
+                result.append((w, idx + 1))
+        # 完整匹配为空 → 退化为尾词匹配（后3字/后2字核心名词）。
+        # 长尾核心词（如「水管门把手」「复古书籍摆件」）1688 只返回核心名词级联想词
+        # （含「门把手」「摆件」不含完整词），完整匹配会全被过滤成 0。
+        if not result and len(word) >= 4:
+            seen = set()
+            for sl in (3, 2):
+                suffix = word[-sl:]
+                for idx, w in enumerate(items):
+                    if suffix in w and w != word and w not in seen:
+                        seen.add(w)
+                        result.append((w, idx + 1))
+                if result:
+                    break
+        if result:
+            return result
+    return []
 
 
-def collect_1688_keywords(core_words):
+def collect_1688_keywords(core_words, product="门后挂钩"):
     """1688 搜索联想词采集 → 入库（长尾词，含热度排序 + 关联性）。
 
     参数 core_words：核心词列表（如 ["门后挂钩", "挂衣钩"]）。
+    参数 product：商品归属（默认「门后挂钩」）。
     返回 {collected: [...], added: n, skipped: n, error: str|None}
     """
     # 1. 确保 Edge CDP 可用（无则启动）
@@ -1195,6 +1253,9 @@ def collect_1688_keywords(core_words):
 
     # 2. 导航到 1688 搜索页（首个词）
     _navigate_1688(words[0])
+    login_ok, login_err = _check_1688_login()
+    if not login_ok:
+        return {"collected": [], "added": 0, "skipped": 0, "error": login_err}
 
     # 3. 逐词采集
     all_words = {}  # word -> {src, hot}
@@ -1210,6 +1271,12 @@ def collect_1688_keywords(core_words):
                     all_words[w] = {"src": word, "hot": hot}
         time.sleep(1.0)
 
+    # 全部词都没采到 → 再检测一次登录态（可能采集过程中失效跳登录页）
+    if not all_words:
+        login_ok2, login_err2 = _check_1688_login()
+        if not login_ok2:
+            return {"collected": [], "added": 0, "skipped": 0, "error": login_err2}
+
     # 4. 入库（长尾词，source=1688联想词，notes=核心词）
     # 新词进备用池（spare），初始权重按热度映射：热6/中4/长尾3（保守，等线上数据迭代）
     hot_weight = {"热": 6, "中": 4, "长尾": 3}
@@ -1220,7 +1287,7 @@ def collect_1688_keywords(core_words):
         item = {
             "word": w, "category": "长尾词", "source": "1688联想词",
             "status": "待用", "notes": f"核心词:{meta['src']}", "hot": meta["hot"],
-            "product": "门后挂钩", "shop": "拼多多",
+            "product": product, "shop": "拼多多",
             "pool_type": "spare", "weight": hot_weight.get(meta["hot"], 3),
         }
         # 已存在则跳过（不覆盖现有词的分类/权重）

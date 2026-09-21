@@ -8,6 +8,7 @@ import os
 from urllib.parse import urlparse, parse_qs
 
 import data
+import catalog
 
 PORT = 8765
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -242,7 +243,7 @@ class Handler(BaseHTTPRequestHandler):
             result = data.feedback_title(title, perf)
             return _json(self, {"ok": True, **result})
 
-        # 1688 搜索联想词采集（body: {core_words: ["门后挂钩", ...]}）
+        # 1688 搜索联想词采集（body: {core_words: ["门后挂钩", ...], product: "门后挂钩"}）
         if path == "/api/keywords/collect" and self.command == "POST":
             body = self._read_body()
             core_words = body.get("core_words") or []
@@ -250,7 +251,8 @@ class Handler(BaseHTTPRequestHandler):
                 core_words = [core_words]
             if not core_words:
                 return _json(self, {"error": "core_words 不能为空"}, 400)
-            result = data.collect_1688_keywords(core_words)
+            product = (body.get("product") or "门后挂钩").strip() or "门后挂钩"
+            result = data.collect_1688_keywords(core_words, product=product)
             return _json(self, {"ok": result["error"] is None, **result})
 
         # 竞品标题 AI 分词拆解（body: {title: "..."}）
@@ -408,6 +410,53 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+
+        # 商品目录（平台 + 电商层级：平台 → 店铺 → 商品 → SKU）
+        if path == "/api/catalog/stats" and self.command == "GET":
+            return _json(self, catalog.catalog_stats())
+
+        if path == "/api/catalog/platforms" and self.command == "GET":
+            return _json(self, {"items": catalog.list_platforms()})
+
+        if path == "/api/catalog/shops" and self.command == "GET":
+            platform_id = qs.get("platform_id", [None])[0]
+            return _json(self, {"items": catalog.list_shops(int(platform_id) if platform_id else None)})
+
+        if path == "/api/catalog/products" and self.command == "GET":
+            shop_id = qs.get("shop_id", [None])[0]
+            q = qs.get("q", [None])[0]
+            limit = qs.get("limit", ["500"])[0]
+            try:
+                limit = int(limit)
+            except Exception:
+                limit = 500
+            items = catalog.list_products(int(shop_id) if shop_id else None, q=q, limit=limit)
+            return _json(self, {"items": items})
+
+        if path == "/api/catalog/skus" and self.command == "GET":
+            product_id = qs.get("product_id", [None])[0]
+            return _json(self, {"items": catalog.list_skus(int(product_id) if product_id else None)})
+
+        if path == "/api/catalog/orders" and self.command == "GET":
+            shop_id = qs.get("shop_id", [None])[0]
+            limit = qs.get("limit", ["500"])[0]
+            try:
+                limit = int(limit)
+            except Exception:
+                limit = 500
+            return _json(self, {"items": catalog.list_orders(int(shop_id) if shop_id else None, limit=limit)})
+
+        if path == "/api/catalog/promotions" and self.command == "GET":
+            shop_id = qs.get("shop_id", [None])[0]
+            limit = qs.get("limit", ["500"])[0]
+            try:
+                limit = int(limit)
+            except Exception:
+                limit = 500
+            return _json(self, {"items": catalog.list_promotions(int(shop_id) if shop_id else None, limit=limit)})
+
+        if path == "/api/catalog/tree" and self.command == "GET":
+            return _json(self, {"items": catalog.catalog_tree()})
 
         # 静态页面
         if path in ("/", "/index.html") and self.command == "GET":
