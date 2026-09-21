@@ -542,20 +542,22 @@ function renderProducts(editingProduct = null) {
 }
 
 /* ---------------- 商品库（平台 + 电商层级） ---------------- */
-const catalogCache = { tree: [], stats: {}, orders: [], filter: '' };
+const catalogCache = { tree: [], stats: {}, orders: [], analysis: null, filter: '' };
 
 async function renderCatalog() {
   const el = $('#view-catalog');
   el.innerHTML = '<div class="empty"><div class="big">📦</div>加载中…</div>';
   try {
-    const [stats, treeResp, ordersResp] = await Promise.all([
+    const [stats, treeResp, ordersResp, analysis] = await Promise.all([
       api('/api/catalog/stats'),
       api('/api/catalog/tree'),
       api('/api/catalog/orders?limit=200'),
+      api('/api/catalog/analysis'),
     ]);
     catalogCache.stats = stats;
     catalogCache.tree = treeResp.items || [];
     catalogCache.orders = ordersResp.items || [];
+    catalogCache.analysis = analysis;
     paintCatalog();
   } catch (err) {
     el.innerHTML = `<div class="empty">❌ ${esc(err.message)}</div>`;
@@ -566,7 +568,35 @@ function paintCatalog() {
   const el = $('#view-catalog');
   const tree = catalogCache.tree;
   const stats = catalogCache.stats;
+  const a = catalogCache.analysis || {};
   const f = (catalogCache.filter || '').toLowerCase();
+
+  const pct = (n, total) => total ? Math.round(n / total * 100) : 0;
+  const pricePct = pct(a.priced, a.total_skus);
+  const stockPct = pct(a.stocked, a.total_skus);
+  const codePct = pct(a.coded, a.total_products);
+  const bar = (p, color) => `<div class="ov-bar"><div class="ov-fill" style="width:${p}%;background:${color}"></div></div>`;
+  const barColor = p => p < 50 ? '#e74c3c' : p < 100 ? '#f39c12' : '#2ecc71';
+  const series = Object.entries(a.series || {}).sort((x, y) => y[1] - x[1]);
+  const topSkus = a.top_skus || [];
+  const overview = `
+    <div class="catalog-overview">
+      <div class="ov-card">
+        <h4>📊 数据完整度</h4>
+        <div class="ov-row"><span>价格</span><b>${a.priced}/${a.total_skus}</b>${bar(pricePct, barColor(pricePct))}<em>${pricePct}%</em></div>
+        <div class="ov-row"><span>库存</span><b>${a.stocked}/${a.total_skus}</b>${bar(stockPct, barColor(stockPct))}<em>${stockPct}%</em></div>
+        <div class="ov-row"><span>货号</span><b>${a.coded}/${a.total_products}</b>${bar(codePct, barColor(codePct))}<em>${codePct}%</em></div>
+      </div>
+      <div class="ov-card">
+        <h4>🏆 SKU 规模 Top</h4>
+        ${topSkus.map((t, i) => `<div class="ov-top"><span class="ov-rank">${i + 1}</span><span class="ov-name" title="${esc(t.name)}">${esc(t.code || '无')} ${esc((t.name || '').slice(0, 13))}</span><span class="tag blue">${t.sku_count} SKU</span></div>`).join('') || '<div class="empty">无</div>'}
+      </div>
+      <div class="ov-card">
+        <h4>🏷️ 货号系列</h4>
+        <div class="ov-tags">${series.map(([k, v]) => `<span class="tag ${k === '无货号' ? 'red' : 'blue'}">${esc(k)} × ${v}</span>`).join('') || '<span class="empty">无</span>'}</div>
+        <div class="ov-hint">Z=园艺装饰 · S=收纳 · G=园艺挂架</div>
+      </div>
+    </div>`;
 
   let html = `
     <div class="stats-grid">
@@ -577,6 +607,7 @@ function paintCatalog() {
       <div class="stat-card"><div class="label">订单</div><div class="value">${stats.orders || 0}</div></div>
       <div class="stat-card"><div class="label">推广记录</div><div class="value">${stats.promotions || 0}</div><div class="hint">8月汇总待导入</div></div>
     </div>
+    ${overview}
     <div class="callout">📌 真实平台数据（拼多多商家后台导出，2026-09-21）。价格/库存/推广数值当前为空，待重新导出带数值版本后导入补全。</div>
     <div class="catalog-searchbar"><input id="catalog-search" class="search" placeholder="🔍 搜索商品名 / 商品ID / 货号…" value="${esc(catalogCache.filter)}"></div>
     <div id="catalog-body"></div>

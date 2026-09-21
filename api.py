@@ -458,6 +458,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/catalog/tree" and self.command == "GET":
             return _json(self, {"items": catalog.catalog_tree()})
 
+        if path == "/api/catalog/analysis" and self.command == "GET":
+            return _json(self, catalog.catalog_analysis())
+
         # 静态页面
         if path in ("/", "/index.html") and self.command == "GET":
             return self._serve_file("index.html", "text/html; charset=utf-8")

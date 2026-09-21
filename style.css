@@ -228,6 +228,21 @@ textarea { min-height: 70px; resize: vertical; }
 .catalog-searchbar { margin-bottom: 14px; }
 .catalog-searchbar .search { width: 100%; max-width: 420px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; font-size: 13px; color: #17203a; }
 .catalog-section-title { font-size: 15px; margin: 22px 0 10px; }
+.catalog-overview { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 0 0 16px; }
+.ov-card { border: 1px solid var(--line); border-radius: 14px; padding: 14px; background: white; }
+.ov-card h4 { margin: 0 0 10px; font-size: 14px; }
+.ov-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 12.5px; }
+.ov-row > span { width: 36px; color: var(--muted); }
+.ov-row > b { min-width: 56px; font-size: 12px; }
+.ov-bar { flex: 1; height: 8px; background: #eef0f3; border-radius: 999px; overflow: hidden; }
+.ov-fill { height: 100%; border-radius: 999px; transition: width .3s; }
+.ov-row > em { font-style: normal; font-size: 11px; color: var(--muted); min-width: 30px; text-align: right; }
+.ov-top { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px solid #f2f4f8; font-size: 12px; }
+.ov-top:last-child { border-bottom: 0; }
+.ov-rank { min-width: 18px; height: 18px; border-radius: 6px; background: #eaf1ff; color: var(--brand); display: grid; place-items: center; font-size: 11px; font-weight: 700; }
+.ov-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #37415a; }
+.ov-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.ov-hint { margin-top: 8px; font-size: 11px; color: var(--muted); }
 
 @media (max-width: 960px) {
   .app { grid-template-columns: 1fr; }

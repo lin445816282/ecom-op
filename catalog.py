@@ -395,3 +395,36 @@ def catalog_tree() -> list[dict]:
                 pl_node["shops"].append(sh_node)
             tree.append(pl_node)
         return tree
+
+
+def catalog_analysis() -> dict:
+    """商品库数据概览：数据完整度 + SKU 规模排行 + 货号系列分布。"""
+    import re
+    with closing(_conn()) as c:
+        total_products = c.execute("SELECT COUNT(*) AS n FROM products").fetchone()["n"]
+        total_skus = c.execute("SELECT COUNT(*) AS n FROM skus").fetchone()["n"]
+        priced = c.execute(
+            "SELECT COUNT(*) AS n FROM skus WHERE dan_price IS NOT NULL OR pin_price IS NOT NULL"
+        ).fetchone()["n"]
+        stocked = c.execute("SELECT COUNT(*) AS n FROM skus WHERE stock IS NOT NULL").fetchone()["n"]
+        coded = c.execute("SELECT COUNT(*) AS n FROM products WHERE code != ''").fetchone()["n"]
+        top = c.execute(
+            "SELECT p.id, p.name, p.code, p.platform_product_id, COUNT(s.id) AS sku_count "
+            "FROM products p LEFT JOIN skus s ON s.product_id = p.id "
+            "GROUP BY p.id ORDER BY sku_count DESC, p.id LIMIT 8"
+        ).fetchall()
+        series = {}
+        for row in c.execute("SELECT code FROM products").fetchall():
+            code = row["code"] or ""
+            m = re.match(r'^([A-Za-z]+)', code)
+            key = m.group(1).upper() if m else ("无货号" if not code else "?")
+            series[key] = series.get(key, 0) + 1
+        return {
+            "total_products": total_products,
+            "total_skus": total_skus,
+            "priced": priced,
+            "stocked": stocked,
+            "coded": coded,
+            "top_skus": [dict(r) for r in top],
+            "series": series,
+        }
