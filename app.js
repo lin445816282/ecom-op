@@ -73,6 +73,44 @@ function confirmDialog(msg, opts = {}) {
   });
 }
 
+// 自定义输入弹窗（替代原生 prompt，微信内置浏览器可用）
+// fields: [{key, label, value, placeholder}]，确认返回 {key:value,...}，取消返回 null
+function promptDialog(fields, opts = {}) {
+  const { title = '请输入', confirmText = '确定', cancelText = '取消' } = opts;
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:999;display:flex;align-items:center;justify-content:center;padding:24px';
+    const box = document.createElement('div');
+    box.style.cssText = 'background:#fff;border-radius:16px;padding:24px;max-width:380px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.22)';
+    box.innerHTML = `
+      <div style="font-size:15px;font-weight:700;color:#17203a;margin-bottom:16px">${esc(title)}</div>
+      ${fields.map((f, i) => `
+        <div style="margin-bottom:12px">
+          <label style="display:block;font-size:12px;color:#66708a;font-weight:600;margin-bottom:5px">${esc(f.label)}</label>
+          <input data-pf="${i}" value="${esc(f.value || '')}" placeholder="${esc(f.placeholder || '')}" style="width:100%;padding:9px 12px;border:1px solid #e4e7f1;border-radius:9px;font-size:14px;box-sizing:border-box">
+        </div>`).join('')}
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:8px">
+        <button class="btn" style="padding:8px 18px">${esc(cancelText)}</button>
+        <button class="btn primary" style="padding:8px 18px">${esc(confirmText)}</button>
+      </div>`;
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    const close = val => { overlay.remove(); resolve(val); };
+    const btns = box.querySelectorAll('button');
+    btns[0].onclick = () => close(null);
+    btns[1].onclick = () => {
+      const result = {};
+      fields.forEach((f, i) => { result[f.key] = box.querySelector(`[data-pf="${i}"]`).value.trim(); });
+      close(result);
+    };
+    box.querySelectorAll('input').forEach(inp => {
+      inp.addEventListener('keydown', e => { if (e.key === 'Enter') btns[1].click(); });
+    });
+    overlay.onclick = e => { if (e.target === overlay) close(null); };
+    setTimeout(() => box.querySelector('input')?.focus(), 50);
+  });
+}
+
 function setNav(active) {
   $$('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.view === active));
 }
@@ -620,14 +658,30 @@ function paintCatalog() {
 
   const body = $('#catalog-body');
   let bodyHtml = '';
+  bodyHtml += `<div class="catalog-toolbar"><button class="btn primary sm" data-add-platform>＋ 新增平台</button></div>`;
   for (const pl of tree) {
-    bodyHtml += `<div class="catalog-platform"><h3>🛒 ${esc(pl.name)}</h3>`;
+    bodyHtml += `<div class="catalog-platform">
+      <div class="catalog-platform-head">
+        <h3>🛒 ${esc(pl.name)}</h3>
+        <div class="catalog-head-actions">
+          <button class="btn sm" data-add-shop="${pl.id}" title="新增店铺">＋店铺</button>
+          <button class="btn sm" data-rename-platform="${pl.id}" title="重命名平台">✏️</button>
+          <button class="btn sm danger" data-del-platform="${pl.id}" title="删除平台">🗑️</button>
+        </div>
+      </div>`;
     for (const sh of (pl.shops || [])) {
       const products = (sh.products || []).filter(p =>
         !f || (p.name || '').toLowerCase().includes(f)
         || (p.platform_product_id || '').toLowerCase().includes(f)
         || (p.code || '').toLowerCase().includes(f));
-      bodyHtml += `<div class="catalog-shop"><h4>🏪 ${esc(sh.name)} <span class="badge">${products.length} 商品</span></h4>`;
+      bodyHtml += `<div class="catalog-shop">
+        <div class="catalog-shop-head">
+          <h4>🏪 ${esc(sh.name)} <span class="badge">${products.length} 商品</span></h4>
+          <div class="catalog-head-actions">
+            <button class="btn sm" data-rename-shop="${sh.id}" title="重命名店铺">✏️</button>
+            <button class="btn sm danger" data-del-shop="${sh.id}" title="删除店铺">🗑️</button>
+          </div>
+        </div>`;
       bodyHtml += `<div class="card-grid">`;
       for (const p of products) {
         bodyHtml += `
@@ -643,6 +697,61 @@ function paintCatalog() {
     bodyHtml += `</div>`;
   }
   body.innerHTML = bodyHtml || '<div class="empty">无匹配商品</div>';
+
+  // ---- 平台/店铺增删改 ----
+  const reload = () => renderCatalog();
+  const allShops = () => tree.flatMap(x => x.shops || []);
+
+  const addPlatformBtn = body.querySelector('[data-add-platform]');
+  if (addPlatformBtn) addPlatformBtn.onclick = async () => {
+    const r = await promptDialog([
+      { key: 'code', label: '平台代码（英文，如 taobao）', placeholder: 'taobao' },
+      { key: 'name', label: '平台名称（如 淘宝）', placeholder: '淘宝' },
+    ], { title: '新增平台' });
+    if (!r || !r.code || !r.name) return;
+    try { await api('/api/catalog/platforms', 'POST', { code: r.code, name: r.name }); toast('平台已新增'); reload(); }
+    catch (err) { toast(err.message); }
+  };
+
+  body.querySelectorAll('[data-add-shop]').forEach(b => b.onclick = async () => {
+    const r = await promptDialog([{ key: 'name', label: '店铺名称', placeholder: '如 欧世艺' }], { title: '新增店铺' });
+    if (!r || !r.name) return;
+    try { await api('/api/catalog/shops', 'POST', { platform_id: parseInt(b.dataset.addShop), name: r.name }); toast('店铺已新增'); reload(); }
+    catch (err) { toast(err.message); }
+  });
+
+  body.querySelectorAll('[data-rename-platform]').forEach(b => b.onclick = async () => {
+    const pl = tree.find(x => x.id === parseInt(b.dataset.renamePlatform));
+    const r = await promptDialog([{ key: 'name', label: '新名称', value: pl?.name || '' }], { title: '重命名平台' });
+    if (!r || !r.name) return;
+    try { await api(`/api/catalog/platforms/${b.dataset.renamePlatform}`, 'PUT', { name: r.name }); toast('已重命名'); reload(); }
+    catch (err) { toast(err.message); }
+  });
+
+  body.querySelectorAll('[data-rename-shop]').forEach(b => b.onclick = async () => {
+    const sh = allShops().find(s => s.id === parseInt(b.dataset.renameShop));
+    const r = await promptDialog([{ key: 'name', label: '新名称', value: sh?.name || '' }], { title: '重命名店铺' });
+    if (!r || !r.name) return;
+    try { await api(`/api/catalog/shops/${b.dataset.renameShop}`, 'PUT', { name: r.name }); toast('已重命名'); reload(); }
+    catch (err) { toast(err.message); }
+  });
+
+  body.querySelectorAll('[data-del-platform]').forEach(b => b.onclick = async () => {
+    const pl = tree.find(x => x.id === parseInt(b.dataset.delPlatform));
+    const ok = await confirmDialog(`删除平台「<b>${esc(pl?.name)}</b>」将<b>级联删除</b>其下所有店铺、商品、SKU、订单、推广数据，且不可恢复！确定删除吗？`, { title: '删除平台', confirmText: '确认删除' });
+    if (!ok) return;
+    try { const r = await api(`/api/catalog/platforms/${b.dataset.delPlatform}`, 'DELETE'); toast(`已删除：${r.shops}店铺 ${r.products}商品 ${r.skus}SKU`); reload(); }
+    catch (err) { toast(err.message); }
+  });
+
+  body.querySelectorAll('[data-del-shop]').forEach(b => b.onclick = async () => {
+    const sh = allShops().find(s => s.id === parseInt(b.dataset.delShop));
+    const n = sh?.products?.length || 0;
+    const ok = await confirmDialog(`删除店铺「<b>${esc(sh?.name)}</b>」将<b>级联删除</b>其下 ${n} 个商品及其 SKU、订单、推广数据，且不可恢复！确定删除吗？`, { title: '删除店铺', confirmText: '确认删除' });
+    if (!ok) return;
+    try { const r = await api(`/api/catalog/shops/${b.dataset.delShop}`, 'DELETE'); toast(`已删除：${r.products}商品 ${r.skus}SKU`); reload(); }
+    catch (err) { toast(err.message); }
+  });
 
   // 点击商品卡片展开 SKU
   $$('#catalog-body .catalog-prod').forEach(card => {

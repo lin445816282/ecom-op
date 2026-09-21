@@ -160,6 +160,79 @@ def upsert_shop(platform_id: int, name: str) -> int:
         return row["id"]
 
 
+def rename_platform(platform_id: int, name: str) -> bool:
+    with closing(_conn()) as c:
+        c.execute("UPDATE platforms SET name=? WHERE id=?", (name, platform_id))
+        c.commit()
+        return c.total_changes > 0
+
+
+def rename_shop(shop_id: int, name: str) -> bool:
+    with closing(_conn()) as c:
+        c.execute("UPDATE shops SET name=? WHERE id=?", (name, shop_id))
+        c.commit()
+        return c.total_changes > 0
+
+
+def _count_platform(conn, platform_id: int) -> dict:
+    shops = conn.execute("SELECT COUNT(*) AS n FROM shops WHERE platform_id=?", (platform_id,)).fetchone()["n"]
+    products = conn.execute(
+        "SELECT COUNT(*) AS n FROM products WHERE shop_id IN (SELECT id FROM shops WHERE platform_id=?)",
+        (platform_id,)).fetchone()["n"]
+    skus = conn.execute(
+        "SELECT COUNT(*) AS n FROM skus WHERE product_id IN "
+        "(SELECT id FROM products WHERE shop_id IN (SELECT id FROM shops WHERE platform_id=?))",
+        (platform_id,)).fetchone()["n"]
+    orders = conn.execute(
+        "SELECT COUNT(*) AS n FROM orders WHERE shop_id IN (SELECT id FROM shops WHERE platform_id=?)",
+        (platform_id,)).fetchone()["n"]
+    promos = conn.execute(
+        "SELECT COUNT(*) AS n FROM promotions WHERE shop_id IN (SELECT id FROM shops WHERE platform_id=?)",
+        (platform_id,)).fetchone()["n"]
+    return {"platforms": 1, "shops": shops, "products": products,
+            "skus": skus, "orders": orders, "promotions": promos}
+
+
+def delete_platform(platform_id: int) -> dict:
+    """级联删除平台及其下店铺/商品/SKU/订单/推广，返回删除统计。"""
+    with closing(_conn()) as c:
+        stats = _count_platform(c, platform_id)
+        c.execute("DELETE FROM skus WHERE product_id IN "
+                  "(SELECT id FROM products WHERE shop_id IN (SELECT id FROM shops WHERE platform_id=?))",
+                  (platform_id,))
+        c.execute("DELETE FROM orders WHERE shop_id IN (SELECT id FROM shops WHERE platform_id=?)", (platform_id,))
+        c.execute("DELETE FROM promotions WHERE shop_id IN (SELECT id FROM shops WHERE platform_id=?)", (platform_id,))
+        c.execute("DELETE FROM products WHERE shop_id IN (SELECT id FROM shops WHERE platform_id=?)", (platform_id,))
+        c.execute("DELETE FROM shops WHERE platform_id=?", (platform_id,))
+        c.execute("DELETE FROM platforms WHERE id=?", (platform_id,))
+        c.commit()
+        return stats
+
+
+def _count_shop(conn, shop_id: int) -> dict:
+    products = conn.execute("SELECT COUNT(*) AS n FROM products WHERE shop_id=?", (shop_id,)).fetchone()["n"]
+    skus = conn.execute(
+        "SELECT COUNT(*) AS n FROM skus WHERE product_id IN (SELECT id FROM products WHERE shop_id=?)",
+        (shop_id,)).fetchone()["n"]
+    orders = conn.execute("SELECT COUNT(*) AS n FROM orders WHERE shop_id=?", (shop_id,)).fetchone()["n"]
+    promos = conn.execute("SELECT COUNT(*) AS n FROM promotions WHERE shop_id=?", (shop_id,)).fetchone()["n"]
+    return {"shops": 1, "products": products, "skus": skus,
+            "orders": orders, "promotions": promos}
+
+
+def delete_shop(shop_id: int) -> dict:
+    """级联删除店铺及其下商品/SKU/订单/推广，返回删除统计。"""
+    with closing(_conn()) as c:
+        stats = _count_shop(c, shop_id)
+        c.execute("DELETE FROM skus WHERE product_id IN (SELECT id FROM products WHERE shop_id=?)", (shop_id,))
+        c.execute("DELETE FROM orders WHERE shop_id=?", (shop_id,))
+        c.execute("DELETE FROM promotions WHERE shop_id=?", (shop_id,))
+        c.execute("DELETE FROM products WHERE shop_id=?", (shop_id,))
+        c.execute("DELETE FROM shops WHERE id=?", (shop_id,))
+        c.commit()
+        return stats
+
+
 # ----------------------------- 单连接批量导入 -----------------------------
 
 def import_batch(shop_id: int, products: list[dict], skus: list[dict]) -> dict:

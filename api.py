@@ -418,9 +418,53 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/catalog/platforms" and self.command == "GET":
             return _json(self, {"items": catalog.list_platforms()})
 
+        if path == "/api/catalog/platforms" and self.command == "POST":
+            item = self._read_body()
+            code = (item.get("code") or "").strip()
+            name = (item.get("name") or "").strip()
+            if not code or not name:
+                return _json(self, {"error": "平台代码和名称不能为空"}, 400)
+            pid = catalog.upsert_platform(code, name)
+            return _json(self, {"id": pid, "code": code, "name": name})
+
+        if path.startswith("/api/catalog/platforms/") and self.command == "PUT":
+            pid = int(path.split("/")[-1])
+            name = (self._read_body().get("name") or "").strip()
+            if not name:
+                return _json(self, {"error": "名称不能为空"}, 400)
+            ok = catalog.rename_platform(pid, name)
+            return _json(self, {"ok": ok}, 200 if ok else 404)
+
+        if path.startswith("/api/catalog/platforms/") and self.command == "DELETE":
+            pid = int(path.split("/")[-1])
+            stats = catalog.delete_platform(pid)
+            return _json(self, {"ok": True, **stats})
+
         if path == "/api/catalog/shops" and self.command == "GET":
             platform_id = qs.get("platform_id", [None])[0]
             return _json(self, {"items": catalog.list_shops(int(platform_id) if platform_id else None)})
+
+        if path == "/api/catalog/shops" and self.command == "POST":
+            item = self._read_body()
+            platform_id = int(item.get("platform_id") or 0)
+            name = (item.get("name") or "").strip()
+            if not platform_id or not name:
+                return _json(self, {"error": "平台和店铺名称不能为空"}, 400)
+            sid = catalog.upsert_shop(platform_id, name)
+            return _json(self, {"id": sid, "platform_id": platform_id, "name": name})
+
+        if path.startswith("/api/catalog/shops/") and self.command == "PUT":
+            sid = int(path.split("/")[-1])
+            name = (self._read_body().get("name") or "").strip()
+            if not name:
+                return _json(self, {"error": "名称不能为空"}, 400)
+            ok = catalog.rename_shop(sid, name)
+            return _json(self, {"ok": ok}, 200 if ok else 404)
+
+        if path.startswith("/api/catalog/shops/") and self.command == "DELETE":
+            sid = int(path.split("/")[-1])
+            stats = catalog.delete_shop(sid)
+            return _json(self, {"ok": True, **stats})
 
         if path == "/api/catalog/products" and self.command == "GET":
             shop_id = qs.get("shop_id", [None])[0]
@@ -513,6 +557,16 @@ class Handler(BaseHTTPRequestHandler):
                 pass
 
     def do_DELETE(self):
+        try:
+            self._route()
+        except Exception as exc:
+            print("ERR", exc)
+            try:
+                _json(self, {"error": str(exc)}, 500)
+            except Exception:
+                pass
+
+    def do_PUT(self):
         try:
             self._route()
         except Exception as exc:
