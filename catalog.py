@@ -121,6 +121,7 @@ CREATE TABLE IF NOT EXISTS promotions (
 
 CREATE INDEX IF NOT EXISTS idx_promotions_shop ON promotions(shop_id);
 CREATE INDEX IF NOT EXISTS idx_promotions_product ON promotions(platform_product_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_promotions_uniq ON promotions(shop_id, platform_product_id, scene, plan_name, group_name, period);
 
 CREATE TABLE IF NOT EXISTS modifications (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -445,7 +446,13 @@ def import_promotions(shop_id: int, promos: list[dict]) -> int:
                 "INSERT INTO promotions(shop_id, product_id, platform_product_id, product_name, "
                 "scene, plan_name, bid_type, group_name, period, deal_spend, deal_amount, "
                 "actual_roi, total_spend, net_deal_count, impressions, clicks, metrics) "
-                "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(shop_id, platform_product_id, scene, plan_name, group_name, period) "
+                "DO UPDATE SET product_id=excluded.product_id, product_name=excluded.product_name, "
+                "bid_type=excluded.bid_type, deal_spend=excluded.deal_spend, deal_amount=excluded.deal_amount, "
+                "actual_roi=excluded.actual_roi, total_spend=excluded.total_spend, "
+                "net_deal_count=excluded.net_deal_count, impressions=excluded.impressions, "
+                "clicks=excluded.clicks, metrics=excluded.metrics",
                 (shop_id, pid, p.get("platform_product_id", ""), p.get("product_name", ""),
                  p.get("scene", ""), p.get("plan_name", ""), p.get("bid_type", ""),
                  p.get("group_name", ""), p.get("period", ""),
