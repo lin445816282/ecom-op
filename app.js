@@ -959,6 +959,9 @@ function paintCatalog() {
     const daily = perf.daily_trend || [];
     const regions = perf.regions || [];
     const maxAmt = Math.max(...daily.map(d => d.amount || 0), 1);
+    const dailySorted = [...daily].sort((a, b) => (b.amount || 0) - (a.amount || 0));
+    const dailyTop = dailySorted.slice(0, 10);
+    const dailyRest = dailySorted.slice(10);
     perfHTML = `
     <div class="perf-panel">
       <h3 class="perf-title">📊 经营分析</h3>
@@ -981,13 +984,23 @@ function paintCatalog() {
             </div>`).join('') : '<div class="empty">暂无订单</div>'}
         </div>
         <div class="perf-col">
-          <h4>📅 日趋势</h4>
-          ${daily.length ? daily.map(d => `
+          <h4>📅 日趋势 <span class="perf-hint">金额 TOP${dailyTop.length}</span></h4>
+          ${dailyTop.length ? dailyTop.map(d => `
             <div class="perf-bar-row">
               <span class="perf-date">${esc((d.date || '').slice(5))}</span>
               <div class="perf-bar"><div class="perf-fill" style="width:${Math.max(Math.round((d.amount || 0) / maxAmt * 100), 2)}%"></div></div>
               <span class="perf-amt">¥${fmt(d.amount)}</span>
             </div>`).join('') : '<div class="empty">暂无</div>'}
+          ${dailyRest.length ? `
+            <button class="daily-more-btn" data-toggle-daily data-count="${dailyRest.length}">展开其余 ${dailyRest.length} 天 ▾</button>
+            <div class="daily-rest" hidden>
+              ${dailyRest.map(d => `
+                <div class="perf-bar-row">
+                  <span class="perf-date">${esc((d.date || '').slice(5))}</span>
+                  <div class="perf-bar"><div class="perf-fill" style="width:${Math.max(Math.round((d.amount || 0) / maxAmt * 100), 2)}%"></div></div>
+                  <span class="perf-amt">¥${fmt(d.amount)}</span>
+                </div>`).join('')}
+            </div>` : ''}
         </div>
         <div class="perf-col">
           <h4>🗺️ 地区 TOP</h4>
@@ -1110,6 +1123,18 @@ function paintCatalog() {
     ordersDocBtn.onclick = (e) => {
       e.stopPropagation();
       showOrdersDoc();
+    };
+  }
+
+  // 日趋势折叠切换
+  const dailyToggle = el.querySelector('[data-toggle-daily]');
+  if (dailyToggle) {
+    dailyToggle.onclick = () => {
+      const rest = el.querySelector('.daily-rest');
+      if (!rest) return;
+      const willOpen = rest.hidden;
+      rest.hidden = !willOpen;
+      dailyToggle.textContent = willOpen ? '收起 ▴' : `展开其余 ${dailyToggle.dataset.count || ''} 天 ▾`;
     };
   }
 

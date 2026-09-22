@@ -488,6 +488,15 @@ textarea { min-height: 72px; resize: vertical; }
 .perf-date { width: 38px; color: var(--muted); flex-shrink: 0; font-variant-numeric: tabular-nums; }
 .perf-bar { flex: 1; height: 10px; background: #eef0f5; border-radius: 5px; overflow: hidden; }
 .perf-fill { height: 100%; background: var(--grad); border-radius: 5px; }
+.perf-hint { font-size: 11px; color: var(--faint); font-weight: 500; margin-left: 4px; }
+.daily-more-btn {
+  display: block; width: 100%; margin-top: 10px; padding: 8px 0;
+  border: 1px dashed var(--line); border-radius: 8px; background: #fafbfe;
+  color: var(--brand); font-size: 12px; font-weight: 600; cursor: pointer;
+  transition: .15s;
+}
+.daily-more-btn:hover { background: var(--brand-soft); border-color: #c7d2fe; }
+.daily-rest { border-top: 1px dashed var(--line); margin-top: 6px; padding-top: 6px; }
 
 /* ==========================================================================
    CSV 导入弹窗
