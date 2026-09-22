@@ -322,7 +322,7 @@ async function showModList() {
 }
 
 // CSV 导入弹窗（选店铺 + 选类型 + 下载模板 + 上传文件 + 导入）
-async function showImportDialog() {
+async function showImportDialog(defaultType = 'products') {
   const tree = catalogCache.tree || [];
   const shops = [];
   for (const pl of tree) {
@@ -350,14 +350,14 @@ async function showImportDialog() {
       <select id="imp-type">
         <option value="products">商品列表</option>
         <option value="skus">SKU 价格库存</option>
-        <option value="orders">订单</option>
+        <option value="orders" ${defaultType === 'orders' ? 'selected' : ''}>订单</option>
         <option value="promotions">推广</option>
       </select>
     </div>
     <div class="imp-row"><label>CSV 文件</label>
       <input type="file" id="imp-file" accept=".csv,text/csv">
     </div>
-    <div class="imp-hint" id="imp-hint">${TYPE_HINT.products}</div>
+    <div class="imp-hint" id="imp-hint">${TYPE_HINT[defaultType] || TYPE_HINT.products}</div>
     <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:18px;flex-wrap:wrap">
       <button class="btn" data-imp-template>⬇ 下载模板</button>
       <button class="btn primary" data-imp-go>导入</button>
@@ -1092,6 +1092,7 @@ function paintCatalog() {
         <span class="orders-panel-title">📋 订单记录</span>
         <span class="orders-panel-count">${catalogCache.orders.length}</span>
         <span class="orders-panel-hint">点击展开 / 收起</span>
+        <button class="btn xs" data-orders-import title="导入订单 CSV">⬆ 导入</button>
         <button class="btn xs" data-orders-doc title="订单导出字段说明">📄 字段文档</button>
       </div>
       <div class="orders-panel-body" id="catalog-orders" hidden></div>
@@ -1192,6 +1193,15 @@ function paintCatalog() {
     ordersDocBtn.onclick = (e) => {
       e.stopPropagation();
       showOrdersDoc();
+    };
+  }
+
+  // 订单导入按钮（stopPropagation 避免触发展开）
+  const ordersImportBtn = el.querySelector('[data-orders-import]');
+  if (ordersImportBtn) {
+    ordersImportBtn.onclick = (e) => {
+      e.stopPropagation();
+      showImportDialog('orders');
     };
   }
 
