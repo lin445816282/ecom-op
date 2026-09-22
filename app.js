@@ -84,11 +84,23 @@ function promptDialog(fields, opts = {}) {
     box.style.cssText = 'background:#fff;border-radius:16px;padding:24px;max-width:380px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.22)';
     box.innerHTML = `
       <div style="font-size:15px;font-weight:700;color:#17203a;margin-bottom:16px">${esc(title)}</div>
-      ${fields.map((f, i) => `
+      ${fields.map((f, i) => {
+        if (f.type === 'select') {
+          const opts = f.options || [];
+          return `
+        <div style="margin-bottom:12px">
+          <label style="display:block;font-size:12px;color:#66708a;font-weight:600;margin-bottom:5px">${esc(f.label)}</label>
+          <select data-pf="${i}" style="width:100%;padding:9px 12px;border:1px solid #e4e7f1;border-radius:9px;font-size:14px;box-sizing:border-box;background:#fff">
+            ${opts.map(o => `<option value="${esc(o.value)}" ${o.value === f.value ? 'selected' : ''}>${esc(o.label)}</option>`).join('')}
+          </select>
+        </div>`;
+        }
+        return `
         <div style="margin-bottom:12px">
           <label style="display:block;font-size:12px;color:#66708a;font-weight:600;margin-bottom:5px">${esc(f.label)}</label>
           <input data-pf="${i}" value="${esc(f.value || '')}" placeholder="${esc(f.placeholder || '')}" style="width:100%;padding:9px 12px;border:1px solid #e4e7f1;border-radius:9px;font-size:14px;box-sizing:border-box">
-        </div>`).join('')}
+        </div>`;
+      }).join('')}
       <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:8px">
         <button class="btn" style="padding:8px 18px">${esc(cancelText)}</button>
         <button class="btn primary" style="padding:8px 18px">${esc(confirmText)}</button>
@@ -109,6 +121,293 @@ function promptDialog(fields, opts = {}) {
     overlay.onclick = e => { if (e.target === overlay) close(null); };
     setTimeout(() => box.querySelector('input')?.focus(), 50);
   });
+}
+
+// 批量修改模板说明文档（只读弹窗）
+function showModifyDoc() {
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:999;display:flex;align-items:center;justify-content:center;padding:24px';
+  const box = document.createElement('div');
+  box.style.cssText = 'background:#fff;border-radius:16px;padding:26px;max-width:560px;width:100%;max-height:82vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.22)';
+  box.innerHTML = `
+    <div style="font-size:16px;font-weight:700;color:#17203a;margin-bottom:14px">📄 批量修改模板说明文档</div>
+    <div style="font-size:13px;color:#4b5677;line-height:1.85">
+      <div style="margin-bottom:14px"><b>① 批量修改标题</b><br>
+        列：商品ID（必填）｜商品名称｜改后商品名称<br>
+        <span style="color:#66708a">· 系统以商品ID确定信息唯一性<br>· 标注【必填】字段为必填，其余为选项或有默认值；为空则直接跳过不处理<br>· 仅支持导出/导入 1.5w 条数据，更多请通过筛选查询后操作</span></div>
+      <div style="margin-bottom:14px"><b>② 批量修改价格</b><br>
+        列：商品ID（必填）｜商品名称｜SKUID（必填，注意不是SKU编码）｜规格名称｜单买价｜拼单价｜规格编码<br>
+        <span style="color:#66708a">· 系统以商品ID+SkuId确定信息唯一性<br>· 价格的单位为元，最多支持两位小数<br>· 拼单价需比单买价低至少1元，单买价需低于参考价<br>· 改价后的 SKU 单买价高于市场价时，市场价自动调整为单买价+1元<br>· SKUID 需通过批量导出功能导出后获取<br>· 仅支持导出/导入 1.5w 条数据</span></div>
+      <div style="margin-bottom:14px"><b>③ 批量修改库存</b><br>
+        列：商品ID（必填）｜商品名称｜SKUID（必填，注意不是SKU编码）｜规格名称｜库存增减｜规格编码<br>
+        <span style="color:#66708a">· 系统以商品ID+SkuId确定信息唯一性，仅支持库存数量增/减调整<br>· SKUID 需通过批量导出功能导出后获取<br>· 库存增加填正整数（如 10），减少填负整数（如 -10）<br>· 仅支持导出/导入 1.5w 条数据</span></div>
+      <div><b>④ 批量修改商品编码</b><br>
+        列：商品ID（必填）｜商品名称｜商品编码｜改后商品编码<br>
+        <span style="color:#66708a">· 系统以商品ID确定信息唯一性<br>· 标注【必填】字段为必填，其余为选项或有默认值；为空则直接跳过不处理<br>· 仅支持导出/导入 1.5w 条数据</span></div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;margin-top:18px">
+      <button class="btn primary" style="padding:8px 22px">关闭</button>
+    </div>`;
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  box.querySelector('button').onclick = close;
+  overlay.onclick = e => { if (e.target === overlay) close(); };
+}
+
+// 订单导出字段说明文档（只读弹窗）
+function showOrdersDoc() {
+  const fields = [
+    ['订单号', '订单唯一编号，导入时以此去重（同号覆盖更新）'],
+    ['订单状态', '已支付 / 已发货 / 已完成 / 已取消 等'],
+    ['商品数量(件)', '该订单购买的商品总件数'],
+    ['支付时间', '买家实际付款时间'],
+    ['确认收货时间', '买家确认收货时间，未确认则为空'],
+    ['商品id', '平台商品ID，用于关联商品库'],
+    ['商品规格', 'SKU 规格名称（如 白色-大号）'],
+    ['售后状态', '无售后 / 退款中 / 已退款 等'],
+    ['用户实付金额(元)', '买家实际支付金额（含运费）'],
+    ['商家实收金额(元)', '商家实际到账金额（扣平台费用后）'],
+    ['快递单号', '物流运单号'],
+    ['快递公司', '承运快递公司名称'],
+    ['省', '收货省份（拼多多导出可能脱敏为 ****）'],
+    ['市', '收货城市'],
+    ['区', '收货区县'],
+    ['订单来源', '自然搜索 / 推广 / 活动 等'],
+  ];
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:999;display:flex;align-items:center;justify-content:center;padding:24px';
+  const box = document.createElement('div');
+  box.style.cssText = 'background:#fff;border-radius:16px;padding:26px;max-width:640px;width:100%;max-height:82vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.22)';
+  box.innerHTML = `
+    <div style="font-size:16px;font-weight:700;color:#17203a;margin-bottom:6px">📋 订单导出字段说明</div>
+    <div style="font-size:12px;color:#66708a;margin-bottom:14px">共 ${fields.length} 个字段，与「⬇ 订单」导出的 CSV 列一一对应。</div>
+    <div class="table-wrap"><table>
+      <thead><tr><th style="width:170px">字段名</th><th>说明</th></tr></thead>
+      <tbody>${fields.map(([name, desc]) => `
+        <tr>
+          <td style="font-weight:600;color:#17203a">${esc(name)}</td>
+          <td style="color:#4b5677;font-size:13px">${esc(desc)}</td>
+        </tr>`).join('')}
+      </tbody></table></div>
+    <div style="display:flex;justify-content:flex-end;margin-top:18px">
+      <button class="btn primary" style="padding:8px 22px">关闭</button>
+    </div>`;
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  box.querySelector('button').onclick = close;
+  overlay.onclick = e => { if (e.target === overlay) close(); };
+}
+
+
+// 从修改记录构建「待处理」映射：key=商品ID 或 商品ID|SKUID，value={field: new_value}
+function buildModMap() {
+  const m = {};
+  for (const mod of (catalogCache.mods || [])) {
+    if (mod.status === 'done') continue;
+    const key = mod.platform_sku_id ? `${mod.platform_product_id}|${mod.platform_sku_id}` : mod.platform_product_id;
+    (m[key] = m[key] || {})[mod.field] = mod.new_value;
+  }
+  return m;
+}
+
+// 刷新修改记录缓存 + 重渲染列表（徽标、红字标记、数量）
+async function refreshModsCount() {
+  try {
+    const [counts, list] = await Promise.all([
+      api('/api/catalog/modifications/counts'),
+      api('/api/catalog/modifications'),
+    ]);
+    catalogCache.modCounts = counts || {};
+    catalogCache.mods = list.items || [];
+    paintCatalog();
+  } catch (e) {}
+}
+
+// 有待处理修改时点击按钮弹出的操作面板（导出模板 / 标注已处理）
+function showModifyAction(key, n) {
+  const labels = { title: '改标题', price: '改价格', stock: '改库存', code: '改编码' };
+  const label = labels[key] || key;
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:999;display:flex;align-items:center;justify-content:center;padding:24px';
+  const box = document.createElement('div');
+  box.style.cssText = 'background:#fff;border-radius:16px;padding:24px;max-width:380px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.22)';
+  box.innerHTML = `
+    <div style="font-size:15px;font-weight:700;color:#17203a;margin-bottom:8px">${label}：${n} 条待处理</div>
+    <div style="font-size:13px;color:#66708a;line-height:1.7;margin-bottom:20px">
+      导出模板后，可将这 ${n} 条修改标注为「已处理」，按钮计数归零。<br>
+      <span style="color:#b0b8c8">已处理的修改不再出现在导出模板里（记录仍保留在清单中）。</span>
+    </div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap">
+      <button class="btn" data-act-export>⬇ 导出模板</button>
+      <button class="btn primary" data-act-done>✅ 标注已处理</button>
+      <button class="btn" data-act-close>取消</button>
+    </div>`;
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  box.querySelector('[data-act-close]').onclick = close;
+  overlay.onclick = e => { if (e.target === overlay) close(); };
+  box.querySelector('[data-act-export]').onclick = () => {
+    window.open(BASE + `/api/catalog/export?type=modify-${key}`, '_blank');
+  };
+  box.querySelector('[data-act-done]').onclick = async () => {
+    const ok = await confirmDialog(`确定将「${label}」的 ${n} 条待处理修改标注为已处理吗？`, { title: '标注已处理', confirmText: '标注已处理' });
+    if (!ok) return;
+    try {
+      const r = await api('/api/catalog/modifications/mark-done', 'POST', { field: key });
+      toast(`已标注 ${r.done} 条为已处理`);
+      close();
+      refreshModsCount();
+    } catch (err) { toast(err.message); }
+  };
+}
+
+// 修改记录管理弹窗（查看 / 删除单条 / 清空 / 导出清单）
+async function showModList() {
+  let items = [];
+  try {
+    const r = await api('/api/catalog/modifications');
+    items = r.items || [];
+  } catch (e) { items = []; }
+  const FIELD_LABEL = { title: '改标题', code: '改编码', dan_price: '单买价', pin_price: '拼单价', stock: '库存增减' };
+  const fieldColor = f => ({ title: '#1890ff', code: '#722ed1', dan_price: '#fa8c16', pin_price: '#fa8c16', stock: '#52c41a' }[f] || '#1890ff');
+  const pendingCount = items.filter(m => m.status !== 'done').length;
+  const rowsHtml = items.length ? items.map(m => `
+    <div style="display:flex;align-items:center;gap:8px;padding:9px 4px;border-bottom:1px solid #f0f2f8;font-size:12.5px;flex-wrap:wrap">
+      <span class="tag" style="background:${fieldColor(m.field)};color:#fff">${FIELD_LABEL[m.field] || m.field}</span>
+      ${m.status === 'done' ? '<span class="tag" style="background:#c4cbe0;color:#fff">已处理</span>' : '<span class="tag" style="background:#fff3e0;color:#e65100;border:1px solid #ffe0b2">待处理</span>'}
+      <span style="font-weight:600;color:#26306a;max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(m.product_name || '')}">${esc(m.product_name || m.platform_product_id)}</span>
+      ${m.spec_name ? `<span style="color:#66708a">${esc(m.spec_name)}</span>` : ''}
+      <span style="color:#b0b8c8">${esc(m.old_value || '—')} →</span>
+      <span style="color:#e5484d;font-weight:600">${esc(m.new_value)}</span>
+      <span style="margin-left:auto;color:#b0b8c8;font-size:11px">${esc((m.created_at || '').slice(5, 16))}</span>
+      <button class="btn xs danger" data-mod-del="${m.id}">🗑️</button>
+    </div>`).join('') : '<div class="empty" style="padding:20px">暂无修改记录</div>';
+
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:999;display:flex;align-items:center;justify-content:center;padding:24px';
+  const box = document.createElement('div');
+  box.style.cssText = 'background:#fff;border-radius:16px;padding:22px;max-width:640px;width:100%;max-height:82vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.22)';
+  box.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px">
+      <div style="font-size:16px;font-weight:700;color:#17203a">📝 修改记录（待处理 ${pendingCount} / 共 ${items.length}）</div>
+      <button class="btn subtle sm" data-mod-export>⬇ 导出清单</button>
+    </div>
+    <div style="overflow-y:auto;flex:1;min-height:100px">${rowsHtml}</div>
+    <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:14px">
+      ${items.length ? '<button class="btn danger sm" data-mod-clear>清空全部</button>' : ''}
+      <button class="btn primary sm" data-mod-close>关闭</button>
+    </div>`;
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+
+  box.querySelector('[data-mod-close]').onclick = close;
+  overlay.onclick = e => { if (e.target === overlay) close(); };
+  const exportBtn = box.querySelector('[data-mod-export]');
+  if (exportBtn) exportBtn.onclick = () => window.open(BASE + '/api/catalog/export?type=modifications', '_blank');
+  box.querySelectorAll('[data-mod-del]').forEach(b => b.onclick = async () => {
+    try { await api(`/api/catalog/modifications/${b.dataset.modDel}`, 'DELETE'); toast('已删除该条'); } catch (err) { toast(err.message); }
+    close(); refreshModsCount(); showModList();
+  });
+  const clearBtn = box.querySelector('[data-mod-clear]');
+  if (clearBtn) clearBtn.onclick = async () => {
+    const ok = await confirmDialog('确定清空全部修改记录吗？清空后导出模板将不再带出新值。', { title: '清空修改记录', confirmText: '清空' });
+    if (!ok) return;
+    try { await api('/api/catalog/modifications/clear', 'POST'); toast('已清空'); } catch (err) { toast(err.message); }
+    close(); refreshModsCount(); showModList();
+  };
+}
+
+// CSV 导入弹窗（选店铺 + 选类型 + 下载模板 + 上传文件 + 导入）
+async function showImportDialog() {
+  const tree = catalogCache.tree || [];
+  const shops = [];
+  for (const pl of tree) {
+    for (const sh of (pl.shops || [])) shops.push({ id: sh.id, label: `${pl.name} · ${sh.name}` });
+  }
+  if (!shops.length) { toast('请先新增店铺'); return; }
+
+  const TYPE_HINT = {
+    products: '新建或更新商品。表头：商品ID / 商品名称 / 货号编码',
+    skus: '回填 SKU 价格与库存（商品需已存在）。表头：商品ID / SKUID / 规格名称 / 规格编码 / 单买价 / 拼单价 / 库存',
+    orders: '导入订单流水。表头：订单号 / 订单状态 / 商品数量(件) / 支付时间 / … / 省 / 市 / 区',
+    promotions: '导入推广数据。表头：商品ID / 商品名称 / 推广场景 / … / 曝光量 / 点击量',
+  };
+
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:999;display:flex;align-items:center;justify-content:center;padding:24px';
+  const box = document.createElement('div');
+  box.style.cssText = 'background:#fff;border-radius:16px;padding:24px;max-width:480px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.22)';
+  box.innerHTML = `
+    <div style="font-size:16px;font-weight:700;color:#17203a;margin-bottom:16px">⬆ 导入 CSV</div>
+    <div class="imp-row"><label>目标店铺</label>
+      <select id="imp-shop">${shops.map(s => `<option value="${s.id}">${esc(s.label)}</option>`).join('')}</select>
+    </div>
+    <div class="imp-row"><label>导入类型</label>
+      <select id="imp-type">
+        <option value="products">商品列表</option>
+        <option value="skus">SKU 价格库存</option>
+        <option value="orders">订单</option>
+        <option value="promotions">推广</option>
+      </select>
+    </div>
+    <div class="imp-row"><label>CSV 文件</label>
+      <input type="file" id="imp-file" accept=".csv,text/csv">
+    </div>
+    <div class="imp-hint" id="imp-hint">${TYPE_HINT.products}</div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:18px;flex-wrap:wrap">
+      <button class="btn" data-imp-template>⬇ 下载模板</button>
+      <button class="btn primary" data-imp-go>导入</button>
+      <button class="btn" data-imp-close>取消</button>
+    </div>`;
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  box.querySelector('[data-imp-close]').onclick = close;
+  overlay.onclick = e => { if (e.target === overlay) close(); };
+
+  const typeSel = box.querySelector('#imp-type');
+  const shopSel = box.querySelector('#imp-shop');
+  const fileInput = box.querySelector('#imp-file');
+  const hint = box.querySelector('#imp-hint');
+
+  typeSel.onchange = () => { hint.textContent = TYPE_HINT[typeSel.value] || ''; };
+
+  box.querySelector('[data-imp-template]').onclick = () => {
+    window.open(BASE + '/api/catalog/template?type=' + typeSel.value, '_blank');
+  };
+
+  box.querySelector('[data-imp-go]').onclick = async () => {
+    const file = fileInput.files[0];
+    if (!file) { toast('请先选择 CSV 文件'); return; }
+    const csvText = await new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(fr.result);
+      fr.onerror = () => reject(new Error('文件读取失败'));
+      fr.readAsText(file, 'utf-8');
+    });
+    const btn = box.querySelector('[data-imp-go]');
+    btn.disabled = true; btn.textContent = '⏳ 导入中…';
+    try {
+      const r = await api('/api/catalog/import', 'POST', {
+        type: typeSel.value, shop_id: parseInt(shopSel.value), csv: csvText,
+      });
+      if (r.ok) {
+        toast(`导入成功：${r.imported} 条，跳过 ${r.skipped} 条`);
+        close();
+        renderCatalog();
+      } else {
+        toast('导入失败：' + (r.error || '未知'));
+        btn.disabled = false; btn.textContent = '导入';
+      }
+    } catch (err) {
+      toast(err.message);
+      btn.disabled = false; btn.textContent = '导入';
+    }
+  };
 }
 
 function setNav(active) {
@@ -580,22 +879,36 @@ function renderProducts(editingProduct = null) {
 }
 
 /* ---------------- 商品库（平台 + 电商层级） ---------------- */
-const catalogCache = { tree: [], stats: {}, orders: [], analysis: null, filter: '' };
+const catalogCache = { tree: [], stats: {}, orders: [], analysis: null, filter: '', mods: [], modCounts: {}, goodsEffect: [], performance: null, promoAnalysis: null, lowStock: [], selection: null };
 
 async function renderCatalog() {
   const el = $('#view-catalog');
   el.innerHTML = '<div class="empty"><div class="big">📦</div>加载中…</div>';
   try {
-    const [stats, treeResp, ordersResp, analysis] = await Promise.all([
+    const [stats, treeResp, ordersResp, analysis, modsResp, countsResp, geResp, perfResp, promoResp, lowResp, selResp] = await Promise.all([
       api('/api/catalog/stats'),
       api('/api/catalog/tree'),
-      api('/api/catalog/orders?limit=200'),
+      api('/api/catalog/orders?limit=5000'),
       api('/api/catalog/analysis'),
+      api('/api/catalog/modifications'),
+      api('/api/catalog/modifications/counts'),
+      api('/api/catalog/goods-effect'),
+      api('/api/catalog/performance'),
+      api('/api/catalog/promotions-analysis'),
+      api('/api/catalog/low-stock'),
+      api('/api/catalog/selection'),
     ]);
     catalogCache.stats = stats;
     catalogCache.tree = treeResp.items || [];
     catalogCache.orders = ordersResp.items || [];
     catalogCache.analysis = analysis;
+    catalogCache.mods = modsResp.items || [];
+    catalogCache.modCounts = countsResp || {};
+    catalogCache.goodsEffect = geResp.items || [];
+    catalogCache.performance = perfResp || null;
+    catalogCache.promoAnalysis = promoResp || null;
+    catalogCache.lowStock = lowResp.items || [];
+    catalogCache.selection = selResp || null;
     paintCatalog();
   } catch (err) {
     el.innerHTML = `<div class="empty">❌ ${esc(err.message)}</div>`;
@@ -608,6 +921,7 @@ function paintCatalog() {
   const stats = catalogCache.stats;
   const a = catalogCache.analysis || {};
   const f = (catalogCache.filter || '').toLowerCase();
+  const modMap = buildModMap();
 
   const pct = (n, total) => total ? Math.round(n / total * 100) : 0;
   const pricePct = pct(a.priced, a.total_skus);
@@ -636,6 +950,58 @@ function paintCatalog() {
       </div>
     </div>`;
 
+  // 经营分析看板（销售概览 + 商品销量 TOP + 日趋势 + 地区）
+  const perf = catalogCache.performance;
+  let perfHTML = '';
+  if (perf && perf.summary) {
+    const sm = perf.summary || {};
+    const top = perf.top_products || [];
+    const daily = perf.daily_trend || [];
+    const regions = perf.regions || [];
+    const maxAmt = Math.max(...daily.map(d => d.amount || 0), 1);
+    perfHTML = `
+    <div class="perf-panel">
+      <h3 class="perf-title">📊 经营分析</h3>
+      <div class="perf-summary">
+        <div class="perf-card"><div class="p-label">GMV（实付）</div><div class="p-value">¥${fmt(sm.gmv)}</div></div>
+        <div class="perf-card"><div class="p-label">订单数</div><div class="p-value">${sm.order_count}</div></div>
+        <div class="perf-card"><div class="p-label">客单价</div><div class="p-value">¥${fmt(sm.avg_order)}</div></div>
+        <div class="perf-card"><div class="p-label">件数</div><div class="p-value">${sm.item_count}</div></div>
+        <div class="perf-card"><div class="p-label">售后率</div><div class="p-value">${sm.aftersale_rate}%</div><div class="p-hint">${sm.refund_count} 单退款</div></div>
+      </div>
+      <div class="perf-cols">
+        <div class="perf-col">
+          <h4>🏆 商品销量 TOP</h4>
+          ${top.length ? top.slice(0, 10).map((t, i) => `
+            <div class="perf-rank">
+              <span class="perf-rk">${i + 1}</span>
+              <span class="perf-name" title="${esc(t.name)}">${esc((t.name || '').slice(0, 13))}${(t.name || '').length > 13 ? '…' : ''}${t.code ? ' <em>' + esc(t.code) + '</em>' : ''}</span>
+              <span class="perf-amt">¥${fmt(t.amount)}</span>
+              <span class="perf-odr">${t.orders}单</span>
+            </div>`).join('') : '<div class="empty">暂无订单</div>'}
+        </div>
+        <div class="perf-col">
+          <h4>📅 日趋势</h4>
+          ${daily.length ? daily.map(d => `
+            <div class="perf-bar-row">
+              <span class="perf-date">${esc((d.date || '').slice(5))}</span>
+              <div class="perf-bar"><div class="perf-fill" style="width:${Math.max(Math.round((d.amount || 0) / maxAmt * 100), 2)}%"></div></div>
+              <span class="perf-amt">¥${fmt(d.amount)}</span>
+            </div>`).join('') : '<div class="empty">暂无</div>'}
+        </div>
+        <div class="perf-col">
+          <h4>🗺️ 地区 TOP</h4>
+          ${regions.length ? regions.map(r => `
+            <div class="perf-rank">
+              <span class="perf-name">${esc(r.province)}</span>
+              <span class="perf-odr">${r.orders}单</span>
+              <span class="perf-amt">¥${fmt(r.amount)}</span>
+            </div>`).join('') : '<div class="empty">暂无</div>'}
+        </div>
+      </div>
+    </div>`;
+  }
+
   let html = `
     <div class="stats-grid">
       <div class="stat-card"><div class="label">平台</div><div class="value">${stats.platforms || 0}</div></div>
@@ -646,25 +1012,232 @@ function paintCatalog() {
       <div class="stat-card"><div class="label">推广记录</div><div class="value">${stats.promotions || 0}</div><div class="hint">8月汇总待导入</div></div>
     </div>
     ${overview}
+    ${perfHTML}
     <div class="callout">📌 真实平台数据（拼多多商家后台导出，2026-09-21）。价格/库存/推广数值当前为空，待重新导出带数值版本后导入补全。</div>
     <div class="catalog-searchbar"><input id="catalog-search" class="search" placeholder="🔍 搜索商品名 / 商品ID / 货号…" value="${esc(catalogCache.filter)}"></div>
     <div id="catalog-body"></div>
-    <h3 class="catalog-section-title">📋 订单记录（${catalogCache.orders.length}）</h3>
-    <div id="catalog-orders"></div>`;
+    <div class="orders-panel">
+      <div class="orders-panel-head" data-toggle-ge>
+        <span class="orders-fold-icon">▸</span>
+        <span class="orders-panel-title">📈 商品访问明细</span>
+        <span class="orders-panel-count">${catalogCache.goodsEffect.length}</span>
+        <span class="orders-panel-hint">点击展开 / 收起</span>
+      </div>
+      <div class="orders-panel-body" id="catalog-ge" hidden>
+        <div class="ge-toolbar">
+          <button class="btn primary sm" data-ge-collect>🔄 采集最新数据</button>
+          <select id="ge-date-filter" class="ge-filter" title="按日期筛选">
+            <option value="all">全部日期</option>
+            <option value="today">今日</option>
+            <option value="yesterday">昨日</option>
+            <option value="7d">近7天</option>
+            <option value="30d">近30天</option>
+          </select>
+          <span class="ge-hint">采集拼多多「商品数据·商品明细」，约需 30~60 秒</span>
+        </div>
+        <div id="catalog-ge-table"></div>
+      </div>
+    </div>
+    <div class="orders-panel">
+      <div class="orders-panel-head" data-toggle-orders>
+        <span class="orders-fold-icon">▸</span>
+        <span class="orders-panel-title">📋 订单记录</span>
+        <span class="orders-panel-count">${catalogCache.orders.length}</span>
+        <span class="orders-panel-hint">点击展开 / 收起</span>
+        <button class="btn xs" data-orders-doc title="订单导出字段说明">📄 字段文档</button>
+      </div>
+      <div class="orders-panel-body" id="catalog-orders" hidden></div>
+    </div>
+    <div class="orders-panel">
+      <div class="orders-panel-head" data-toggle-promo>
+        <span class="orders-fold-icon">▸</span>
+        <span class="orders-panel-title">📢 推广明细</span>
+        <span class="orders-panel-count">${(catalogCache.promoAnalysis && catalogCache.promoAnalysis.summary && catalogCache.promoAnalysis.summary.count) || 0}</span>
+        <span class="orders-panel-hint">点击展开 / 收起</span>
+      </div>
+      <div class="orders-panel-body" id="catalog-promo" hidden></div>
+    </div>
+    <div class="orders-panel">
+      <div class="orders-panel-head" data-toggle-lowstock>
+        <span class="orders-fold-icon">▸</span>
+        <span class="orders-panel-title">⚠️ 库存预警</span>
+        <span class="orders-panel-count">${catalogCache.lowStock.length}</span>
+        <span class="orders-panel-hint">库存 ≤ 10 的 SKU</span>
+      </div>
+      <div class="orders-panel-body" id="catalog-lowstock" hidden></div>
+    </div>
+    <div class="orders-panel">
+      <div class="orders-panel-head" data-toggle-selection>
+        <span class="orders-fold-icon">▸</span>
+        <span class="orders-panel-title">🎯 选品联动</span>
+        <span class="orders-panel-count">${(catalogCache.selection && catalogCache.selection.summary && catalogCache.selection.summary.with_data) || 0}</span>
+        <span class="orders-panel-hint">销量/访问/毛利/库存/ROI 综合建议</span>
+      </div>
+      <div class="orders-panel-body" id="catalog-selection" hidden></div>
+    </div>`;
 
   el.innerHTML = html;
   const s = $('#catalog-search');
   s.oninput = () => { catalogCache.filter = s.value.trim(); paintCatalog(); };
 
+  // 商品访问明细折叠切换
+  const geToggle = el.querySelector('[data-toggle-ge]');
+  if (geToggle) {
+    geToggle.onclick = () => {
+      const ob = $('#catalog-ge');
+      const icon = geToggle.querySelector('.orders-fold-icon');
+      const willOpen = ob.hidden;
+      ob.hidden = !willOpen;
+      icon.textContent = willOpen ? '▾' : '▸';
+    };
+  }
+
+  // 订单记录折叠切换
+  const ordersToggle = el.querySelector('[data-toggle-orders]');
+  if (ordersToggle) {
+    ordersToggle.onclick = () => {
+      const ob = $('#catalog-orders');
+      const icon = ordersToggle.querySelector('.orders-fold-icon');
+      const willOpen = ob.hidden;
+      ob.hidden = !willOpen;
+      icon.textContent = willOpen ? '▾' : '▸';
+    };
+  }
+
+  // 订单字段文档按钮（stopPropagation 避免触发展开）
+  const ordersDocBtn = el.querySelector('[data-orders-doc]');
+  if (ordersDocBtn) {
+    ordersDocBtn.onclick = (e) => {
+      e.stopPropagation();
+      showOrdersDoc();
+    };
+  }
+
+  // 推广明细折叠切换 + 渲染
+  const promoToggle = el.querySelector('[data-toggle-promo]');
+  const promoEl = $('#catalog-promo');
+  if (promoToggle && promoEl) {
+    promoToggle.onclick = () => {
+      const willOpen = promoEl.hidden;
+      promoEl.hidden = !willOpen;
+      promoToggle.querySelector('.orders-fold-icon').textContent = willOpen ? '▾' : '▸';
+    };
+    const pa = catalogCache.promoAnalysis;
+    if (pa && pa.summary && pa.summary.count > 0) {
+      const sm = pa.summary;
+      const top = pa.top_roi || [];
+      promoEl.innerHTML = `
+        <div class="perf-summary" style="margin-bottom:14px">
+          <div class="perf-card"><div class="p-label">推广计划</div><div class="p-value">${sm.count}</div></div>
+          <div class="perf-card"><div class="p-label">总花费</div><div class="p-value">¥${fmt(sm.total_spend)}</div></div>
+          <div class="perf-card"><div class="p-label">成交额</div><div class="p-value">¥${fmt(sm.amt)}</div></div>
+          <div class="perf-card"><div class="p-label">平均ROI</div><div class="p-value">${sm.avg_roi != null ? sm.avg_roi : '—'}</div></div>
+          <div class="perf-card"><div class="p-label">曝光/点击</div><div class="p-value">${sm.impressions}/${sm.clicks}</div></div>
+        </div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>商品</th><th>花费</th><th>成交额</th><th>ROI</th><th>成交笔数</th><th>曝光</th><th>点击</th></tr></thead>
+          <tbody>${top.map(r => `
+            <tr>
+              <td title="${esc(r.product_name)}">${esc((r.product_name || '').slice(0, 16))}${(r.product_name || '').length > 16 ? '…' : ''}</td>
+              <td>¥${fmt(r.total_spend)}</td>
+              <td>¥${fmt(r.amt)}</td>
+              <td>${r.roi != null ? r.roi : '—'}</td>
+              <td>${r.deals}</td>
+              <td>${r.imp}</td>
+              <td>${r.clk}</td>
+            </tr>`).join('')}
+          </tbody></table></div>`;
+    } else {
+      promoEl.innerHTML = '<div class="empty">暂无推广数据，点「⬆ 导入」导入推广 CSV</div>';
+    }
+  }
+
+  // 库存预警折叠切换 + 渲染
+  const lowToggle = el.querySelector('[data-toggle-lowstock]');
+  const lowEl = $('#catalog-lowstock');
+  if (lowToggle && lowEl) {
+    lowToggle.onclick = () => {
+      const willOpen = lowEl.hidden;
+      lowEl.hidden = !willOpen;
+      lowToggle.querySelector('.orders-fold-icon').textContent = willOpen ? '▾' : '▸';
+    };
+    const low = catalogCache.lowStock || [];
+    lowEl.innerHTML = low.length ? `
+      <div class="table-wrap"><table>
+        <thead><tr><th>商品</th><th>货号</th><th>规格</th><th>库存</th></tr></thead>
+        <tbody>${low.map(r => `
+          <tr>
+            <td title="${esc(r.name)}">${esc((r.name || '').slice(0, 16))}${(r.name || '').length > 16 ? '…' : ''}</td>
+            <td>${esc(r.code || '')}</td>
+            <td>${esc(r.spec_name || '')}</td>
+            <td><span class="stock-low">${r.stock}</span></td>
+          </tr>`).join('')}
+        </tbody></table></div>`
+      : '<div class="empty">暂无低库存 SKU（库存 ≤ 10）</div>';
+  }
+
+  // 选品联动折叠切换 + 渲染
+  const selToggle = el.querySelector('[data-toggle-selection]');
+  const selEl = $('#catalog-selection');
+  if (selToggle && selEl) {
+    selToggle.onclick = () => {
+      const willOpen = selEl.hidden;
+      selEl.hidden = !willOpen;
+      selToggle.querySelector('.orders-fold-icon').textContent = willOpen ? '▾' : '▸';
+    };
+    const sel = catalogCache.selection;
+    const items = (sel && sel.items) || [];
+    const summary = (sel && sel.summary) || {};
+    if (!items.length) {
+      selEl.innerHTML = '<div class="empty">暂无联动数据。有成交/访问/推广/成本任一数据后自动生成选品建议。</div>';
+    } else {
+      const labelBadge = {
+        '主力爆款': 'sel-label sel-main',
+        '潜力款': 'sel-label sel-potential',
+        '滞销清仓': 'sel-label sel-slow',
+        '亏损止损': 'sel-label sel-loss',
+        '观察': 'sel-label sel-watch',
+      };
+      const labels = Object.entries(summary.labels || {}).map(([k, v]) =>
+        `<span class="${labelBadge[k] || 'sel-label'}">${esc(k)} ${v}</span>`).join(' ');
+      selEl.innerHTML = `
+        <div class="sel-summary">${labels}</div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>商品</th><th>建议</th><th>成交</th><th>毛利</th><th>访问</th><th>ROI</th><th>原因</th></tr></thead>
+          <tbody>${items.map(r => `
+            <tr>
+              <td title="${esc(r.name)}">${esc((r.name || '').slice(0, 14))}${(r.name || '').length > 14 ? '…' : ''}${r.code ? ' <em>' + esc(r.code) + '</em>' : ''}</td>
+              <td><span class="${labelBadge[r.label] || 'sel-label'}">${esc(r.label)}</span></td>
+              <td>${r.orders}单</td>
+              <td>${r.margin != null ? r.margin + '%' : '—'}</td>
+              <td>${r.uv}</td>
+              <td>${r.roi != null ? r.roi : '—'}</td>
+              <td class="sel-reason">${esc(r.reason)}</td>
+            </tr>`).join('')}
+          </tbody></table></div>`;
+    }
+  }
+
   const body = $('#catalog-body');
   let bodyHtml = '';
+  const mc = catalogCache.modCounts || {};
+  const badge = k => { const n = mc[k] || 0; return `<span class="mod-badge" data-badge="${k}" ${n > 0 ? '' : 'style="display:none"'}>${n}</span>`; };
   bodyHtml += `<div class="catalog-toolbar">
     <button class="btn primary sm" data-add-platform>＋ 新增平台</button>
+    <span class="catalog-export-group">
+      <button class="btn sm" data-modify="title" title="导出批量修改标题模板">📝 改标题${badge('title')}</button>
+      <button class="btn sm" data-modify="price" title="导出批量修改价格模板">💰 改价格${badge('price')}</button>
+      <button class="btn sm" data-modify="stock" title="导出批量修改库存模板">📦 改库存${badge('stock')}</button>
+      <button class="btn sm" data-modify="code" title="导出批量修改商品编码模板">🔢 改编码${badge('code')}</button>
+      <button class="btn sm" data-modify-doc title="查看批量修改模板说明文档">📄 文档</button>
+      <button class="btn sm" data-mod-list title="查看/管理已记录的修改">📝 修改记录(${catalogCache.mods.length})</button>
+    </span>
     <span class="catalog-export-group">
       <button class="btn sm" data-export="products" title="导出商品列表 CSV">⬇ 商品表</button>
       <button class="btn sm" data-export="skus" title="导出 SKU 价格库存 CSV">⬇ SKU表</button>
       <button class="btn sm" data-export="orders" title="导出订单 CSV">⬇ 订单</button>
       <button class="btn sm" data-export="promotions" title="导出推广 CSV">⬇ 推广</button>
+      <button class="btn sm primary" data-import title="导入 CSV（商品/SKU/订单/推广）">⬆ 导入</button>
     </span>
   </div>`;
   for (const pl of tree) {
@@ -696,13 +1269,37 @@ function paintCatalog() {
         <div class="catalog-shop-body" hidden>
           <div class="catalog-product-list">`;
       for (const p of products) {
+        const pm = modMap[p.platform_product_id] || {};
+        const curName = pm.title != null ? pm.title : p.name;
+        const curCode = pm.code != null ? pm.code : (p.code || '');
+        const cost = p.cost_price != null ? p.cost_price : null;
+        const minPrice = p.min_price != null ? p.min_price : null;
+        const marginPct = (cost != null && minPrice != null && minPrice > 0) ? ((minPrice - cost) / minPrice * 100) : null;
+        const codeHtml = pm.code != null
+          ? `<span class="mod-new" title="待处理新编码">${esc(pm.code)}</span>`
+          : esc(p.code || '无货号');
+        const nameHtml = pm.title != null
+          ? `<span class="mod-new" title="待处理新标题：${esc(pm.title)}">${esc(pm.title)}</span>`
+          : esc(p.name);
+        const statusHtml = p.status
+          ? `<span class="prod-status status-${esc(p.status)}" data-status="${esc(p.status)}">${esc(p.status)}</span>`
+          : `<span class="prod-status status-none" data-status="">未标状态</span>`;
         bodyHtml += `
-            <div class="catalog-prod-row" data-pid="${p.id}">
+            <div class="catalog-prod-row" data-pid="${p.id}" data-shop="${sh.id}" data-ppid="${esc(p.platform_product_id)}">
               <div class="catalog-prod-main">
-                <span class="prod-code ${p.code ? '' : 'prod-code-empty'}">${esc(p.code || '无货号')}</span>
-                <span class="prod-name" title="${esc(p.name)}">${esc(p.name)}</span>
+                ${statusHtml}
+                <span class="prod-code ${curCode ? '' : 'prod-code-empty'}">${codeHtml}</span>
+                <span class="prod-name" title="${esc(curName)}">${nameHtml}</span>
                 <span class="prod-id">${esc(p.platform_product_id)}</span>
                 <span class="prod-sku-count"><span class="tag blue">${p.sku_count} SKU</span></span>
+                ${cost != null ? `<span class="prod-cost" title="成本价">成本 ¥${fmt(cost)}</span>` : ''}
+                ${marginPct != null ? `<span class="prod-margin ${marginPct < 0 ? 'neg' : ''}" title="毛利率 =（售价-成本）/售价">毛利 ${fmt(marginPct, 1)}%</span>` : ''}
+                <span class="catalog-prod-actions">
+                  <button class="btn xs" data-cost="${p.id}" data-ppid="${esc(p.platform_product_id)}" data-shop="${sh.id}" data-costval="${cost ?? ''}" title="设置成本价">💰成本</button>
+                  <button class="btn xs" data-status-btn="${p.id}" data-ppid="${esc(p.platform_product_id)}" data-shop="${sh.id}" data-curstatus="${esc(p.status || '')}" title="设置商品状态">🏷️状态</button>
+                  <button class="btn xs" data-mod-title="${p.id}" data-name="${esc(curName)}" title="修改标题">✏️标题</button>
+                  <button class="btn xs" data-mod-code="${p.id}" data-code="${esc(curCode)}" title="修改商品编码">🔢编码</button>
+                </span>
               </div>
               <div class="catalog-sku-list" hidden></div>
             </div>`;
@@ -727,6 +1324,93 @@ function paintCatalog() {
     try { await api('/api/catalog/platforms', 'POST', { code: r.code, name: r.name }); toast('平台已新增'); reload(); }
     catch (err) { toast(err.message); }
   };
+
+  // CSV 导入弹窗
+  const importBtn = body.querySelector('[data-import]');
+  if (importBtn) importBtn.onclick = () => showImportDialog();
+
+  // 批量修改模板导出按钮（有待处理修改时弹出操作面板）
+  body.querySelectorAll('[data-modify]').forEach(b => b.onclick = () => {
+    const key = b.dataset.modify;
+    const n = (catalogCache.modCounts || {})[key] || 0;
+    if (n > 0) showModifyAction(key, n);
+    else toast('暂无待处理的修改');
+  });
+
+  // 批量修改模板说明文档弹窗
+  const docBtn = body.querySelector('[data-modify-doc]');
+  if (docBtn) docBtn.onclick = () => showModifyDoc();
+
+  // 修改记录管理弹窗
+  const modListBtn = body.querySelector('[data-mod-list]');
+  if (modListBtn) modListBtn.onclick = () => showModList();
+
+  // 商品行「改标题/改编码」按钮（stopPropagation 避免触发展开 SKU）
+  body.querySelectorAll('[data-mod-title]').forEach(btn => btn.onclick = async (e) => {
+    e.stopPropagation();
+    const row = btn.closest('.catalog-prod-row');
+    const shopId = row.dataset.shop;
+    const ppid = row.dataset.ppid;
+    const cur = btn.dataset.name;
+    const r = await promptDialog([{ key: 'v', label: '新标题', value: cur, placeholder: '输入新标题' }], { title: '修改标题', confirmText: '保存' });
+    if (!r || r.v === '' || r.v === cur) return;
+    try {
+      await api('/api/catalog/modifications', 'POST', { shop_id: parseInt(shopId), platform_product_id: ppid, field: 'title', new_value: r.v });
+      toast('已记录标题修改'); refreshModsCount();
+    } catch (err) { toast(err.message); }
+  });
+
+  body.querySelectorAll('[data-mod-code]').forEach(btn => btn.onclick = async (e) => {
+    e.stopPropagation();
+    const row = btn.closest('.catalog-prod-row');
+    const shopId = row.dataset.shop;
+    const ppid = row.dataset.ppid;
+    const cur = btn.dataset.code;
+    const r = await promptDialog([{ key: 'v', label: '新商品编码', value: cur, placeholder: '输入新编码' }], { title: '修改商品编码', confirmText: '保存' });
+    if (!r || r.v === '' || r.v === cur) return;
+    try {
+      await api('/api/catalog/modifications', 'POST', { shop_id: parseInt(shopId), platform_product_id: ppid, field: 'code', new_value: r.v });
+      toast('已记录编码修改'); refreshModsCount();
+    } catch (err) { toast(err.message); }
+  });
+
+  // 成本价（本地字段，直接改库，不进修改记录）
+  body.querySelectorAll('[data-cost]').forEach(btn => btn.onclick = async (e) => {
+    e.stopPropagation();
+    const shopId = btn.dataset.shop;
+    const ppid = btn.dataset.ppid;
+    const cur = btn.dataset.costval;
+    const r = await promptDialog([{ key: 'v', label: '成本价（元，留空清空）', value: cur, placeholder: '如 12.50' }], { title: '设置成本价', confirmText: '保存' });
+    if (!r) return;
+    const val = r.v === '' ? null : parseFloat(r.v);
+    if (r.v !== '' && isNaN(val)) { toast('成本价需为数字'); return; }
+    try {
+      await api('/api/catalog/product/cost', 'POST', { shop_id: parseInt(shopId), platform_product_id: ppid, cost_price: val });
+      toast(val == null ? '已清空成本价' : `成本价已设为 ¥${fmt(val)}`);
+      renderCatalog();
+    } catch (err) { toast(err.message); }
+  });
+
+  // 商品状态标签（本地维护，6 选 1，可清除）
+  const STATUS_OPTIONS = ['在售', '下架', '售罄', '清仓', '新品', '停推'];
+  body.querySelectorAll('[data-status-btn]').forEach(btn => btn.onclick = async (e) => {
+    e.stopPropagation();
+    const shopId = btn.dataset.shop;
+    const ppid = btn.dataset.ppid;
+    const cur = btn.dataset.curstatus;
+    const options = [
+      { value: '', label: '（清除标签）' },
+      ...STATUS_OPTIONS.map(s => ({ value: s, label: `${s}${s === cur ? '（当前）' : ''}` })),
+    ];
+    const r = await promptDialog([{ key: 'status', label: '商品状态', type: 'select', value: cur, options }], { title: '设置商品状态', confirmText: '保存' });
+    if (!r) return;
+    const val = r.status || '';
+    try {
+      await api('/api/catalog/product/status', 'POST', { shop_id: parseInt(shopId), platform_product_id: ppid, status: val });
+      toast(val ? `状态已设为「${val}」` : '已清除状态标签');
+      renderCatalog();
+    } catch (err) { toast(err.message); }
+  });
 
   // 导出按钮
   body.querySelectorAll('[data-export]').forEach(b => b.onclick = () => {
@@ -792,42 +1476,211 @@ function paintCatalog() {
       list.hidden = false;
       list.innerHTML = '<div class="catalog-sku-loading">SKU 加载中…</div>';
       try {
+        const shopId = row.dataset.shop;
+        const ppid = row.dataset.ppid;
         const r = await api(`/api/catalog/skus?product_id=${row.dataset.pid}`);
         const skus = r.items || [];
         list.innerHTML = skus.length
-          ? skus.map(sku => `
+          ? skus.map(sku => {
+              const sm = modMap[`${ppid}|${sku.platform_sku_id}`] || {};
+              const danHtml = sm.dan_price != null ? `<span class="mod-new">${esc(sm.dan_price)}</span>` : (sku.dan_price != null ? fmt(sku.dan_price) : '<i class="muted">未填</i>');
+              const pinHtml = sm.pin_price != null ? `<span class="mod-new">${esc(sm.pin_price)}</span>` : (sku.pin_price != null ? fmt(sku.pin_price) : '<i class="muted">未填</i>');
+              const stockNew = sm.stock != null ? (String(sm.stock).startsWith('-') ? sm.stock : '+' + sm.stock) : null;
+              const stockHtml = stockNew != null ? `<span class="mod-new">${esc(stockNew)}</span>` : (sku.stock != null ? sku.stock : '<i class="muted">未填</i>');
+              return `
               <div class="sku-row">
                 <span class="sku-name">${esc(sku.spec_name || '—')}</span>
                 <span class="tag gray">${esc(sku.spec_code || '')}</span>
-                <span class="sku-price">单买价 ${sku.dan_price != null ? fmt(sku.dan_price) : '<i class="muted">未填</i>'}</span>
-                <span class="sku-price">拼单价 ${sku.pin_price != null ? fmt(sku.pin_price) : '<i class="muted">未填</i>'}</span>
-                <span class="sku-price">库存 ${sku.stock != null ? sku.stock : '<i class="muted">未填</i>'}</span>
-              </div>`).join('')
+                <span class="sku-price">单买价 ${danHtml}</span>
+                <span class="sku-price">拼单价 ${pinHtml}</span>
+                <span class="sku-price">库存 ${stockHtml}</span>
+                <span class="sku-actions">
+                  <button class="btn xs" data-sku-price="${esc(sku.platform_sku_id)}" data-dan="${esc(sm.dan_price ?? sku.dan_price ?? '')}" data-pin="${esc(sm.pin_price ?? sku.pin_price ?? '')}" data-spec="${esc(sku.spec_name || '')}" title="修改价格">💰改价</button>
+                  <button class="btn xs" data-sku-stock="${esc(sku.platform_sku_id)}" data-stock="${sku.stock ?? ''}" data-spec="${esc(sku.spec_name || '')}" title="修改库存">📦改库存</button>
+                </span>
+              </div>`;
+            }).join('')
           : '<div class="empty">无 SKU</div>';
+
+        // SKU 改价（单买价 + 拼单价，可只填其一）
+        list.querySelectorAll('[data-sku-price]').forEach(btn => btn.onclick = async (e) => {
+          e.stopPropagation();
+          const skuid = btn.dataset.skuPrice;
+          const spec = btn.dataset.spec;
+          const r2 = await promptDialog([
+            { key: 'dan', label: `单买价（当前 ${btn.dataset.dan || '未填'}）`, value: btn.dataset.dan, placeholder: '新单买价，留空不改' },
+            { key: 'pin', label: `拼单价（当前 ${btn.dataset.pin || '未填'}）`, value: btn.dataset.pin, placeholder: '新拼单价，留空不改' },
+          ], { title: `改价：${spec}`, confirmText: '保存' });
+          if (!r2 || (r2.dan === '' && r2.pin === '')) return;
+          const dan = r2.dan === '' ? null : parseFloat(r2.dan);
+          const pin = r2.pin === '' ? null : parseFloat(r2.pin);
+          if ((dan !== null && isNaN(dan)) || (pin !== null && isNaN(pin))) { toast('价格需为数字'); return; }
+          if (dan !== null && pin !== null && !(pin <= dan - 1)) { toast('拼单价需比单买价低至少 1 元'); return; }
+          try {
+            if (dan !== null) await api('/api/catalog/modifications', 'POST', { shop_id: parseInt(shopId), platform_product_id: ppid, platform_sku_id: skuid, field: 'dan_price', new_value: String(dan) });
+            if (pin !== null) await api('/api/catalog/modifications', 'POST', { shop_id: parseInt(shopId), platform_product_id: ppid, platform_sku_id: skuid, field: 'pin_price', new_value: String(pin) });
+            toast('已记录价格修改'); refreshModsCount();
+          } catch (err) { toast(err.message); }
+        });
+
+        // SKU 改库存（增减值：增填正/减填负）
+        list.querySelectorAll('[data-sku-stock]').forEach(btn => btn.onclick = async (e) => {
+          e.stopPropagation();
+          const skuid = btn.dataset.skuStock;
+          const spec = btn.dataset.spec;
+          const r2 = await promptDialog([
+            { key: 'v', label: `库存增减（当前库存 ${btn.dataset.stock || '未填'}）`, value: '', placeholder: '增填正整数 / 减填负整数，如 10 或 -10' },
+          ], { title: `改库存：${spec}`, confirmText: '保存' });
+          if (!r2 || r2.v === '') return;
+          const val = parseInt(r2.v);
+          if (isNaN(val)) { toast('库存增减需为整数'); return; }
+          try {
+            await api('/api/catalog/modifications', 'POST', { shop_id: parseInt(shopId), platform_product_id: ppid, platform_sku_id: skuid, field: 'stock', new_value: String(val) });
+            toast('已记录库存修改'); refreshModsCount();
+          } catch (err) { toast(err.message); }
+        });
       } catch (err) {
         list.innerHTML = `<div class="empty">❌ ${esc(err.message)}</div>`;
       }
     };
   });
 
-  // 订单表格
+  // 商品访问明细（拼多多商品数据·商品明细）
+  const geTable = $('#catalog-ge-table');
+  if (geTable) {
+    const allGe = catalogCache.goodsEffect || [];
+    // 以数据内最大日期为"今日"参照（不依赖浏览器时间）
+    const maxDate = allGe.reduce((m, g) => (g.stat_date && g.stat_date > m) ? g.stat_date : m, '');
+    const shiftDate = (ds, n) => {
+      if (!ds) return '';
+      const [y, mo, d] = ds.split('-').map(Number);
+      const dt = new Date(y, mo - 1, d + n);
+      return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+    };
+    const matchGe = (ds) => {
+      const f = catalogCache.geFilter || 'all';
+      if (f === 'all') return true;
+      if (!ds) return false;
+      if (f === 'today') return ds === maxDate;
+      if (f === 'yesterday') return ds === shiftDate(maxDate, -1);
+      if (f === '7d') return ds >= shiftDate(maxDate, -6);
+      if (f === '30d') return ds >= shiftDate(maxDate, -29);
+      return true;
+    };
+    const renderGe = () => {
+      const ge = allGe.filter(g => matchGe(g.stat_date));
+      geTable.innerHTML = ge.length
+        ? `<div class="table-wrap"><table>
+            <thead><tr><th>商品</th><th>访客数</th><th>浏览量</th><th>成交金额</th><th>订单数</th><th>买家数</th><th>转化率</th><th>收藏数</th><th>日期</th></tr></thead>
+            <tbody>${ge.map(g => {
+              const name = g.goods_name || '';
+              return `
+              <tr>
+                <td title="${esc(name)}">${esc(name.slice(0, 22))}${name.length > 22 ? '…' : ''}</td>
+                <td>${g.goods_uv != null ? g.goods_uv : '—'}</td>
+                <td>${g.goods_pv != null ? g.goods_pv : '—'}</td>
+                <td>${g.pay_ordr_amt != null ? '¥' + fmt(g.pay_ordr_amt) : '—'}</td>
+                <td>${g.pay_ordr_cnt != null ? g.pay_ordr_cnt : '—'}</td>
+                <td>${g.pay_ordr_usr_cnt != null ? g.pay_ordr_usr_cnt : '—'}</td>
+                <td>${g.goods_vcr != null ? fmt(g.goods_vcr, 2) + '%' : '—'}</td>
+                <td>${g.goods_fav_cnt != null ? g.goods_fav_cnt : '—'}</td>
+                <td>${esc(g.stat_date || '')}</td>
+              </tr>`;
+            }).join('')}
+            </tbody></table></div>`
+        : '<div class="empty">该日期范围暂无数据，点「🔄 采集最新数据」获取</div>';
+    };
+    renderGe();
+
+    // 日期筛选下拉（只重绘表格，不折叠面板）
+    const geFilter = el.querySelector('#ge-date-filter');
+    if (geFilter) {
+      geFilter.value = catalogCache.geFilter || 'all';
+      geFilter.onchange = () => {
+        catalogCache.geFilter = geFilter.value;
+        renderGe();
+      };
+    }
+
+    const collectBtn = el.querySelector('[data-ge-collect]');
+    if (collectBtn) {
+      collectBtn.onclick = async () => {
+        collectBtn.disabled = true;
+        collectBtn.textContent = '⏳ 采集中…（约 30~60 秒）';
+        try {
+          const r = await api('/api/catalog/goods-effect/collect', 'POST');
+          if (r.ok) toast(`采集成功，共 ${r.count} 条`);
+          else toast('采集失败：' + (r.error || '未知'));
+        } catch (err) { toast(err.message); }
+        collectBtn.disabled = false;
+        collectBtn.textContent = '🔄 采集最新数据';
+        renderCatalog();
+      };
+    }
+  }
+
+  // 订单记录（按平台 + 店铺层级分组）
   const ordersEl = $('#catalog-orders');
   if (ordersEl) {
-    ordersEl.innerHTML = catalogCache.orders.length
-      ? `<div class="table-wrap"><table>
-          <thead><tr><th>订单号</th><th>状态</th><th>商品规格</th><th>实付</th><th>实收</th><th>支付时间</th><th>售后</th></tr></thead>
-          <tbody>${catalogCache.orders.map(o => `
+    if (!catalogCache.orders.length) {
+      ordersEl.innerHTML = '<div class="empty">暂无订单数据</div>';
+    } else {
+      // shop_id -> {platform, shop}
+      const shopMeta = {};
+      for (const pl of tree) {
+        for (const sh of (pl.shops || [])) {
+          shopMeta[sh.id] = { platform: pl.name, shop: sh.name };
+        }
+      }
+      // 按 shop_id 分组
+      const byShop = {};
+      for (const o of catalogCache.orders) {
+        const sid = o.shop_id || 0;
+        (byShop[sid] = byShop[sid] || []).push(o);
+      }
+      // 按平台分组
+      const byPlatform = {};
+      for (const [sid, os] of Object.entries(byShop)) {
+        const meta = shopMeta[sid] || { platform: '未分类', shop: '未知店铺' };
+        (byPlatform[meta.platform] = byPlatform[meta.platform] || []).push({ shop: meta.shop, orders: os });
+      }
+
+      const orderTable = os => {
+        const MAX = 100;
+        const shown = os.slice(0, MAX);
+        const more = os.length - MAX;
+        return `
+        ${more > 0 ? `<div class="orders-more">仅显示最近 ${MAX} 单，共 ${os.length} 单（用「⬇ 订单」导出全部）</div>` : ''}
+        <div class="table-wrap"><table>
+          <thead><tr><th>订单号</th><th>状态</th><th>商品规格</th><th>省</th><th>市</th><th>区</th><th>实付</th><th>实收</th><th>快递公司</th><th>快递单号</th><th>支付时间</th><th>售后</th></tr></thead>
+          <tbody>${shown.map(o => `
             <tr>
-              <td>${esc(o.order_no)}</td>
+              <td class="orders-no">${esc(o.order_no)}</td>
               <td>${esc(o.status)}</td>
               <td>${esc(o.spec)}</td>
+              <td>${esc(o.province || '')}</td>
+              <td>${esc(o.city || '')}</td>
+              <td>${esc(o.district || '')}</td>
               <td>¥${fmt(o.buyer_amount)}</td>
               <td>¥${fmt(o.seller_amount)}</td>
+              <td>${esc(o.courier || '')}</td>
+              <td class="orders-no">${esc(o.tracking_no || '')}</td>
               <td>${esc(o.pay_time)}</td>
               <td>${esc(o.aftersale_status)}</td>
             </tr>`).join('')}
-          </tbody></table></div>`
-      : '<div class="empty">暂无订单数据</div>';
+          </tbody></table></div>`;
+        };
+
+      ordersEl.innerHTML = Object.entries(byPlatform).map(([pname, shops]) => `
+        <div class="orders-platform">
+          <div class="orders-platform-head"><h4>🛒 ${esc(pname)}</h4></div>
+          ${shops.map(sg => `
+            <div class="orders-shop">
+              <div class="orders-shop-head"><h5>🏪 ${esc(sg.shop)} <span class="badge">${sg.orders.length} 单</span></h5></div>
+              ${orderTable(sg.orders)}
+            </div>`).join('')}
+        </div>`).join('');
+    }
   }
 }
 

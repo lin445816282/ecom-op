@@ -402,7 +402,7 @@ class Handler(BaseHTTPRequestHandler):
                             round(pr.margin,4), pr.refund_rate, pr.break_even_roi, pr.target_roi,
                             pr.ad_cost, pr.ad_spend, pr.orders, pr.impressions, pr.clicks, pr.sold,
                             cm["ctr"], cm["cvr"], pr.suggested_daily_budget, it.get("notes","")])
-            body = ("\ufeff" + out.getvalue()).encode("utf-8-sig")
+            body = out.getvalue().encode("utf-8-sig")
             self.send_response(200)
             self.send_header("Content-Type", "text/csv; charset=utf-8")
             self.send_header("Content-Disposition", 'attachment; filename="products.csv"')
@@ -505,13 +505,49 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/catalog/analysis" and self.command == "GET":
             return _json(self, catalog.catalog_analysis())
 
+        if path == "/api/catalog/performance" and self.command == "GET":
+            return _json(self, catalog.catalog_performance())
+
+        if path == "/api/catalog/product/cost" and self.command == "POST":
+            item = self._read_body()
+            shop_id = int(item.get("shop_id") or 0)
+            ppid = item.get("platform_product_id", "")
+            cost = item.get("cost_price")
+            if cost == "" or cost is None:
+                cost = None
+            elif isinstance(cost, str):
+                cost = float(cost)
+            ok = catalog.update_product_cost(shop_id, ppid, cost)
+            return _json(self, {"ok": ok})
+
+        if path == "/api/catalog/product/status" and self.command == "POST":
+            item = self._read_body()
+            shop_id = int(item.get("shop_id") or 0)
+            ppid = item.get("platform_product_id", "")
+            status = item.get("status", "") or ""
+            try:
+                ok = catalog.update_product_status(shop_id, ppid, status)
+            except ValueError as e:
+                return _json(self, {"error": str(e)}, 400)
+            return _json(self, {"ok": ok})
+
+        if path == "/api/catalog/selection" and self.command == "GET":
+            return _json(self, catalog.selection_analysis())
+
+        if path == "/api/catalog/promotions-analysis" and self.command == "GET":
+            return _json(self, catalog.promotions_analysis())
+
+        if path == "/api/catalog/low-stock" and self.command == "GET":
+            threshold = int(qs.get("threshold", ["10"])[0] or 10)
+            return _json(self, {"items": catalog.low_stock(threshold)})
+
         if path == "/api/catalog/export" and self.command == "GET":
             etype = qs.get("type", ["products"])[0]
             try:
                 filename, content = catalog.export_csv(etype)
             except ValueError as e:
                 return _json(self, {"error": str(e)}, 400)
-            body = ("\ufeff" + content).encode("utf-8-sig")
+            body = content.encode("utf-8-sig")
             self.send_response(200)
             self.send_header("Content-Type", "text/csv; charset=utf-8")
             self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quote(filename)}")
@@ -519,6 +555,98 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+
+        if path == "/api/catalog/import" and self.command == "POST":
+            body = self._read_body()
+            etype = body.get("type", "")
+            shop_id = int(body.get("shop_id") or 0)
+            csv_text = body.get("csv", "")
+            try:
+                result = catalog.import_csv(etype, shop_id, csv_text)
+                return _json(self, {"ok": True, **result})
+            except ValueError as e:
+                return _json(self, {"ok": False, "error": str(e)}, 400)
+            except Exception as e:
+                return _json(self, {"ok": False, "error": str(e)}, 500)
+
+        if path == "/api/catalog/template" and self.command == "GET":
+            etype = qs.get("type", ["products"])[0]
+            try:
+                filename, content = catalog.template_csv(etype)
+            except ValueError as e:
+                return _json(self, {"error": str(e)}, 400)
+            body = content.encode("utf-8-sig")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/csv; charset=utf-8")
+            self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quote(filename)}")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        # 修改记录（不改动原始商品/SKU，仅记录待导出）
+        if path == "/api/catalog/modifications" and self.command == "POST":
+            item = self._read_body()
+            shop_id = int(item.get("shop_id") or 0)
+            platform_product_id = (item.get("platform_product_id") or "").strip()
+            platform_sku_id = (item.get("platform_sku_id") or "").strip()
+            field = (item.get("field") or "").strip()
+            new_value = item.get("new_value")
+            new_value = "" if new_value is None else str(new_value).strip()
+            if not shop_id or not platform_product_id or not field:
+                return _json(self, {"error": "参数不完整"}, 400)
+            if field not in ("title", "code", "dan_price", "pin_price", "stock"):
+                return _json(self, {"error": f"非法字段: {field}"}, 400)
+            if field in ("dan_price", "pin_price", "stock") and not platform_sku_id:
+                return _json(self, {"error": "价格/库存修改需要 SKUID"}, 400)
+            ok = catalog.add_modification(shop_id, platform_product_id, field, new_value, platform_sku_id)
+            return _json(self, {"ok": ok, "count": catalog.modification_count(shop_id)})
+
+        if path == "/api/catalog/modifications" and self.command == "GET":
+            shop_id = qs.get("shop_id", [None])[0]
+            return _json(self, {"items": catalog.list_modifications(int(shop_id) if shop_id else None)})
+
+        if path == "/api/catalog/modifications/counts" and self.command == "GET":
+            shop_id = qs.get("shop_id", [None])[0]
+            return _json(self, catalog.modification_counts(int(shop_id) if shop_id else None))
+
+        if path == "/api/catalog/modifications/mark-done" and self.command == "POST":
+            item = self._read_body()
+            field = (item.get("field") or "").strip()
+            shop_id = int(item.get("shop_id") or 0)
+            if field not in ("title", "code", "price", "stock"):
+                return _json(self, {"error": f"非法字段: {field}"}, 400)
+            n = catalog.mark_modifications_done(field, shop_id or None)
+            return _json(self, {"ok": True, "done": n})
+
+        if path == "/api/catalog/modifications/clear" and self.command == "POST":
+            shop_id = qs.get("shop_id", [None])[0]
+            n = catalog.clear_modifications(int(shop_id) if shop_id else None)
+            return _json(self, {"ok": True, "cleared": n})
+
+        if path.startswith("/api/catalog/modifications/") and self.command == "DELETE":
+            mid = int(path.split("/")[-1])
+            ok = catalog.delete_modification(mid)
+            return _json(self, {"ok": ok}, 200 if ok else 404)
+
+        # 商品访问明细（拼多多商品数据·商品明细）
+        if path == "/api/catalog/goods-effect" and self.command == "GET":
+            return _json(self, {"items": catalog.list_goods_effect()})
+
+        if path == "/api/catalog/goods-effect/collect" and self.command == "POST":
+            import subprocess
+            script = os.path.join(BASE_DIR, "collect_goods_effect.py")
+            py = "/home/xiaolin/projects/aa-books/backend/.venv/bin/python"
+            try:
+                r = subprocess.run([py, script], capture_output=True, text=True, timeout=180)
+                lines = [ln for ln in (r.stdout or "").strip().splitlines() if ln.strip().startswith("{")]
+                if lines:
+                    return _json(self, json.loads(lines[-1]))
+                return _json(self, {"ok": False, "error": (r.stderr or r.stdout or "无输出")[:300]}, 500)
+            except subprocess.TimeoutExpired:
+                return _json(self, {"ok": False, "error": "采集超时（180s）"}, 500)
+            except Exception as e:
+                return _json(self, {"ok": False, "error": str(e)}, 500)
 
         # 静态页面
         if path in ("/", "/index.html") and self.command == "GET":
@@ -601,6 +729,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    catalog.init_db()  # 每次启动执行幂等迁移（补缺失列）
     server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     print(f"运营工作台已启动：http://127.0.0.1:{PORT}")
     print("按 Ctrl+C 停止。")
