@@ -284,11 +284,119 @@ def parse_orders_csv(path: str) -> list[dict]:
                 "seller_amount": _to_float(row.get("商家实收金额(元)")),
                 "tracking_no": row.get("快递单号", "").strip(),
                 "courier": row.get("快递公司", "").strip(),
+                "province": row.get("省", "").strip(),
+                "city": row.get("市", "").strip(),
+                "district": row.get("区", "").strip(),
+                "source": row.get("订单来源", "").strip(),
             })
     return rows
 
 
+# ----------------------------- 价格/库存快照导入 -----------------------------
+
+# 拼多多「商品列表批量导出」快照的列名映射（关键词包含匹配，按精确度排序）
+PRICE_STOCK_COLUMNS = {
+    "platform_product_id": ["商品ID", "商品id", "goods_id", "商品编号"],
+    "platform_sku_id": ["SKUID", "sku_id", "SKU_ID", "规格ID", "skuID"],
+    "spec_code": ["规格编码", "SKU编码", "sku编码", "商家编码"],
+    "spec_name": ["规格名称", "SKU名称", "sku名称", "规格"],
+    "dan_price": ["单买价", "单卖价", "销售价", "商品价格", "现价", "售价"],
+    "pin_price": ["拼单价", "团购价", "拼团价", "拼团价格"],
+    "stock": ["可售库存", "库存数量", "可用库存", "总库存", "库存量", "库存"],
+}
+
+
+def detect_columns(header: list) -> dict:
+    """自动识别表头，返回 {field: column_index}。找不到的字段不返回。"""
+    mapping = {}
+    for i, h in enumerate(header):
+        h_clean = str(h or "").strip().lower()
+        for field, keywords in PRICE_STOCK_COLUMNS.items():
+            if field in mapping:
+                continue
+            if any(kw.lower() in h_clean for kw in keywords):
+                mapping[field] = i
+                break
+    return mapping
+
+
+def _read_csv_rows(path: str) -> list[list]:
+    """读取 CSV（含 BOM + 制表符脏数据），返回 list[list]。"""
+    import csv
+    rows = []
+    with open(path, "r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.reader(f)
+        for raw in reader:
+            cells = [(c or "").strip().replace("\t", "").strip() for c in raw]
+            if not any(cells):
+                continue
+            rows.append(cells)
+    return rows
+
+
+def parse_price_stock_file(path: str) -> list[dict]:
+    """解析价格/库存快照（xlsx 或 csv），自动识别列，返回 updates。
+
+    updates: [{platform_product_id, platform_sku_id, spec_code, spec_name,
+               dan_price, pin_price, stock}]
+    """
+    ext = os.path.splitext(path)[1].lower()
+    if ext in (".xlsx", ".xls"):
+        rows = read_sheet_rows(path)
+    elif ext == ".csv":
+        rows = _read_csv_rows(path)
+    else:
+        raise ValueError(f"不支持的文件格式: {ext}")
+    if not rows:
+        return []
+    cols = detect_columns(rows[0])
+
+    def get(row, field):
+        i = cols.get(field)
+        if i is None or i >= len(row):
+            return None
+        return row[i]
+
+    updates = []
+    for row in rows[1:]:
+        if not row:
+            continue
+        pid = _clean(get(row, "platform_product_id"))
+        if not pid:
+            continue
+        updates.append({
+            "platform_product_id": pid,
+            "platform_sku_id": _clean(get(row, "platform_sku_id")),
+            "spec_code": _clean(get(row, "spec_code")),
+            "spec_name": _clean(get(row, "spec_name")),
+            "dan_price": _to_float(get(row, "dan_price")),
+            "pin_price": _to_float(get(row, "pin_price")),
+            "stock": _to_int(get(row, "stock")),
+        })
+    return updates
+
+
+def import_price_stock(path: str, shop_id: int = 1) -> dict:
+    """一键导入价格/库存快照：解析 → 幂等更新。返回统计。"""
+    updates = parse_price_stock_file(path)
+    result = catalog.import_sku_prices(shop_id, updates)
+    result["parsed"] = len(updates)
+    result["columns_detected"] = detect_columns(
+        (read_sheet_rows(path) if path.lower().endswith((".xlsx", ".xls"))
+         else _read_csv_rows(path))[0]
+    )
+    return result
+
+
 if __name__ == "__main__":
+    if "--price-stock" in sys.argv:
+        i = sys.argv.index("--price-stock")
+        path = sys.argv[i + 1]
+        r = import_price_stock(path)
+        print("=== 价格/库存快照导入完成 ===")
+        for k, v in r.items():
+            print(f"  {k}: {v}")
+        sys.exit(0)
     result = import_all(reset="--reset" in sys.argv)
     print("=== 导入完成 ===")
     for k, v in result.items():

@@ -83,6 +83,10 @@ CREATE TABLE IF NOT EXISTS orders (
     seller_amount REAL,
     tracking_no TEXT DEFAULT '',
     courier TEXT DEFAULT '',
+    province TEXT DEFAULT '',
+    city TEXT DEFAULT '',
+    district TEXT DEFAULT '',
+    source TEXT DEFAULT '',
     created_at TEXT DEFAULT (datetime('now','localtime')),
     FOREIGN KEY(shop_id) REFERENCES shops(id)
 );
@@ -129,6 +133,16 @@ def init_db() -> None:
     with closing(_conn()) as c:
         c.executescript(SCHEMA)
         c.commit()
+        _migrate(c)
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """幂等迁移：为已存在的旧表补充缺失列。"""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(orders)").fetchall()}
+    for name in ("province", "city", "district", "source"):
+        if name not in cols:
+            conn.execute(f"ALTER TABLE orders ADD COLUMN {name} TEXT DEFAULT ''")
+    conn.commit()
 
 
 # ----------------------------- 平台 / 店铺 -----------------------------
@@ -303,14 +317,19 @@ def import_orders(shop_id: int, orders: list[dict]) -> int:
             conn.execute(
                 "INSERT INTO orders(shop_id, order_no, status, quantity, pay_time, confirm_time, "
                 "product_id, platform_product_id, spec, aftersale_status, buyer_amount, "
-                "seller_amount, tracking_no, courier) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "seller_amount, tracking_no, courier, province, city, district, source) "
+                "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(order_no) DO UPDATE SET status=excluded.status, "
-                "buyer_amount=excluded.buyer_amount, seller_amount=excluded.seller_amount",
+                "buyer_amount=excluded.buyer_amount, seller_amount=excluded.seller_amount, "
+                "province=excluded.province, city=excluded.city, district=excluded.district, "
+                "source=excluded.source",
                 (shop_id, o.get("order_no", ""), o.get("status", ""),
                  o.get("quantity", 0), o.get("pay_time", ""), o.get("confirm_time", ""),
                  pid, o.get("platform_product_id", ""), o.get("spec", ""),
                  o.get("aftersale_status", ""), o.get("buyer_amount"), o.get("seller_amount"),
-                 o.get("tracking_no", ""), o.get("courier", "")),
+                 o.get("tracking_no", ""), o.get("courier", ""),
+                 o.get("province", ""), o.get("city", ""), o.get("district", ""),
+                 o.get("source", "")),
             )
             n += 1
         conn.commit()
@@ -350,6 +369,64 @@ def import_promotions(shop_id: int, promos: list[dict]) -> int:
             n += 1
         conn.commit()
         return n
+    finally:
+        conn.close()
+
+
+# ----------------------------- 价格/库存快照更新 -----------------------------
+
+def import_sku_prices(shop_id: int, updates: list[dict]) -> dict:
+    """批量更新 SKU 价格/库存（幂等，只覆盖非空值，保留已有数据）。
+
+    用于「商品快照」导出（商品列表批量导出）的价格/库存回填，
+    与「修改模板」不同，快照里含真实当前价格与库存。
+
+    updates: [{platform_product_id, platform_sku_id, spec_code, spec_name,
+               dan_price, pin_price, stock}]
+    匹配优先级：platform_sku_id → spec_code → spec_name（同一商品下）。
+    返回 {"updated": n, "skipped": n}。
+    """
+    conn = _conn()
+    try:
+        pid_map = dict(conn.execute(
+            "SELECT platform_product_id, id FROM products WHERE shop_id=?", (shop_id,)
+        ).fetchall())
+        sku_rows = conn.execute(
+            "SELECT s.id, s.product_id, s.platform_sku_id, s.spec_code, s.spec_name "
+            "FROM skus s JOIN products p ON p.id=s.product_id WHERE p.shop_id=?", (shop_id,)
+        ).fetchall()
+        by_skuid = {}
+        by_code = {}
+        by_name = {}
+        for r in sku_rows:
+            pid = r["product_id"]
+            if r["platform_sku_id"]:
+                by_skuid[(pid, r["platform_sku_id"])] = r["id"]
+            if r["spec_code"]:
+                by_code[(pid, r["spec_code"])] = r["id"]
+            if r["spec_name"]:
+                by_name[(pid, r["spec_name"])] = r["id"]
+
+        updated = skipped = 0
+        for u in updates:
+            product_id = pid_map.get(u.get("platform_product_id"))
+            if product_id is None:
+                skipped += 1
+                continue
+            sku_rowid = (by_skuid.get((product_id, u.get("platform_sku_id")))
+                         or by_code.get((product_id, u.get("spec_code")))
+                         or by_name.get((product_id, u.get("spec_name"))))
+            if sku_rowid is None:
+                skipped += 1
+                continue
+            conn.execute(
+                "UPDATE skus SET dan_price=COALESCE(?, dan_price), "
+                "pin_price=COALESCE(?, pin_price), stock=COALESCE(?, stock) WHERE id=?",
+                (u.get("dan_price"), u.get("pin_price"), u.get("stock"), sku_rowid),
+            )
+            updated += 1
+        conn.commit()
+        return {"updated": updated, "skipped": skipped}
     finally:
         conn.close()
 
@@ -539,13 +616,15 @@ def export_csv(etype: str) -> tuple:
             return "SKU列表.csv", out.getvalue()
 
         if etype == "orders":
-            w.writerow(["订单号", "订单状态", "商品数量", "支付时间", "确认收货时间", "商品ID",
-                        "商品规格", "售后状态", "用户实付金额", "商家实收金额", "快递单号", "快递公司"])
+            w.writerow(["订单号", "订单状态", "商品数量(件)", "支付时间", "确认收货时间", "商品id",
+                        "商品规格", "售后状态", "用户实付金额(元)", "商家实收金额(元)", "快递单号", "快递公司",
+                        "省", "市", "区", "订单来源"])
             for r in c.execute("SELECT * FROM orders ORDER BY pay_time DESC").fetchall():
                 w.writerow([r["order_no"], r["status"], r["quantity"], r["pay_time"], r["confirm_time"],
                             r["platform_product_id"], r["spec"], r["aftersale_status"],
                             _v(r["buyer_amount"]), _v(r["seller_amount"]),
-                            r["tracking_no"], r["courier"]])
+                            r["tracking_no"], r["courier"],
+                            r["province"], r["city"], r["district"], r["source"]])
             return "订单.csv", out.getvalue()
 
         if etype == "promotions":

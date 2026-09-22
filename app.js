@@ -801,6 +801,7 @@ function paintCatalog() {
                 <span class="tag gray">${esc(sku.spec_code || '')}</span>
                 <span class="sku-price">单买价 ${sku.dan_price != null ? fmt(sku.dan_price) : '<i class="muted">未填</i>'}</span>
                 <span class="sku-price">拼单价 ${sku.pin_price != null ? fmt(sku.pin_price) : '<i class="muted">未填</i>'}</span>
+                <span class="sku-price">库存 ${sku.stock != null ? sku.stock : '<i class="muted">未填</i>'}</span>
               </div>`).join('')
           : '<div class="empty">无 SKU</div>';
       } catch (err) {
