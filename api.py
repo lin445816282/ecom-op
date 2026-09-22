@@ -5,7 +5,7 @@ from __future__ import annotations
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, quote
 
 import data
 import catalog
@@ -504,6 +504,21 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/catalog/analysis" and self.command == "GET":
             return _json(self, catalog.catalog_analysis())
+
+        if path == "/api/catalog/export" and self.command == "GET":
+            etype = qs.get("type", ["products"])[0]
+            try:
+                filename, content = catalog.export_csv(etype)
+            except ValueError as e:
+                return _json(self, {"error": str(e)}, 400)
+            body = ("\ufeff" + content).encode("utf-8-sig")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/csv; charset=utf-8")
+            self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quote(filename)}")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
 
         # 静态页面
         if path in ("/", "/index.html") and self.command == "GET":

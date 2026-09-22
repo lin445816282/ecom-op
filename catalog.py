@@ -501,3 +501,62 @@ def catalog_analysis() -> dict:
             "top_skus": [dict(r) for r in top],
             "series": series,
         }
+
+
+# ----------------------------- 导出 CSV -----------------------------
+
+def export_csv(etype: str) -> tuple:
+    """导出数据为 CSV，返回 (文件名, CSV内容)。etype: products/skus/orders/promotions。"""
+    import csv
+    import io
+    out = io.StringIO()
+    w = csv.writer(out)
+
+    def _v(x):
+        return "" if x is None else x
+
+    with closing(_conn()) as c:
+        if etype == "products":
+            w.writerow(["商品ID", "商品名称", "货号编码", "SKU数"])
+            for r in c.execute(
+                "SELECT p.platform_product_id, p.name, p.code, "
+                "(SELECT COUNT(*) FROM skus s WHERE s.product_id=p.id) AS sku_count "
+                "FROM products p ORDER BY p.id"
+            ).fetchall():
+                w.writerow([r["platform_product_id"], r["name"], r["code"], r["sku_count"]])
+            return "商品列表.csv", out.getvalue()
+
+        if etype == "skus":
+            w.writerow(["商品ID", "商品名称", "SKUID", "规格名称", "规格编码", "单买价", "拼单价", "库存"])
+            for r in c.execute(
+                "SELECT p.platform_product_id, p.name, s.platform_sku_id, s.spec_name, "
+                "s.spec_code, s.dan_price, s.pin_price, s.stock "
+                "FROM skus s JOIN products p ON p.id=s.product_id ORDER BY p.id, s.id"
+            ).fetchall():
+                w.writerow([r["platform_product_id"], r["name"], r["platform_sku_id"],
+                            r["spec_name"], r["spec_code"],
+                            _v(r["dan_price"]), _v(r["pin_price"]), _v(r["stock"])])
+            return "SKU列表.csv", out.getvalue()
+
+        if etype == "orders":
+            w.writerow(["订单号", "订单状态", "商品数量", "支付时间", "确认收货时间", "商品ID",
+                        "商品规格", "售后状态", "用户实付金额", "商家实收金额", "快递单号", "快递公司"])
+            for r in c.execute("SELECT * FROM orders ORDER BY pay_time DESC").fetchall():
+                w.writerow([r["order_no"], r["status"], r["quantity"], r["pay_time"], r["confirm_time"],
+                            r["platform_product_id"], r["spec"], r["aftersale_status"],
+                            _v(r["buyer_amount"]), _v(r["seller_amount"]),
+                            r["tracking_no"], r["courier"]])
+            return "订单.csv", out.getvalue()
+
+        if etype == "promotions":
+            w.writerow(["商品ID", "商品名称", "推广场景", "推广名称", "出价方式", "分组", "时段",
+                        "成交花费", "交易额", "实际投产比", "总花费", "净成交笔数", "曝光量", "点击量"])
+            for r in c.execute("SELECT * FROM promotions ORDER BY id").fetchall():
+                w.writerow([r["platform_product_id"], r["product_name"], r["scene"], r["plan_name"],
+                            r["bid_type"], r["group_name"], r["period"],
+                            _v(r["deal_spend"]), _v(r["deal_amount"]), _v(r["actual_roi"]),
+                            _v(r["total_spend"]), _v(r["net_deal_count"]),
+                            _v(r["impressions"]), _v(r["clicks"])])
+            return "推广.csv", out.getvalue()
+
+        raise ValueError(f"未知导出类型: {etype}")

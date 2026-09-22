@@ -214,7 +214,8 @@ textarea { min-height: 70px; resize: vertical; }
 .catalog-platform { margin-bottom: 24px; }
 .catalog-platform-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
 .catalog-platform-head h3 { font-size: 17px; margin: 0; display: flex; align-items: center; gap: 8px; }
-.catalog-toolbar { margin-bottom: 14px; }
+.catalog-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+.catalog-export-group { display: flex; gap: 6px; flex-wrap: wrap; }
 .catalog-shop { margin: 0 0 18px 16px; padding-left: 14px; border-left: 3px solid var(--line); }
 .catalog-shop-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
 .catalog-shop-head h4 { font-size: 15px; margin: 0; display: flex; align-items: center; gap: 8px; }

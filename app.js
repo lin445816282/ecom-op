@@ -658,7 +658,15 @@ function paintCatalog() {
 
   const body = $('#catalog-body');
   let bodyHtml = '';
-  bodyHtml += `<div class="catalog-toolbar"><button class="btn primary sm" data-add-platform>＋ 新增平台</button></div>`;
+  bodyHtml += `<div class="catalog-toolbar">
+    <button class="btn primary sm" data-add-platform>＋ 新增平台</button>
+    <span class="catalog-export-group">
+      <button class="btn sm" data-export="products" title="导出商品列表 CSV">⬇ 商品表</button>
+      <button class="btn sm" data-export="skus" title="导出 SKU 价格库存 CSV">⬇ SKU表</button>
+      <button class="btn sm" data-export="orders" title="导出订单 CSV">⬇ 订单</button>
+      <button class="btn sm" data-export="promotions" title="导出推广 CSV">⬇ 推广</button>
+    </span>
+  </div>`;
   for (const pl of tree) {
     bodyHtml += `<div class="catalog-platform">
       <div class="catalog-platform-head">
@@ -719,6 +727,11 @@ function paintCatalog() {
     try { await api('/api/catalog/platforms', 'POST', { code: r.code, name: r.name }); toast('平台已新增'); reload(); }
     catch (err) { toast(err.message); }
   };
+
+  // 导出按钮
+  body.querySelectorAll('[data-export]').forEach(b => b.onclick = () => {
+    window.open(BASE + `/api/catalog/export?type=${b.dataset.export}`, '_blank');
+  });
 
   body.querySelectorAll('[data-add-shop]').forEach(b => b.onclick = async () => {
     const r = await promptDialog([{ key: 'name', label: '店铺名称', placeholder: '如 欧世艺' }], { title: '新增店铺' });
