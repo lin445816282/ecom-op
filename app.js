@@ -956,6 +956,8 @@ function paintCatalog() {
   if (perf && perf.summary) {
     const sm = perf.summary || {};
     const top = perf.top_products || [];
+    const topShown = top.slice(0, 10);
+    const topRest = top.slice(10);
     const daily = perf.daily_trend || [];
     const regions = perf.regions || [];
     const maxAmt = Math.max(...daily.map(d => d.amount || 0), 1);
@@ -974,14 +976,25 @@ function paintCatalog() {
       </div>
       <div class="perf-cols">
         <div class="perf-col">
-          <h4>🏆 商品销量 TOP</h4>
-          ${top.length ? top.slice(0, 10).map((t, i) => `
+          <h4>🏆 商品销量 TOP${topRest.length ? `<span class="perf-hint">共 ${top.length} 个</span>` : ''}</h4>
+          ${topShown.length ? topShown.map((t, i) => `
             <div class="perf-rank">
               <span class="perf-rk">${i + 1}</span>
               <span class="perf-name" title="${esc(t.name)}">${esc((t.name || '').slice(0, 13))}${(t.name || '').length > 13 ? '…' : ''}${t.code ? ' <em>' + esc(t.code) + '</em>' : ''}</span>
               <span class="perf-amt">¥${fmt(t.amount)}</span>
               <span class="perf-odr">${t.orders}单</span>
             </div>`).join('') : '<div class="empty">暂无订单</div>'}
+          ${topRest.length ? `
+            <button class="daily-more-btn" data-toggle-top data-count="${topRest.length}">展开其余 ${topRest.length} 个商品 ▾</button>
+            <div class="top-rest" hidden>
+              ${topRest.map((t, i) => `
+                <div class="perf-rank">
+                  <span class="perf-rk">${i + 11}</span>
+                  <span class="perf-name" title="${esc(t.name)}">${esc((t.name || '').slice(0, 13))}${(t.name || '').length > 13 ? '…' : ''}${t.code ? ' <em>' + esc(t.code) + '</em>' : ''}</span>
+                  <span class="perf-amt">¥${fmt(t.amount)}</span>
+                  <span class="perf-odr">${t.orders}单</span>
+                </div>`).join('')}
+            </div>` : ''}
         </div>
         <div class="perf-col">
           <h4>📅 日趋势 <span class="perf-hint">金额 TOP${dailyTop.length}</span></h4>
@@ -1135,6 +1148,18 @@ function paintCatalog() {
       const willOpen = rest.hidden;
       rest.hidden = !willOpen;
       dailyToggle.textContent = willOpen ? '收起 ▴' : `展开其余 ${dailyToggle.dataset.count || ''} 天 ▾`;
+    };
+  }
+
+  // 商品销量 TOP 折叠切换
+  const topToggle = el.querySelector('[data-toggle-top]');
+  if (topToggle) {
+    topToggle.onclick = () => {
+      const rest = el.querySelector('.top-rest');
+      if (!rest) return;
+      const willOpen = rest.hidden;
+      rest.hidden = !willOpen;
+      topToggle.textContent = willOpen ? '收起 ▴' : `展开其余 ${topToggle.dataset.count || ''} 个商品 ▾`;
     };
   }
 

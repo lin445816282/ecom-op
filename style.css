@@ -496,7 +496,7 @@ textarea { min-height: 72px; resize: vertical; }
   transition: .15s;
 }
 .daily-more-btn:hover { background: var(--brand-soft); border-color: #c7d2fe; }
-.daily-rest { border-top: 1px dashed var(--line); margin-top: 6px; padding-top: 6px; }
+.daily-rest, .top-rest { border-top: 1px dashed var(--line); margin-top: 6px; padding-top: 6px; }
 
 /* ==========================================================================
    CSV 导入弹窗
