@@ -451,7 +451,9 @@ textarea { min-height: 72px; resize: vertical; }
 .orders-platform-head h4 { font-size: 15px; margin: 0 0 8px; font-weight: 700; }
 .orders-shop { margin-left: 14px; padding-left: 14px; border-left: 3px solid #c7d2fe; margin-bottom: 14px; }
 .orders-shop:last-child { margin-bottom: 0; }
-.orders-shop-head h5 { font-size: 13.5px; margin: 0 0 9px; display: flex; align-items: center; gap: 8px; font-weight: 700; }
+.orders-shop-head { display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; margin-bottom: 9px; }
+.orders-shop-head h5 { font-size: 13.5px; margin: 0; display: flex; align-items: center; gap: 8px; font-weight: 700; }
+.orders-shop-fold { font-size: 12px; color: var(--brand); font-weight: 700; transition: transform .15s; flex: 0 0 auto; }
 .orders-no { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; white-space: nowrap; }
 .orders-more { font-size: 12px; color: #b7791f; background: #fffaf0; border: 1px solid #fde9c9; border-radius: 8px; padding: 7px 13px; margin-bottom: 9px; }
 

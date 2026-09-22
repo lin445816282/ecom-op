@@ -1726,10 +1726,27 @@ function paintCatalog() {
           <div class="orders-platform-head"><h4>🛒 ${esc(pname)}</h4></div>
           ${shops.map(sg => `
             <div class="orders-shop">
-              <div class="orders-shop-head"><h5>🏪 ${esc(sg.shop)} <span class="badge">${sg.orders.length} 单</span></h5></div>
-              ${orderTable(sg.orders)}
+              <div class="orders-shop-head" data-toggle-order-shop>
+                <span class="orders-shop-fold">▸</span>
+                <h5>🏪 ${esc(sg.shop)} <span class="badge">${sg.orders.length} 单</span></h5>
+              </div>
+              <div class="orders-shop-body" hidden>
+                ${orderTable(sg.orders)}
+              </div>
             </div>`).join('')}
         </div>`).join('');
+
+      // 订单记录内各店铺折叠切换
+      ordersEl.querySelectorAll('[data-toggle-order-shop]').forEach(t => {
+        t.onclick = () => {
+          const shop = t.closest('.orders-shop');
+          const body = shop.querySelector('.orders-shop-body');
+          const icon = t.querySelector('.orders-shop-fold');
+          const willOpen = body.hidden;
+          body.hidden = !willOpen;
+          icon.textContent = willOpen ? '▾' : '▸';
+        };
+      });
     }
   }
 }
