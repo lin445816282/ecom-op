@@ -676,23 +676,30 @@ function paintCatalog() {
         || (p.code || '').toLowerCase().includes(f));
       bodyHtml += `<div class="catalog-shop">
         <div class="catalog-shop-head">
-          <h4>🏪 ${esc(sh.name)} <span class="badge">${products.length} 商品</span></h4>
+          <div class="catalog-shop-toggle" data-toggle-shop="${sh.id}">
+            <span class="catalog-fold-icon">▸</span>
+            <h4>🏪 ${esc(sh.name)} <span class="badge">${products.length} 商品</span></h4>
+          </div>
           <div class="catalog-head-actions">
             <button class="btn sm" data-rename-shop="${sh.id}" title="重命名店铺">✏️</button>
             <button class="btn sm danger" data-del-shop="${sh.id}" title="删除店铺">🗑️</button>
           </div>
-        </div>`;
-      bodyHtml += `<div class="card-grid">`;
+        </div>
+        <div class="catalog-shop-body" hidden>
+          <div class="catalog-product-list">`;
       for (const p of products) {
         bodyHtml += `
-          <div class="k-card catalog-prod" data-pid="${p.id}">
-            <div class="cat">${esc(p.code || '无货号')} · ${p.sku_count} SKU</div>
-            <h3>${esc(p.name)}</h3>
-            <p class="catalog-id">商品ID <b>${esc(p.platform_product_id)}</b></p>
-            <div class="catalog-sku-list" hidden></div>
-          </div>`;
+            <div class="catalog-prod-row" data-pid="${p.id}">
+              <div class="catalog-prod-main">
+                <span class="prod-code ${p.code ? '' : 'prod-code-empty'}">${esc(p.code || '无货号')}</span>
+                <span class="prod-name" title="${esc(p.name)}">${esc(p.name)}</span>
+                <span class="prod-id">${esc(p.platform_product_id)}</span>
+                <span class="prod-sku-count"><span class="tag blue">${p.sku_count} SKU</span></span>
+              </div>
+              <div class="catalog-sku-list" hidden></div>
+            </div>`;
       }
-      bodyHtml += `</div></div>`;
+      bodyHtml += `</div></div></div>`;
     }
     bodyHtml += `</div>`;
   }
@@ -753,15 +760,26 @@ function paintCatalog() {
     catch (err) { toast(err.message); }
   });
 
-  // 点击商品卡片展开 SKU
-  $$('#catalog-body .catalog-prod').forEach(card => {
-    card.onclick = async () => {
-      const list = card.querySelector('.catalog-sku-list');
+  // 店铺折叠切换
+  body.querySelectorAll('[data-toggle-shop]').forEach(t => t.onclick = () => {
+    const shopDiv = t.closest('.catalog-shop');
+    const shopBody = shopDiv.querySelector('.catalog-shop-body');
+    const icon = t.querySelector('.catalog-fold-icon');
+    const willOpen = shopBody.hidden;
+    shopBody.hidden = !willOpen;
+    icon.textContent = willOpen ? '▾' : '▸';
+  });
+
+  // 点击商品行展开 SKU
+  body.querySelectorAll('.catalog-prod-main').forEach(main => {
+    main.onclick = async () => {
+      const row = main.parentElement;
+      const list = row.querySelector('.catalog-sku-list');
       if (!list.hidden) { list.hidden = true; return; }
       list.hidden = false;
       list.innerHTML = '<div class="catalog-sku-loading">SKU 加载中…</div>';
       try {
-        const r = await api(`/api/catalog/skus?product_id=${card.dataset.pid}`);
+        const r = await api(`/api/catalog/skus?product_id=${row.dataset.pid}`);
         const skus = r.items || [];
         list.innerHTML = skus.length
           ? skus.map(sku => `
