@@ -156,6 +156,27 @@ CREATE TABLE IF NOT EXISTS goods_effect (
 );
 
 CREATE INDEX IF NOT EXISTS idx_ge_product ON goods_effect(platform_product_id);
+
+CREATE TABLE IF NOT EXISTS freight (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_name TEXT DEFAULT '',
+    tracking_no TEXT UNIQUE,
+    courier TEXT DEFAULT '',
+    ship_date TEXT DEFAULT '',
+    province TEXT DEFAULT '',
+    city TEXT DEFAULT '',
+    weight REAL,
+    freight_cost REAL,
+    bill_fee REAL,
+    extra_fee REAL,
+    total REAL,
+    matched_order_no TEXT DEFAULT '',
+    matched_shop_id INTEGER,
+    matched INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_freight_tracking ON freight(tracking_no);
 """
 
 
@@ -477,6 +498,127 @@ def import_sku_prices(shop_id: int, updates: list[dict]) -> dict:
         return {"updated": updated, "skipped": skipped}
     finally:
         conn.close()
+
+
+# ----------------------------- 运费账单 -----------------------------
+
+def import_freight(rows: list[dict]) -> dict:
+    """批量导入运费账单（快递公司账单），导入后自动匹配订单。
+
+    rows: [{tracking_no, account_name, courier, ship_date, province, city,
+            weight, freight_cost, bill_fee, extra_fee, total}]
+    返回 {imported, skipped, matched}。
+    """
+    conn = _conn()
+    try:
+        imported = skipped = 0
+        for r in rows:
+            tn = (r.get("tracking_no") or "").strip()
+            if not tn:
+                skipped += 1
+                continue
+            conn.execute(
+                "INSERT INTO freight(account_name, tracking_no, courier, ship_date, "
+                "province, city, weight, freight_cost, bill_fee, extra_fee, total) "
+                "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(tracking_no) DO UPDATE SET "
+                "account_name=excluded.account_name, courier=excluded.courier, "
+                "ship_date=excluded.ship_date, province=excluded.province, city=excluded.city, "
+                "weight=excluded.weight, freight_cost=excluded.freight_cost, "
+                "bill_fee=excluded.bill_fee, extra_fee=excluded.extra_fee, total=excluded.total",
+                (r.get("account_name", ""), tn, r.get("courier", ""),
+                 r.get("ship_date", ""), r.get("province", ""), r.get("city", ""),
+                 r.get("weight"), r.get("freight_cost"), r.get("bill_fee"),
+                 r.get("extra_fee"), r.get("total")),
+            )
+            imported += 1
+        conn.commit()
+        matched = _match_freight(conn)
+        return {"imported": imported, "skipped": skipped, "matched": matched}
+    finally:
+        conn.close()
+
+
+def _match_freight(conn) -> int:
+    """按 tracking_no 精确匹配 orders，反填 matched_order_no / matched_shop_id。
+    返回本次新匹配数量。"""
+    n = 0
+    rows = conn.execute(
+        "SELECT id, tracking_no FROM freight WHERE matched = 0"
+    ).fetchall()
+    for fr in rows:
+        o = conn.execute(
+            "SELECT order_no, shop_id FROM orders WHERE tracking_no = ? LIMIT 1",
+            (fr["tracking_no"],),
+        ).fetchone()
+        if o:
+            conn.execute(
+                "UPDATE freight SET matched=1, matched_order_no=?, matched_shop_id=? WHERE id=?",
+                (o["order_no"], o["shop_id"], fr["id"]),
+            )
+            n += 1
+    conn.commit()
+    return n
+
+
+def match_freight() -> dict:
+    """重新匹配所有未匹配的运费单（订单数据补齐后调用）。"""
+    with closing(_conn()) as c:
+        n = _match_freight(c)
+        total = c.execute("SELECT COUNT(*) FROM freight").fetchone()[0]
+        matched = c.execute("SELECT COUNT(*) FROM freight WHERE matched=1").fetchone()[0]
+        return {"new_matched": n, "total": total, "matched": matched}
+
+
+def list_freight(limit: int = 5000, unmatched_only: bool = False) -> list[dict]:
+    with closing(_conn()) as c:
+        sql = ("SELECT f.*, s.name AS shop_name FROM freight f "
+               "LEFT JOIN shops s ON s.id = f.matched_shop_id")
+        if unmatched_only:
+            sql += " WHERE f.matched = 0"
+        sql += " ORDER BY f.ship_date DESC LIMIT ?"
+        return [dict(r) for r in c.execute(sql, (limit,)).fetchall()]
+
+
+def freight_analysis() -> dict:
+    """运费账单分析：汇总 + 匹配率 + 月度趋势 + 目的地 + 快递公司。"""
+    with closing(_conn()) as c:
+        total = c.execute("SELECT COUNT(*) FROM freight").fetchone()[0]
+        matched = c.execute("SELECT COUNT(*) FROM freight WHERE matched=1").fetchone()[0]
+        tot_fee = c.execute(
+            "SELECT COALESCE(SUM(total),0) FROM freight").fetchone()[0]
+        tot_fee = round(tot_fee, 2)
+        avg_fee = round(tot_fee / total, 2) if total else 0
+        monthly = c.execute(
+            "SELECT substr(ship_date,1,7) ym, COUNT(*) n, ROUND(SUM(COALESCE(total,0)),2) amt "
+            "FROM freight GROUP BY ym ORDER BY ym"
+        ).fetchall()
+        provs = c.execute(
+            "SELECT province, COUNT(*) n FROM freight WHERE province != '' "
+            "GROUP BY province ORDER BY n DESC LIMIT 10"
+        ).fetchall()
+        couriers = c.execute(
+            "SELECT courier, COUNT(*) n FROM freight WHERE courier != '' "
+            "GROUP BY courier ORDER BY n DESC"
+        ).fetchall()
+        gmv = c.execute(
+            "SELECT COALESCE(SUM(o.buyer_amount),0) FROM freight f "
+            "JOIN orders o ON o.order_no = f.matched_order_no"
+        ).fetchone()[0]
+        gmv = round(gmv, 2)
+        matched_fee = c.execute(
+            "SELECT COALESCE(SUM(total),0) FROM freight WHERE matched=1").fetchone()[0]
+        matched_fee = round(matched_fee, 2)
+        return {
+            "total": total, "matched": matched,
+            "match_rate": round(matched / total * 100, 1) if total else 0,
+            "total_fee": tot_fee, "avg_fee": avg_fee,
+            "matched_gmv": gmv, "matched_fee": matched_fee,
+            "fee_gmv_ratio": round(matched_fee / gmv * 100, 2) if gmv else None,
+            "monthly": [dict(r) for r in monthly],
+            "provinces": [dict(r) for r in provs],
+            "couriers": [dict(r) for r in couriers],
+        }
 
 
 # ----------------------------- 查询 -----------------------------
@@ -1013,6 +1155,21 @@ def export_csv(etype: str) -> tuple:
                             _v(r["total_spend"]), _v(r["net_deal_count"]),
                             _v(r["impressions"]), _v(r["clicks"])])
             return "推广.csv", out.getvalue()
+
+        if etype == "freight":
+            w.writerow(["运单号", "结算对象", "快递公司", "账单日期", "目的地省", "目的地市",
+                        "结算重量", "快递费(元)", "面单费(元)", "附加费(元)", "应结金额(元)",
+                        "匹配订单号", "匹配店铺"])
+            for r in c.execute(
+                "SELECT f.*, s.name AS shop_name FROM freight f "
+                "LEFT JOIN shops s ON s.id = f.matched_shop_id ORDER BY f.ship_date DESC"
+            ).fetchall():
+                w.writerow([r["tracking_no"], r["account_name"], r["courier"], r["ship_date"],
+                            r["province"], r["city"],
+                            _v(r["weight"]), _v(r["freight_cost"]), _v(r["bill_fee"]),
+                            _v(r["extra_fee"]), _v(r["total"]),
+                            r["matched_order_no"], r["shop_name"] or ""])
+            return "运费账单.csv", out.getvalue()
 
         raise ValueError(f"未知导出类型: {etype}")
 

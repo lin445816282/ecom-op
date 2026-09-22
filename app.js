@@ -879,13 +879,13 @@ function renderProducts(editingProduct = null) {
 }
 
 /* ---------------- 商品库（平台 + 电商层级） ---------------- */
-const catalogCache = { tree: [], stats: {}, orders: [], analysis: null, filter: '', mods: [], modCounts: {}, goodsEffect: [], performance: null, promoAnalysis: null, lowStock: [], selection: null, deleteMode: false, perfShop: null };
+const catalogCache = { tree: [], stats: {}, orders: [], analysis: null, filter: '', mods: [], modCounts: {}, goodsEffect: [], performance: null, promoAnalysis: null, lowStock: [], selection: null, freight: null, deleteMode: false, perfShop: null };
 
 async function renderCatalog() {
   const el = $('#view-catalog');
   el.innerHTML = '<div class="empty"><div class="big">📦</div>加载中…</div>';
   try {
-    const [stats, treeResp, ordersResp, analysis, modsResp, countsResp, geResp, perfResp, promoResp, lowResp, selResp] = await Promise.all([
+    const [stats, treeResp, ordersResp, analysis, modsResp, countsResp, geResp, perfResp, promoResp, lowResp, selResp, freightResp] = await Promise.all([
       api('/api/catalog/stats'),
       api('/api/catalog/tree'),
       api('/api/catalog/orders?limit=5000'),
@@ -897,6 +897,7 @@ async function renderCatalog() {
       api('/api/catalog/promotions-analysis'),
       api('/api/catalog/low-stock'),
       api('/api/catalog/selection'),
+      api('/api/catalog/freight'),
     ]);
     catalogCache.stats = stats;
     catalogCache.tree = treeResp.items || [];
@@ -909,6 +910,7 @@ async function renderCatalog() {
     catalogCache.promoAnalysis = promoResp || null;
     catalogCache.lowStock = lowResp.items || [];
     catalogCache.selection = selResp || null;
+    catalogCache.freight = freightResp || null;
     paintCatalog();
   } catch (err) {
     el.innerHTML = `<div class="empty">❌ ${esc(err.message)}</div>`;
@@ -1114,6 +1116,15 @@ function paintCatalog() {
         <span class="orders-panel-hint">销量/访问/毛利/库存/ROI 综合建议</span>
       </div>
       <div class="orders-panel-body" id="catalog-selection" hidden></div>
+    </div>
+    <div class="orders-panel">
+      <div class="orders-panel-head" data-toggle-freight>
+        <span class="orders-fold-icon">▸</span>
+        <span class="orders-panel-title">🚚 运费分析</span>
+        <span class="orders-panel-count">${(catalogCache.freight && catalogCache.freight.total) || 0}</span>
+        <span class="orders-panel-hint">快递账单 + 订单匹配</span>
+      </div>
+      <div class="orders-panel-body" id="catalog-freight" hidden></div>
     </div>`;
 
   el.innerHTML = html;
@@ -1304,6 +1315,57 @@ function paintCatalog() {
               <td class="sel-reason">${esc(r.reason)}</td>
             </tr>`).join('')}
           </tbody></table></div>`;
+    }
+  }
+
+  // 运费分析折叠切换 + 渲染
+  const freightToggle = el.querySelector('[data-toggle-freight]');
+  const freightEl = $('#catalog-freight');
+  if (freightToggle && freightEl) {
+    freightToggle.onclick = () => {
+      const willOpen = freightEl.hidden;
+      freightEl.hidden = !willOpen;
+      freightToggle.querySelector('.orders-fold-icon').textContent = willOpen ? '▾' : '▸';
+    };
+    const fr = catalogCache.freight;
+    if (fr && fr.total > 0) {
+      const provs = (fr.provinces || []).slice(0, 8);
+      const maxProv = provs.length ? provs[0].n : 1;
+      const ratio = fr.fee_gmv_ratio != null ? fr.fee_gmv_ratio + '%' : '—';
+      const unmatched = fr.total - fr.matched;
+      freightEl.innerHTML = `
+        <div class="perf-summary" style="margin-bottom:14px">
+          <div class="perf-card"><div class="p-label">运费单数</div><div class="p-value">${fr.total}</div></div>
+          <div class="perf-card"><div class="p-label">总运费</div><div class="p-value">¥${fmt(fr.total_fee)}</div></div>
+          <div class="perf-card"><div class="p-label">匹配率</div><div class="p-value">${fr.match_rate}%</div></div>
+          <div class="perf-card"><div class="p-label">平均运费</div><div class="p-value">¥${fr.avg_fee}</div></div>
+          <div class="perf-card"><div class="p-label">运费/GMV</div><div class="p-value">${ratio}</div><div class="p-hint">匹配订单口径</div></div>
+        </div>
+        ${unmatched > 0 ? `<div class="callout">⚠️ 还有 ${unmatched} 单运费未匹配到订单（多为对应月份订单尚未导入）。补导订单后点「🔁 重新匹配」。</div>` : `<div class="callout" style="border-color:var(--green)">✅ 全部运费已匹配订单</div>`}
+        <div style="display:flex;gap:8px;margin:10px 0 14px;flex-wrap:wrap">
+          <button class="btn sm" data-freight-rematch>🔁 重新匹配</button>
+          <button class="btn sm" data-freight-export>⬇ 导出运费</button>
+        </div>
+        <h4 style="margin:0 0 8px">🗺️ 目的地省份 TOP</h4>
+        ${provs.length ? provs.map(p => `
+          <div class="perf-bar-row">
+            <span class="perf-date">${esc(p.province)}</span>
+            <div class="perf-bar"><div class="perf-fill" style="width:${Math.max(Math.round(p.n / maxProv * 100), 2)}%"></div></div>
+            <span class="perf-amt">${p.n}单</span>
+          </div>`).join('') : '<div class="empty">暂无</div>'}`;
+      freightEl.querySelector('[data-freight-rematch]').onclick = async () => {
+        try {
+          const r = await api('/api/catalog/freight/match', 'POST');
+          toast(`重新匹配完成：新匹配 ${r.new_matched} 单（共 ${r.matched}/${r.total}）`);
+          catalogCache.freight = await api('/api/catalog/freight');
+          paintCatalog();
+        } catch (err) { toast(err.message); }
+      };
+      freightEl.querySelector('[data-freight-export]').onclick = () => {
+        window.open(BASE + '/api/catalog/export?type=freight', '_blank');
+      };
+    } else {
+      freightEl.innerHTML = '<div class="empty">暂无运费账单。用 import_freight.py 导入快递账单 xlsx。</div>';
     }
   }
 

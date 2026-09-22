@@ -542,6 +542,17 @@ class Handler(BaseHTTPRequestHandler):
             threshold = int(qs.get("threshold", ["10"])[0] or 10)
             return _json(self, {"items": catalog.low_stock(threshold)})
 
+        if path == "/api/catalog/freight" and self.command == "GET":
+            return _json(self, catalog.freight_analysis())
+
+        if path == "/api/catalog/freight/list" and self.command == "GET":
+            unmatched = qs.get("unmatched", ["0"])[0] == "1"
+            limit = int(qs.get("limit", ["5000"])[0] or 5000)
+            return _json(self, {"items": catalog.list_freight(limit, unmatched)})
+
+        if path == "/api/catalog/freight/match" and self.command == "POST":
+            return _json(self, catalog.match_freight())
+
         if path == "/api/catalog/export" and self.command == "GET":
             etype = qs.get("type", ["products"])[0]
             try:
