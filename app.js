@@ -893,7 +893,7 @@ async function renderCatalog() {
       api('/api/catalog/modifications'),
       api('/api/catalog/modifications/counts'),
       api('/api/catalog/goods-effect'),
-      api('/api/catalog/performance'),
+      api('/api/catalog/performance' + (catalogCache.perfShop ? `?shop_id=${catalogCache.perfShop}` : '')),
       api('/api/catalog/promotions-analysis'),
       api('/api/catalog/low-stock'),
       api('/api/catalog/selection'),
@@ -966,7 +966,13 @@ function paintCatalog() {
     const dailyRest = dailySorted.slice(10);
     perfHTML = `
     <div class="perf-panel">
-      <h3 class="perf-title">📊 经营分析</h3>
+      <div class="perf-header">
+        <h3 class="perf-title">📊 经营分析</h3>
+        <select class="perf-shop-filter" data-perf-shop>
+          <option value="" ${!catalogCache.perfShop ? 'selected' : ''}>全部店铺</option>
+          ${tree.flatMap(x => x.shops || []).map(sh => `<option value="${sh.id}" ${catalogCache.perfShop == sh.id ? 'selected' : ''}>${esc(sh.name)}</option>`).join('')}
+        </select>
+      </div>
       <div class="perf-summary">
         <div class="perf-card"><div class="p-label">GMV（实付）</div><div class="p-value">¥${fmt(sm.gmv)}</div></div>
         <div class="perf-card"><div class="p-label">订单数</div><div class="p-value">${sm.order_count}</div></div>
@@ -1127,6 +1133,22 @@ function paintCatalog() {
       const willOpen = ob.hidden;
       ob.hidden = !willOpen;
       icon.textContent = willOpen ? '▾' : '▸';
+    };
+  }
+
+  // 经营分析店铺筛选
+  const perfShopFilter = el.querySelector('[data-perf-shop]');
+  if (perfShopFilter) {
+    perfShopFilter.onchange = async () => {
+      const sid = perfShopFilter.value;
+      catalogCache.perfShop = sid ? parseInt(sid) : null;
+      try {
+        const r = await api('/api/catalog/performance' + (catalogCache.perfShop ? `?shop_id=${catalogCache.perfShop}` : ''));
+        catalogCache.performance = r;
+        paintCatalog();
+      } catch (err) {
+        toast(err.message);
+      }
     };
   }
 

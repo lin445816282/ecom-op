@@ -470,7 +470,15 @@ textarea { min-height: 72px; resize: vertical; }
    经营分析看板
    ========================================================================== */
 .perf-panel { margin-top: 22px; border: 1px solid var(--line); border-radius: var(--radius); background: #fff; padding: 20px 22px; box-shadow: var(--shadow-sm); }
-.perf-title { font-size: 17px; font-weight: 800; color: var(--ink); margin: 0 0 15px; }
+.perf-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 15px; flex-wrap: wrap; }
+.perf-title { font-size: 17px; font-weight: 800; color: var(--ink); margin: 0; }
+.perf-shop-filter {
+  padding: 8px 14px; border: 1px solid var(--line); border-radius: 9px;
+  font-size: 13px; color: var(--ink-2); background: white; cursor: pointer;
+  font-weight: 600; transition: .15s;
+}
+.perf-shop-filter:hover { border-color: #c7d2fe; }
+.perf-shop-filter:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(79, 70, 229, .14); outline: none; }
 .perf-summary { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
 .perf-card { flex: 1 1 150px; min-width: 128px; background: linear-gradient(135deg, #f4f6ff, #fafbff); border-radius: 11px; padding: 14px 16px; border: 1px solid var(--line-soft); }
 .perf-card .p-label { font-size: 12px; color: var(--muted); margin-bottom: 5px; font-weight: 600; }

@@ -632,14 +632,19 @@ def catalog_analysis() -> dict:
         }
 
 
-def catalog_performance() -> dict:
-    """商品库经营分析：销售概览 + 商品销量排行 + 日趋势 + 地区分布 + 售后。"""
+def catalog_performance(shop_id: int = None) -> dict:
+    """商品库经营分析：销售概览 + 商品销量排行 + 日趋势 + 地区分布 + 售后。
+    shop_id 提供时按店铺筛选。
+    """
     with closing(_conn()) as c:
+        w = " WHERE shop_id=?" if shop_id else ""
+        args = [shop_id] if shop_id else []
+
         s = c.execute(
             "SELECT COUNT(*) AS order_count, SUM(buyer_amount) AS gmv, "
             "SUM(seller_amount) AS seller_amt, SUM(quantity) AS item_count, "
             "SUM(CASE WHEN aftersale_status LIKE '%退款%' THEN 1 ELSE 0 END) AS refund_count "
-            "FROM orders"
+            "FROM orders" + w, args
         ).fetchone()
         order_count = s["order_count"] or 0
         gmv = s["gmv"] or 0.0
@@ -652,21 +657,24 @@ def catalog_performance() -> dict:
             "COALESCE(p.name,'') AS name, COALESCE(p.code,'') AS code, "
             "COUNT(*) AS orders, ROUND(SUM(o.buyer_amount),2) AS amount, SUM(o.quantity) AS qty "
             "FROM orders o LEFT JOIN products p ON p.platform_product_id = o.platform_product_id "
-            "GROUP BY o.platform_product_id ORDER BY amount DESC, orders DESC LIMIT 20"
+            + (" WHERE o.shop_id=?" if shop_id else "") +
+            " GROUP BY o.platform_product_id ORDER BY amount DESC, orders DESC LIMIT 20", args
         ).fetchall()]
 
         # 按日趋势
         daily_trend = [dict(r) for r in c.execute(
             "SELECT substr(pay_time,1,10) AS date, COUNT(*) AS orders, "
             "ROUND(SUM(buyer_amount),2) AS amount "
-            "FROM orders WHERE pay_time != '' GROUP BY date ORDER BY date"
+            "FROM orders WHERE pay_time != ''" + (" AND shop_id=?" if shop_id else "") +
+            " GROUP BY date ORDER BY date", args
         ).fetchall()]
 
         # 地区分布 TOP（过滤拼多多脱敏的 ****）
         regions = [dict(r) for r in c.execute(
             "SELECT province, COUNT(*) AS orders, ROUND(SUM(buyer_amount),2) AS amount "
-            "FROM orders WHERE province != '' AND province != '****' "
-            "GROUP BY province ORDER BY orders DESC LIMIT 10"
+            "FROM orders WHERE province != '' AND province != '****'"
+            + (" AND shop_id=?" if shop_id else "") +
+            " GROUP BY province ORDER BY orders DESC LIMIT 10", args
         ).fetchall()]
 
         return {
