@@ -621,6 +621,66 @@ def freight_analysis() -> dict:
         }
 
 
+def freight_match_analysis() -> dict:
+    """运费匹配分析：相同商品+规格+数量的订单，标准运费 vs 异常运费。
+
+    按 (platform_product_id, spec, quantity) 分组，每组找标准运费（众数），
+    标出偏离标准运费的异常单（显示差值/重量/目的地，判断成因）。
+    """
+    from collections import Counter
+    with closing(_conn()) as c:
+        rows = c.execute(
+            "SELECT f.tracking_no, f.total, f.weight, f.province, f.city, "
+            "o.platform_product_id, o.spec, o.quantity, o.order_no "
+            "FROM freight f JOIN orders o ON o.order_no = f.matched_order_no "
+            "WHERE o.spec != ''"
+        ).fetchall()
+        groups = {}
+        for r in rows:
+            key = (r["platform_product_id"], r["spec"], r["quantity"])
+            groups.setdefault(key, []).append(dict(r))
+
+        anomalies = []
+        group_summary = []
+        for (ppid, spec, qty), items in groups.items():
+            fee_counter = Counter(it["total"] for it in items)
+            standard_fee = fee_counter.most_common(1)[0][0]
+            n = len(items)
+            anomaly_items = [it for it in items if it["total"] != standard_fee]
+            for it in anomaly_items:
+                anomalies.append({
+                    "tracking_no": it["tracking_no"],
+                    "order_no": it["order_no"],
+                    "platform_product_id": ppid,
+                    "spec": spec,
+                    "quantity": it["quantity"],
+                    "standard_fee": standard_fee,
+                    "actual_fee": it["total"],
+                    "diff": round((it["total"] or 0) - (standard_fee or 0), 2),
+                    "weight": it["weight"],
+                    "province": it["province"],
+                    "city": it["city"],
+                })
+            group_summary.append({
+                "platform_product_id": ppid,
+                "spec": spec,
+                "quantity": qty,
+                "n": n,
+                "standard_fee": standard_fee,
+                "max_fee": max(it["total"] or 0 for it in items),
+                "anomaly_count": len(anomaly_items),
+            })
+
+        anomalies.sort(key=lambda x: x["diff"], reverse=True)
+        group_summary.sort(key=lambda x: -x["anomaly_count"])
+        return {
+            "total_groups": len(groups),
+            "anomaly_total": len(anomalies),
+            "groups": group_summary,
+            "anomalies": anomalies,
+        }
+
+
 # ----------------------------- 查询 -----------------------------
 
 def catalog_stats(conn: sqlite3.Connection = None) -> dict:

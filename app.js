@@ -879,13 +879,13 @@ function renderProducts(editingProduct = null) {
 }
 
 /* ---------------- 商品库（平台 + 电商层级） ---------------- */
-const catalogCache = { tree: [], stats: {}, orders: [], analysis: null, filter: '', mods: [], modCounts: {}, goodsEffect: [], performance: null, promoAnalysis: null, lowStock: [], selection: null, freight: null, deleteMode: false, perfShop: null };
+const catalogCache = { tree: [], stats: {}, orders: [], analysis: null, filter: '', mods: [], modCounts: {}, goodsEffect: [], performance: null, promoAnalysis: null, lowStock: [], selection: null, freight: null, freightMatch: null, deleteMode: false, perfShop: null };
 
 async function renderCatalog() {
   const el = $('#view-catalog');
   el.innerHTML = '<div class="empty"><div class="big">📦</div>加载中…</div>';
   try {
-    const [stats, treeResp, ordersResp, analysis, modsResp, countsResp, geResp, perfResp, promoResp, lowResp, selResp, freightResp] = await Promise.all([
+    const [stats, treeResp, ordersResp, analysis, modsResp, countsResp, geResp, perfResp, promoResp, lowResp, selResp, freightResp, freightMatchResp] = await Promise.all([
       api('/api/catalog/stats'),
       api('/api/catalog/tree'),
       api('/api/catalog/orders?limit=5000'),
@@ -898,6 +898,7 @@ async function renderCatalog() {
       api('/api/catalog/low-stock'),
       api('/api/catalog/selection'),
       api('/api/catalog/freight'),
+      api('/api/catalog/freight/match-analysis'),
     ]);
     catalogCache.stats = stats;
     catalogCache.tree = treeResp.items || [];
@@ -911,6 +912,7 @@ async function renderCatalog() {
     catalogCache.lowStock = lowResp.items || [];
     catalogCache.selection = selResp || null;
     catalogCache.freight = freightResp || null;
+    catalogCache.freightMatch = freightMatchResp || null;
     paintCatalog();
   } catch (err) {
     el.innerHTML = `<div class="empty">❌ ${esc(err.message)}</div>`;
@@ -1333,6 +1335,25 @@ function paintCatalog() {
       const maxProv = provs.length ? provs[0].n : 1;
       const ratio = fr.fee_gmv_ratio != null ? fr.fee_gmv_ratio + '%' : '—';
       const unmatched = fr.total - fr.matched;
+      const fm = catalogCache.freightMatch;
+      const anomalies = (fm && fm.anomalies) || [];
+      const matchHTML = anomalies.length
+        ? `
+        <div class="callout" style="margin-bottom:10px">共 ${fm.total_groups} 组「相同 SKU+数量」，其中 ${fm.anomaly_total} 单运费偏离标准（多为重量差异）。</div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>规格</th><th>标准运费</th><th>实际运费</th><th>差值</th><th>重量</th><th>目的地</th></tr></thead>
+          <tbody>${anomalies.slice(0, 30).map(a => `
+            <tr>
+              <td title="${esc(a.spec)}">${esc((a.spec || '').slice(0, 16))}${(a.spec || '').length > 16 ? '…' : ''}</td>
+              <td>¥${fmt(a.standard_fee)}</td>
+              <td>¥${fmt(a.actual_fee)}</td>
+              <td class="${a.diff > 0 ? 'stock-low' : ''}">${a.diff > 0 ? '+' : ''}${fmt(a.diff)}</td>
+              <td>${a.weight != null ? a.weight + 'kg' : '—'}</td>
+              <td>${esc(a.province)}${esc(a.city)}</td>
+            </tr>`).join('')}
+          </tbody></table></div>
+        ${fm.anomaly_total > 30 ? `<div class="orders-more">仅显示前 30 条，共 ${fm.anomaly_total} 条异常单</div>` : ''}`
+        : '<div class="empty">暂无异常运费（所有匹配单运费一致）</div>';
       freightEl.innerHTML = `
         <div class="perf-summary" style="margin-bottom:14px">
           <div class="perf-card"><div class="p-label">运费单数</div><div class="p-value">${fr.total}</div></div>
@@ -1352,7 +1373,10 @@ function paintCatalog() {
             <span class="perf-date">${esc(p.province)}</span>
             <div class="perf-bar"><div class="perf-fill" style="width:${Math.max(Math.round(p.n / maxProv * 100), 2)}%"></div></div>
             <span class="perf-amt">${p.n}单</span>
-          </div>`).join('') : '<div class="empty">暂无</div>'}`;
+          </div>`).join('') : '<div class="empty">暂无</div>'}
+        <hr style="margin:16px 0;border:none;border-top:1px solid var(--line)">
+        <h4 style="margin:0 0 8px">🔍 匹配分析 <span class="perf-hint">相同 SKU+数量，标准运费 vs 异常</span></h4>
+        ${matchHTML}`;
       freightEl.querySelector('[data-freight-rematch]').onclick = async () => {
         try {
           const r = await api('/api/catalog/freight/match', 'POST');

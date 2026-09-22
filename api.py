@@ -553,6 +553,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/catalog/freight/match" and self.command == "POST":
             return _json(self, catalog.match_freight())
 
+        if path == "/api/catalog/freight/match-analysis" and self.command == "GET":
+            return _json(self, catalog.freight_match_analysis())
+
         if path == "/api/catalog/export" and self.command == "GET":
             etype = qs.get("type", ["products"])[0]
             try:
