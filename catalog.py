@@ -410,7 +410,10 @@ def import_orders(shop_id: int, orders: list[dict]) -> int:
                 "ON CONFLICT(order_no) DO UPDATE SET status=excluded.status, "
                 "buyer_amount=excluded.buyer_amount, seller_amount=excluded.seller_amount, "
                 "province=excluded.province, city=excluded.city, district=excluded.district, "
-                "source=excluded.source",
+                "source=excluded.source, aftersale_status=excluded.aftersale_status, "
+                "tracking_no=CASE WHEN excluded.tracking_no != '' THEN excluded.tracking_no ELSE orders.tracking_no END, "
+                "courier=CASE WHEN excluded.courier != '' THEN excluded.courier ELSE orders.courier END, "
+                "confirm_time=CASE WHEN excluded.confirm_time != '' THEN excluded.confirm_time ELSE orders.confirm_time END",
                 (shop_id, o.get("order_no", ""), o.get("status", ""),
                  o.get("quantity", 0), o.get("pay_time", ""), o.get("confirm_time", ""),
                  pid, o.get("platform_product_id", ""), o.get("spec", ""),
