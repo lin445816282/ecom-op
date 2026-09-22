@@ -879,7 +879,7 @@ function renderProducts(editingProduct = null) {
 }
 
 /* ---------------- 商品库（平台 + 电商层级） ---------------- */
-const catalogCache = { tree: [], stats: {}, orders: [], analysis: null, filter: '', mods: [], modCounts: {}, goodsEffect: [], performance: null, promoAnalysis: null, lowStock: [], selection: null };
+const catalogCache = { tree: [], stats: {}, orders: [], analysis: null, filter: '', mods: [], modCounts: {}, goodsEffect: [], performance: null, promoAnalysis: null, lowStock: [], selection: null, deleteMode: false, perfShop: null };
 
 async function renderCatalog() {
   const el = $('#view-catalog');
@@ -1035,6 +1035,14 @@ function paintCatalog() {
   }
 
   let html = `
+    <div class="delete-toggle-bar">
+      <label class="delete-toggle">
+        <input type="checkbox" id="delete-mode" ${catalogCache.deleteMode ? 'checked' : ''}>
+        <span class="delete-toggle-track"><span class="delete-toggle-thumb"></span></span>
+        <span class="delete-toggle-label">🗑️ 删除模式</span>
+      </label>
+      <span class="delete-toggle-hint">${catalogCache.deleteMode ? '已开启 — 可删除平台/店铺' : '默认关闭，避免误删'}</span>
+    </div>
     <div class="stats-grid">
       <div class="stat-card"><div class="label">平台</div><div class="value">${stats.platforms || 0}</div></div>
       <div class="stat-card"><div class="label">店铺</div><div class="value">${stats.shops || 0}</div></div>
@@ -1149,6 +1157,15 @@ function paintCatalog() {
       } catch (err) {
         toast(err.message);
       }
+    };
+  }
+
+  // 删除模式开关
+  const deleteMode = el.querySelector('#delete-mode');
+  if (deleteMode) {
+    deleteMode.onchange = () => {
+      catalogCache.deleteMode = deleteMode.checked;
+      paintCatalog();
     };
   }
 
@@ -1319,7 +1336,7 @@ function paintCatalog() {
         <div class="catalog-head-actions">
           <button class="btn sm" data-add-shop="${pl.id}" title="新增店铺">＋店铺</button>
           <button class="btn sm" data-rename-platform="${pl.id}" title="重命名平台">✏️</button>
-          <button class="btn sm danger" data-del-platform="${pl.id}" title="删除平台">🗑️</button>
+          ${catalogCache.deleteMode ? `<button class="btn sm danger" data-del-platform="${pl.id}" title="删除平台">🗑️</button>` : ''}
         </div>
       </div>`;
     for (const sh of (pl.shops || [])) {
@@ -1335,7 +1352,7 @@ function paintCatalog() {
           </div>
           <div class="catalog-head-actions">
             <button class="btn sm" data-rename-shop="${sh.id}" title="重命名店铺">✏️</button>
-            <button class="btn sm danger" data-del-shop="${sh.id}" title="删除店铺">🗑️</button>
+            ${catalogCache.deleteMode ? `<button class="btn sm danger" data-del-shop="${sh.id}" title="删除店铺">🗑️</button>` : ''}
           </div>
         </div>
         <div class="catalog-shop-body" hidden>

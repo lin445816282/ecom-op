@@ -363,6 +363,28 @@ textarea { min-height: 72px; resize: vertical; }
 /* ==========================================================================
    商品库（平台 + 电商层级）
    ========================================================================== */
+/* 删除模式开关 */
+.delete-toggle-bar {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 14px; margin-bottom: 16px;
+  border: 1px solid var(--line); border-radius: 12px;
+  background: #fafbfe; flex-wrap: wrap;
+}
+.delete-toggle { display: flex; align-items: center; gap: 9px; cursor: pointer; user-select: none; }
+.delete-toggle input { display: none; }
+.delete-toggle-track {
+  width: 40px; height: 22px; border-radius: 999px;
+  background: #e2e8f0; position: relative; transition: .2s; flex: 0 0 auto;
+}
+.delete-toggle-thumb {
+  position: absolute; top: 2px; left: 2px; width: 18px; height: 18px;
+  border-radius: 50%; background: white; box-shadow: 0 1px 3px rgba(0, 0, 0, .2);
+  transition: .2s;
+}
+.delete-toggle input:checked + .delete-toggle-track { background: var(--red); }
+.delete-toggle input:checked + .delete-toggle-track .delete-toggle-thumb { left: 20px; }
+.delete-toggle-label { font-size: 13px; font-weight: 700; color: var(--ink-2); }
+.delete-toggle-hint { font-size: 12px; color: var(--muted); }
 .catalog-platform { margin-bottom: 26px; }
 .catalog-platform-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
 .catalog-platform-head h3 { font-size: 17px; margin: 0; display: flex; align-items: center; gap: 8px; font-weight: 800; }
