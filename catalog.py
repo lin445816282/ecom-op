@@ -177,6 +177,23 @@ CREATE TABLE IF NOT EXISTS freight (
 );
 
 CREATE INDEX IF NOT EXISTS idx_freight_tracking ON freight(tracking_no);
+
+CREATE TABLE IF NOT EXISTS freight_rate (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    courier TEXT DEFAULT '中通快递',
+    account_name TEXT DEFAULT '嘉裕工艺品',
+    region_group TEXT DEFAULT '',
+    provinces TEXT DEFAULT '',
+    w0_05 REAL,
+    w05_1 REAL,
+    w1_2 REAL,
+    w2_3 REAL,
+    first_price REAL,
+    add_price REAL,
+    effective_from TEXT DEFAULT '2025-11-10',
+    remark TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+);
 """
 
 
@@ -192,6 +209,7 @@ def init_db() -> None:
         c.executescript(SCHEMA)
         c.commit()
         _migrate(c)
+        _seed_freight_rate(c)
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
@@ -678,6 +696,134 @@ def freight_match_analysis() -> dict:
             "anomaly_total": len(anomalies),
             "groups": group_summary,
             "anomalies": anomalies,
+        }
+
+
+# ----------------------------- 运费报价单 -----------------------------
+
+# (region_group, provinces, w0_05, w05_1, w1_2, w2_3, first_price, add_price)
+FREIGHT_RATE_SEED = [
+    ("福建", "福建", 2.5, 3.0, 4.2, 5.4, 4.0, 1.2),
+    ("上海、浙江、广东", "上海,浙江,广东", 2.5, 3.0, 4.2, 5.4, 5.0, 1.8),
+    ("江苏、安徽、湖南、湖北、江西", "江苏,安徽,湖南,湖北,江西", 2.5, 3.0, 4.2, 5.4, 5.0, 2.5),
+    ("北京、山东、河北、河南、天津、广西、陕西、四川、贵州、重庆、山西",
+     "北京,山东,河北,河南,天津,广西,陕西,四川,贵州,重庆,山西", 2.5, 3.0, 4.2, 5.4, 7.0, 3.5),
+    ("黑龙江、吉林、辽宁、海南、云南", "黑龙江,吉林,辽宁,海南,云南", 2.9, 3.7, 5.8, 6.8, 8.0, 5.0),
+    ("宁夏、青海、甘肃、内蒙古", "宁夏,青海,甘肃,内蒙古", 5.2, 6.2, None, None, 8.0, 7.0),
+    ("新疆", "新疆", 7.2, 10.2, None, None, 12.0, 12.0),
+    ("西藏", "西藏", 9.2, 13.2, None, None, 19.0, 16.0),
+]
+
+
+def _seed_freight_rate(conn) -> int:
+    """幂等录入报价单（表空才插入）。返回当前条数。"""
+    n = conn.execute("SELECT COUNT(*) FROM freight_rate").fetchone()[0]
+    if n > 0:
+        return n
+    for (rg, provs, w0, w1, w12, w23, fp, ap) in FREIGHT_RATE_SEED:
+        conn.execute(
+            "INSERT INTO freight_rate(region_group, provinces, w0_05, w05_1, w1_2, w2_3, first_price, add_price) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            (rg, provs, w0, w1, w12, w23, fp, ap),
+        )
+    conn.commit()
+    return len(FREIGHT_RATE_SEED)
+
+
+def list_freight_rate() -> list[dict]:
+    with closing(_conn()) as c:
+        return [dict(r) for r in c.execute("SELECT * FROM freight_rate ORDER BY id").fetchall()]
+
+
+def _find_rate(rates, province):
+    for r in rates:
+        provs = [p.strip() for p in (r["provinces"] or "").split(",") if p.strip()]
+        if any(p in province for p in provs):
+            return r
+    return None
+
+
+def calc_freight(province: str, city: str, weight: float, rates=None) -> dict:
+    """按目的地省市区 + 重量计算标准运费。
+
+    返回 {region_group, base, surcharge, total, weight}，未匹配到报价组返回 None。
+    计费：≤3kg 按分段区间直查（/ 区间走首重+续重）；>3kg 首重(1kg)+续重×(重量-1)。
+    """
+    province = (province or "").strip()
+    city = (city or "").strip()
+    if not province or weight is None:
+        return None
+    if rates is None:
+        rates = list_freight_rate()
+    rate = _find_rate(rates, province)
+    if not rate:
+        return None
+    if weight <= 0.5:
+        base = rate["w0_05"]
+    elif weight <= 1:
+        base = rate["w05_1"]
+    elif weight <= 2 and rate["w1_2"] is not None:
+        base = rate["w1_2"]
+    elif weight <= 3 and rate["w2_3"] is not None:
+        base = rate["w2_3"]
+    else:
+        base = (rate["first_price"] or 0) + (rate["add_price"] or 0) * (weight - 1)
+    surcharge = 0.0
+    if "北京" in province:
+        surcharge = 1.5
+    elif "上海" in province:
+        surcharge = 1.0
+    elif "深圳" in city:
+        surcharge = 0.5
+    elif "海南" in province:
+        surcharge = 0.5
+    return {
+        "region_group": rate["region_group"],
+        "base": round(base or 0, 2),
+        "surcharge": surcharge,
+        "total": round((base or 0) + surcharge, 2),
+        "weight": weight,
+    }
+
+
+def freight_compare() -> dict:
+    """自动对账：实际运费 vs 报价单标准，标多收/少收/相符。"""
+    with closing(_conn()) as c:
+        rates = list_freight_rate()
+        rows = c.execute(
+            "SELECT f.tracking_no, f.total AS actual, f.weight, f.province, f.city, "
+            "o.order_no, o.spec FROM freight f "
+            "JOIN orders o ON o.order_no = f.matched_order_no "
+            "WHERE f.matched = 1 AND f.weight IS NOT NULL"
+        ).fetchall()
+        items = []
+        match = over = under = 0
+        for r in rows:
+            calc = calc_freight(r["province"], r["city"], r["weight"], rates)
+            if calc is None:
+                continue
+            actual = r["actual"] or 0
+            diff = round(actual - calc["total"], 2)
+            status = "相符" if abs(diff) < 0.005 else ("多收" if diff > 0 else "少收")
+            if status == "相符":
+                match += 1
+            elif status == "多收":
+                over += 1
+            else:
+                under += 1
+            items.append({
+                "tracking_no": r["tracking_no"], "order_no": r["order_no"],
+                "spec": r["spec"], "province": r["province"], "city": r["city"],
+                "weight": r["weight"], "region_group": calc["region_group"],
+                "standard": calc["total"], "actual": actual, "diff": diff, "status": status,
+            })
+        items.sort(key=lambda x: -x["diff"])
+        over_amount = round(sum(x["diff"] for x in items if x["status"] == "多收"), 2)
+        return {
+            "total_compared": len(items),
+            "match": match, "over": over, "under": under,
+            "over_amount": over_amount,
+            "items": items,
         }
 
 
