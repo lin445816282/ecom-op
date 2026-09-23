@@ -517,6 +517,9 @@ class Handler(BaseHTTPRequestHandler):
             end = qs.get("end", [None])[0]
             return _json(self, catalog.catalog_performance_all(start or None, end or None))
 
+        if path == "/api/catalog/platform-overview" and self.command == "GET":
+            return _json(self, catalog.platform_overview())
+
         if path == "/api/catalog/product/cost" and self.command == "POST":
             item = self._read_body()
             shop_id = int(item.get("shop_id") or 0)

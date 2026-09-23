@@ -714,7 +714,7 @@ function trendSVG(history) {
   </svg>`;
 }
 
-function renderDashboard() {
+async function renderDashboard() {
   const p = shopProducts();
   const count = p.length;
   const avgMargin = count ? p.reduce((s,x)=>s+x.margin,0)/count : 0;
@@ -722,6 +722,25 @@ function renderDashboard() {
   let totalOrders = p.reduce((s,x)=>s+(x.orders||0),0);
   const risky = p.filter(x => x.break_even_roi!==Infinity && x.break_even_roi > 3.5).length;
   const done = shopTasks().filter(t=>t.done).length;
+
+  // 拉真实经营数据（商品库 catalog），按当前店铺平台匹配
+  let ov = null;
+  try {
+    const resp = await api('/api/catalog/platform-overview');
+    ov = (resp.items || []).find(x => x.name === state.shop) || null;
+  } catch (e) {}
+
+  const realHTML = ov ? `
+    <div class="panel" style="margin-bottom:16px">
+      <div class="panel-header"><h2>📊 真实经营数据（${esc(state.shop)}）</h2><span class="badge">商品库</span></div>
+      <div class="stats-grid">
+        <div class="stat-card"><div class="label">真实商品数</div><div class="value">${ov.products}</div><div class="hint">catalog 商品库</div></div>
+        <div class="stat-card"><div class="label">SKU 数</div><div class="value">${ov.skus}</div><div class="hint">规格明细</div></div>
+        <div class="stat-card"><div class="label">订单数</div><div class="value">${ov.orders}</div><div class="hint">已导入订单</div></div>
+        <div class="stat-card"><div class="label">GMV（元）</div><div class="value">¥${fmt(ov.gmv)}</div><div class="hint">买家实付</div></div>
+      </div>
+    </div>
+  ` : '';
 
   $('#view-dashboard').innerHTML = `
     <section class="hero">
@@ -731,6 +750,8 @@ function renderDashboard() {
       </div>
       <button class="cta" data-nav="products">＋ 新增商品投产</button>
     </section>
+
+    ${realHTML}
 
     <div class="stats-grid">
       <div class="stat-card"><div class="label">商品数</div><div class="value">${count}</div><div class="hint">当前录入 SKU</div></div>

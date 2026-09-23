@@ -1212,6 +1212,39 @@ def catalog_performance_all(start: str = None, end: str = None) -> dict:
                 "server_today": server_today}
 
 
+def platform_overview() -> dict:
+    """按平台聚合真实经营数据：商品数/SKU数/订单数/GMV，供运营总览展示。"""
+    with closing(_conn()) as c:
+        items = []
+        for pl in c.execute("SELECT * FROM platforms ORDER BY id").fetchall():
+            pid = pl["id"]
+            shop_in = "SELECT id FROM shops WHERE platform_id=?"
+            prod_in = ("SELECT id FROM products WHERE shop_id IN (%s)" % shop_in)
+            products = c.execute(
+                "SELECT COUNT(*) AS n FROM products WHERE shop_id IN (%s)" % shop_in,
+                (pid,)).fetchone()["n"]
+            skus = c.execute(
+                "SELECT COUNT(*) AS n FROM skus WHERE product_id IN (%s)" % prod_in,
+                (pid,)).fetchone()["n"]
+            orders = c.execute(
+                "SELECT COUNT(*) AS n FROM orders WHERE shop_id IN (%s)" % shop_in,
+                (pid,)).fetchone()["n"]
+            gmv = c.execute(
+                "SELECT ROUND(COALESCE(SUM(buyer_amount),0),2) AS n FROM orders "
+                "WHERE shop_id IN (%s)" % shop_in,
+                (pid,)).fetchone()["n"]
+            items.append({
+                "platform_id": pid,
+                "code": pl["code"],
+                "name": pl["name"],
+                "products": products,
+                "skus": skus,
+                "orders": orders,
+                "gmv": gmv,
+            })
+        return {"items": items}
+
+
 # ----------------------------- 修改记录 -----------------------------
 
 FIELD_LABELS = {
