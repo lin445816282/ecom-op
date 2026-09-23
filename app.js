@@ -1363,15 +1363,23 @@ function paintCatalog() {
       ['未发货退款', s => s.unshipped_refund || 0],
     ];
     const pcell = (summary) => pcols.map(([, fn]) => `<td>${fn(summary)}</td>`).join('');
-    // 时间段快捷筛选（本周/上周/本月/上月/全部）
+    // 时间段快捷筛选（本周/上周/本月/上月/全部）+ 自定义日期段
     const preset = catalogCache.perfPreset || 'all';
     const rangeBtns = [['week', '本周'], ['last_week', '上周'], ['month', '本月'], ['last_month', '上月'], ['all', '全部']]
       .map(([k, label]) => `<button class="perf-rbtn ${preset === k ? 'active' : ''}" data-perf-range="${k}">${label}</button>`).join('');
+    const curRange = catalogCache.perfRange || {};
+    const customStart = (preset === 'custom' ? (curRange.start || '') : '');
+    const customEnd = (preset === 'custom' ? (curRange.end || '') : '');
+    const customHtml = `
+        <span class="perf-custom-label">自定义</span>
+        <input type="date" class="perf-date ${preset === 'custom' ? 'active' : ''}" data-perf-start value="${customStart}">
+        <span class="perf-date-sep">~</span>
+        <input type="date" class="perf-date ${preset === 'custom' ? 'active' : ''}" data-perf-end value="${customEnd}">`;
     perfAllHTML = `
     <div class="perf-shops">
       <div class="perf-shops-head">
         <h4>🏪 汇总 + 各店铺</h4>
-        <div class="perf-range">${rangeBtns}</div>
+        <div class="perf-range">${rangeBtns}${customHtml}</div>
       </div>
       <div class="perf-shop-scroll">
         <table class="perf-shop-table">
@@ -1618,6 +1626,31 @@ function paintCatalog() {
       }
     };
   });
+
+  // 自定义日期段（起止日期输入）
+  const perfStart = el.querySelector('[data-perf-start]');
+  const perfEnd = el.querySelector('[data-perf-end]');
+  if (perfStart && perfEnd) {
+    const applyCustom = async () => {
+      const s = perfStart.value;
+      const e = perfEnd.value;
+      if (s && e && s > e) { toast('起始日期不能晚于结束日期'); return; }
+      if (!s && !e) { // 都清空 = 全部
+        catalogCache.perfPreset = 'all';
+        catalogCache.perfRange = null;
+      } else {
+        catalogCache.perfPreset = 'custom';
+        catalogCache.perfRange = { start: s || undefined, end: e || undefined };
+      }
+      try {
+        await reloadPerf();
+      } catch (err) {
+        toast(err.message);
+      }
+    };
+    perfStart.onchange = applyCustom;
+    perfEnd.onchange = applyCustom;
+  }
 
   // 删除模式开关
   const deleteMode = el.querySelector('#delete-mode');
