@@ -417,8 +417,36 @@ def import_batch(shop_id: int, products: list[dict], skus: list[dict]) -> dict:
                  s.get("spec_code", ""), s.get("dan_price"), s.get("pin_price"),
                  s.get("stock")),
             )
+        # 补关联该店铺订单（先导订单后导商品的场景）
+        conn.execute(
+            "UPDATE orders SET product_id = (SELECT p.id FROM products p "
+            "WHERE p.shop_id=orders.shop_id AND p.platform_product_id=orders.platform_product_id) "
+            "WHERE shop_id=? AND product_id IS NULL", (shop_id,))
         conn.commit()
         return catalog_stats(conn)
+    finally:
+        conn.close()
+
+
+def relink_orders(shop_id: int = None) -> int:
+    """按 platform_product_id 补关联订单 product_id（先导订单后导商品的场景）。
+
+    返回修复的订单数。
+    """
+    conn = _conn()
+    try:
+        if shop_id is not None:
+            cur = conn.execute(
+                "UPDATE orders SET product_id = (SELECT p.id FROM products p "
+                "WHERE p.shop_id=orders.shop_id AND p.platform_product_id=orders.platform_product_id) "
+                "WHERE shop_id=? AND product_id IS NULL", (shop_id,))
+        else:
+            cur = conn.execute(
+                "UPDATE orders SET product_id = (SELECT p.id FROM products p "
+                "WHERE p.shop_id=orders.shop_id AND p.platform_product_id=orders.platform_product_id) "
+                "WHERE product_id IS NULL")
+        conn.commit()
+        return cur.rowcount
     finally:
         conn.close()
 
@@ -446,6 +474,7 @@ def import_orders(shop_id: int, orders: list[dict]) -> int:
                 "seller_amount, tracking_no, courier, province, city, district, source) "
                 "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(order_no) DO UPDATE SET status=excluded.status, "
+                "product_id=CASE WHEN excluded.product_id IS NOT NULL THEN excluded.product_id ELSE orders.product_id END, "
                 "buyer_amount=excluded.buyer_amount, seller_amount=excluded.seller_amount, "
                 "province=excluded.province, city=excluded.city, district=excluded.district, "
                 "source=excluded.source, aftersale_status=excluded.aftersale_status, "
@@ -1050,6 +1079,51 @@ def catalog_analysis() -> dict:
         }
 
 
+def _perf_summary(c, shop_id=None) -> dict:
+    """经营分析 summary（统一口径，供 catalog_performance / catalog_performance_all 复用）。
+
+    口径（跨平台通用）：
+    - order_count     总订单数（含未发货/已取消/待付款）
+    - shipped_count   有发货订单数 = 订单状态含「已发货/已收货/已完成/交易成功」或 有快递单号
+                      （抖音订单状态列为空，靠快递单号判定发货）
+    - aftersale_count 发货后售后数 = 有发货 且 售后状态非空且非「无售后」
+    - aftersale_rate  售后率 = 发货后售后 ÷ 有发货订单 ×100%（发货后口径，剔除未发货退款）
+    - unshipped_refund 未发货退款数 = 无发货 但有售后（下单后未发货即退款，算下单流失）
+    - canceled         已取消/关闭数 = 状态含「取消」或「关闭」
+    """
+    SHIPPED = ("(status LIKE '%已发货%' OR status LIKE '%已收货%' OR status LIKE '%已完成%' "
+               "OR status LIKE '%交易成功%' OR tracking_no != '')")
+    REFUND = "(aftersale_status != '' AND aftersale_status NOT LIKE '无售后%')"
+    CANCELED = "(status LIKE '%取消%' OR status LIKE '%关闭%')"
+    w = " WHERE shop_id=?" if shop_id else ""
+    args = [shop_id] if shop_id else []
+    s = c.execute(
+        "SELECT COUNT(*) AS order_count, SUM(buyer_amount) AS gmv, "
+        "SUM(seller_amount) AS seller_amt, SUM(quantity) AS item_count, "
+        "SUM(CASE WHEN " + SHIPPED + " THEN 1 ELSE 0 END) AS shipped_count, "
+        "SUM(CASE WHEN " + SHIPPED + " AND " + REFUND + " THEN 1 ELSE 0 END) AS aftersale_count, "
+        "SUM(CASE WHEN NOT " + SHIPPED + " AND " + REFUND + " THEN 1 ELSE 0 END) AS unshipped_refund, "
+        "SUM(CASE WHEN " + CANCELED + " THEN 1 ELSE 0 END) AS canceled "
+        "FROM orders" + w, args
+    ).fetchone()
+    order_count = s["order_count"] or 0
+    shipped_count = s["shipped_count"] or 0
+    gmv = s["gmv"] or 0.0
+    aftersale_count = s["aftersale_count"] or 0
+    return {
+        "order_count": order_count,
+        "shipped_count": shipped_count,
+        "gmv": round(gmv, 2),
+        "seller_amt": round(s["seller_amt"] or 0.0, 2),
+        "item_count": s["item_count"] or 0,
+        "avg_order": round(gmv / order_count, 2) if order_count else 0.0,
+        "aftersale_count": aftersale_count,
+        "aftersale_rate": round(aftersale_count / shipped_count * 100, 1) if shipped_count else 0.0,
+        "unshipped_refund": s["unshipped_refund"] or 0,
+        "canceled": s["canceled"] or 0,
+    }
+
+
 def catalog_performance(shop_id: int = None) -> dict:
     """商品库经营分析：销售概览 + 商品销量排行 + 日趋势 + 地区分布 + 售后。
     shop_id 提供时按店铺筛选。
@@ -1057,17 +1131,6 @@ def catalog_performance(shop_id: int = None) -> dict:
     with closing(_conn()) as c:
         w = " WHERE shop_id=?" if shop_id else ""
         args = [shop_id] if shop_id else []
-
-        s = c.execute(
-            "SELECT COUNT(*) AS order_count, SUM(buyer_amount) AS gmv, "
-            "SUM(seller_amount) AS seller_amt, SUM(quantity) AS item_count, "
-            "SUM(CASE WHEN aftersale_status LIKE '%退款%' THEN 1 ELSE 0 END) AS refund_count "
-            "FROM orders" + w, args
-        ).fetchone()
-        order_count = s["order_count"] or 0
-        gmv = s["gmv"] or 0.0
-        item_count = s["item_count"] or 0
-        refund_count = s["refund_count"] or 0
 
         # 商品销量/销售额排行（关联商品名/货号）
         top_products = [dict(r) for r in c.execute(
@@ -1096,19 +1159,29 @@ def catalog_performance(shop_id: int = None) -> dict:
         ).fetchall()]
 
         return {
-            "summary": {
-                "order_count": order_count,
-                "gmv": round(gmv, 2),
-                "seller_amt": round(s["seller_amt"] or 0.0, 2),
-                "item_count": item_count,
-                "avg_order": round(gmv / order_count, 2) if order_count else 0.0,
-                "refund_count": refund_count,
-                "aftersale_rate": round(refund_count / order_count * 100, 1) if order_count else 0.0,
-            },
+            "summary": _perf_summary(c, shop_id),
             "top_products": top_products,
             "daily_trend": daily_trend,
             "regions": regions,
         }
+
+
+def catalog_performance_all() -> dict:
+    """经营分析：全部店铺汇总 + 各店铺 summary 对比（供前端一屏直看）。"""
+    with closing(_conn()) as c:
+        shops = c.execute(
+            "SELECT s.id, s.name, COALESCE(p.name,'') AS platform FROM shops s "
+            "LEFT JOIN platforms p ON p.id = s.platform_id ORDER BY s.id"
+        ).fetchall()
+        result = []
+        for sh in shops:
+            result.append({
+                "shop_id": sh["id"],
+                "shop_name": sh["name"],
+                "platform": sh["platform"],
+                "summary": _perf_summary(c, sh["id"]),
+            })
+        return {"summary": _perf_summary(c, None), "shops": result}
 
 
 # ----------------------------- 修改记录 -----------------------------
@@ -1281,15 +1354,16 @@ def save_goods_effect(shop_id: int, records: list[dict]) -> int:
 
 def list_goods_effect(shop_id: int = None, limit: int = 500) -> list[dict]:
     with closing(_conn()) as c:
+        base = ("SELECT g.*, s.name AS shop_name FROM goods_effect g "
+                "LEFT JOIN shops s ON s.id = g.shop_id")
         if shop_id:
             rows = c.execute(
-                "SELECT * FROM goods_effect WHERE shop_id=? "
-                "ORDER BY stat_date DESC, pay_ordr_amt DESC LIMIT ?",
+                base + " WHERE g.shop_id=? ORDER BY g.stat_date DESC, g.pay_ordr_amt DESC LIMIT ?",
                 (shop_id, limit),
             ).fetchall()
         else:
             rows = c.execute(
-                "SELECT * FROM goods_effect ORDER BY stat_date DESC, pay_ordr_amt DESC LIMIT ?",
+                base + " ORDER BY g.stat_date DESC, g.pay_ordr_amt DESC LIMIT ?",
                 (limit,),
             ).fetchall()
         return [dict(r) for r in rows]
@@ -1623,7 +1697,7 @@ def _classify(it: dict) -> tuple[str, int, str]:
 
 
 def promotions_analysis() -> dict:
-    """推广数据汇总 + 按商品聚合 ROI 排行。"""
+    """推广数据汇总 + 按商品聚合 ROI 排行（带店铺归属）。"""
     with closing(_conn()) as c:
         s = c.execute(
             "SELECT COUNT(*) AS n, ROUND(SUM(deal_spend),2) AS spend, ROUND(SUM(deal_amount),2) AS amt, "
@@ -1636,12 +1710,13 @@ def promotions_analysis() -> dict:
         total_spend = s["total_spend"] or 0.0
         avg_roi = round(amt / total_spend, 2) if total_spend else None
         top_roi = [dict(r) for r in c.execute(
-            "SELECT platform_product_id, MAX(product_name) AS product_name, "
-            "ROUND(SUM(deal_spend),2) AS spend, ROUND(SUM(deal_amount),2) AS amt, "
-            "ROUND(SUM(total_spend),2) AS total_spend, SUM(net_deal_count) AS deals, "
-            "SUM(impressions) AS imp, SUM(clicks) AS clk "
-            "FROM promotions WHERE platform_product_id != '' GROUP BY platform_product_id "
-            "ORDER BY amt DESC LIMIT 20"
+            "SELECT p.shop_id, sh.name AS shop_name, p.platform_product_id, MAX(p.product_name) AS product_name, "
+            "ROUND(SUM(p.deal_spend),2) AS spend, ROUND(SUM(p.deal_amount),2) AS amt, "
+            "ROUND(SUM(p.total_spend),2) AS total_spend, SUM(p.net_deal_count) AS deals, "
+            "SUM(p.impressions) AS imp, SUM(p.clicks) AS clk "
+            "FROM promotions p LEFT JOIN shops sh ON sh.id = p.shop_id "
+            "WHERE p.platform_product_id != '' GROUP BY p.shop_id, p.platform_product_id "
+            "ORDER BY amt DESC LIMIT 50"
         ).fetchall()]
         for r in top_roi:
             r["roi"] = round(r["amt"] / r["total_spend"], 2) if r["total_spend"] else None
@@ -1656,11 +1731,13 @@ def promotions_analysis() -> dict:
 
 
 def low_stock(threshold: int = 10) -> list[dict]:
-    """低库存 SKU 列表（stock <= threshold，关联商品名）。"""
+    """低库存 SKU 列表（stock <= threshold，关联商品名 + 店铺名）。"""
     with closing(_conn()) as c:
         rows = c.execute(
-            "SELECT p.platform_product_id, p.name, p.code, s.platform_sku_id, s.spec_name, s.spec_code, s.stock "
+            "SELECT p.shop_id, sh.name AS shop_name, p.platform_product_id, p.name, p.code, "
+            "s.platform_sku_id, s.spec_name, s.spec_code, s.stock "
             "FROM skus s JOIN products p ON p.id = s.product_id "
+            "LEFT JOIN shops sh ON sh.id = p.shop_id "
             "WHERE s.stock IS NOT NULL AND s.stock <= ? "
             "ORDER BY s.stock ASC LIMIT 100",
             (threshold,),
@@ -1744,13 +1821,90 @@ def _parse_csv_rows(etype: str, csv_text: str) -> list[dict]:
     import csv
     import io
     text = csv_text.lstrip("\ufeff")
-    reader = csv.DictReader(io.StringIO(text))
-    field_map = IMPORT_FIELDS[etype]
-    rows = []
-    for raw in reader:
+    rows = list(csv.reader(io.StringIO(text)))
+    return _parse_table_rows(etype, rows)
+
+
+# ---- xlsx 导入支持 + 表头归一化（2026-09-23）----
+
+# 导入表头关键词映射（兼容拼多多/淘宝导出表头 → 标准字段，大小写不敏感包含匹配）
+IMPORT_HEADER_KEYWORDS = {
+    "platform_product_id": ["商品id", "商品编号", "goods_id", "商品编码(平台)", "商品编码（平台）"],
+    "name": ["商品名称", "商品标题", "宝贝名称"],
+    "code": ["商品编码", "货号"],
+    "platform_sku_id": ["skuid", "规格id", "sku_id"],
+    "spec_name": ["规格名称", "sku名称", "规格名"],
+    "spec_code": ["规格编码", "sku编码", "商家编码"],
+    "dan_price": ["单买价", "单卖价", "销售价", "商品价格", "售价", "现价", "单价"],
+    "pin_price": ["拼单价", "团购价", "拼团价", "拼团价格"],
+    "stock": ["库存", "可售库存", "库存数量", "库存增减"],
+    "order_no": ["订单号", "订单编号", "主订单编号"],
+    "status": ["订单状态"],
+    "quantity": ["商品数量", "数量", "SKU件数", "宝贝总数量"],
+    "pay_time": ["支付时间", "付款时间", "订单创建时间", "支付完成时间"],
+    "confirm_time": ["确认收货时间", "收货时间", "订单完成时间", "订单确认收货时间"],
+    "spec": ["商品规格", "SKU规格", "商品属性", "选购商品"],
+    "aftersale_status": ["售后状态", "商品售后"],
+    "buyer_amount": ["用户实付金额", "买家实付", "实付金额", "用户应付金额", "订单实际支付金额", "订单应付金额"],
+    "seller_amount": ["商家实收金额", "商家实收", "实收金额", "商家应收金额", "订单实际收款金额", "总金额", "商家收入金额"],
+    "tracking_no": ["快递单号", "运单号", "物流单号"],
+    "courier": ["快递公司", "物流公司", "承运商"],
+    "province": ["省", "省份"],
+    "city": ["市", "城市"],
+    "district": ["区", "县", "区县"],
+    "source": ["订单来源", "来源"],
+    "product_name": ["商品名称", "商品标题"],
+    "scene": ["推广场景", "场景"],
+    "plan_name": ["推广名称", "计划名称"],
+    "bid_type": ["出价方式"],
+    "group_name": ["分组"],
+    "period": ["时段", "统计周期", "日期范围", "周期"],
+    "deal_spend": ["成交花费"],
+    "deal_amount": ["交易额", "成交额", "成交金额"],
+    "actual_roi": ["实际投产比", "投产比", "roi"],
+    "total_spend": ["总花费", "总消耗", "花费"],
+    "net_deal_count": ["净成交笔数", "成交笔数"],
+    "impressions": ["曝光量", "展现量", "曝光"],
+    "clicks": ["点击量", "点击"],
+}
+
+
+def _match_header(cell, kws) -> bool:
+    h = str(cell or "").strip().lower()
+    return any(kw.lower() in h for kw in kws)
+
+
+def normalize_header(etype: str, header_row: list) -> dict:
+    """把任意表头归一化到标准表头，返回 {标准中文表头: 列索引}。"""
+    result = {}
+    used = set()
+    for cn, field in IMPORT_FIELDS[etype]:
+        kws = IMPORT_HEADER_KEYWORDS.get(field, [cn])
+        for i, h in enumerate(header_row):
+            if i in used:
+                continue
+            if _match_header(h, kws):
+                result[cn] = i
+                used.add(i)
+                break
+    return result
+
+
+def _parse_table_rows(etype: str, rows: list[list]) -> list[dict]:
+    """从二维数组（首行为表头）解析，表头自动归一化。兼容拼多多/淘宝导出表头。"""
+    if not rows:
+        return []
+    col_map = normalize_header(etype, rows[0])
+    field_keys = IMPORT_FIELDS[etype]
+    result = []
+    for data_row in rows[1:]:
+        if not data_row:
+            continue
         rec = {}
-        for cn, field in field_map:
-            v = (raw.get(cn) or "").strip()
+        for cn, field in field_keys:
+            ci = col_map.get(cn)
+            v = data_row[ci] if (ci is not None and ci < len(data_row)) else ""
+            v = "" if v is None else str(v).strip()
             if field in NUMERIC_FIELDS:
                 if v == "":
                     rec[field] = None
@@ -1761,16 +1915,66 @@ def _parse_csv_rows(etype: str, csv_text: str) -> list[dict]:
                         rec[field] = None
             else:
                 rec[field] = v
-        rows.append(rec)
+        result.append(rec)
+    return result
+
+
+def xlsx_rows_from_bytes(data: bytes) -> list[list]:
+    """内存解析 xlsx（sharedStrings / inlineStr 两种格式），返回二维数组。"""
+    import zipfile
+    import io
+    import re
+    import xml.etree.ElementTree as ET
+    NS = '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
+
+    def _col_idx(ref):
+        m = re.match(r'([A-Z]+)', ref)
+        n = 0
+        for ch in m.group(1):
+            n = n * 26 + (ord(ch) - ord('A') + 1)
+        return n - 1
+
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        shared = []
+        if 'xl/sharedStrings.xml' in z.namelist():
+            ss_root = ET.fromstring(z.read('xl/sharedStrings.xml').decode('utf-8', errors='ignore'))
+            for si in ss_root.iter(NS + 'si'):
+                shared.append(''.join(t.text or '' for t in si.iter(NS + 't')))
+        xml = z.read('xl/worksheets/sheet1.xml').decode('utf-8', errors='ignore')
+    root = ET.fromstring(xml)
+    rows = []
+    for row_el in root.iter(NS + 'row'):
+        cells = {}
+        for c in row_el.iter(NS + 'c'):
+            ref = c.get('r')
+            if not ref:
+                continue
+            t = c.get('t')
+            val = None
+            if t == 'inlineStr':
+                is_el = c.find(NS + 'is')
+                if is_el is not None:
+                    val = ''.join(t_el.text or '' for t_el in is_el.iter(NS + 't'))
+            elif t == 's':
+                v_el = c.find(NS + 'v')
+                if v_el is not None and v_el.text is not None:
+                    idx = int(v_el.text)
+                    if 0 <= idx < len(shared):
+                        val = shared[idx]
+            else:
+                v_el = c.find(NS + 'v')
+                if v_el is not None and v_el.text is not None:
+                    val = v_el.text
+            if val is not None:
+                cells[_col_idx(ref)] = val
+        if cells:
+            maxcol = max(cells.keys())
+            rows.append([cells.get(i) for i in range(maxcol + 1)])
     return rows
 
 
-def import_csv(etype: str, shop_id: int, csv_text: str) -> dict:
-    """网页导入入口：解析 CSV → 调对应 import 函数写库。返回 {imported, skipped}。"""
-    if etype not in IMPORT_FIELDS:
-        raise ValueError(f"未知导入类型: {etype}")
-    rows = _parse_csv_rows(etype, csv_text)
-
+def import_rows(etype: str, shop_id: int, rows: list[dict]) -> dict:
+    """核心分发：rows 已解析成 dict 列表，按类型写库。返回 {imported, skipped}。"""
     if etype == "products":
         products = [{"platform_product_id": r["platform_product_id"], "name": r.get("name", ""),
                      "code": r.get("code", "")} for r in rows if r["platform_product_id"]]
@@ -1796,6 +2000,25 @@ def import_csv(etype: str, shop_id: int, csv_text: str) -> dict:
         return {"imported": n, "skipped": len(rows) - len(promos)}
 
     raise ValueError(f"未知导入类型: {etype}")
+
+
+def import_csv(etype: str, shop_id: int, csv_text: str) -> dict:
+    """网页导入入口（CSV 文本）：解析 → 写库。返回 {imported, skipped}。"""
+    if etype not in IMPORT_FIELDS:
+        raise ValueError(f"未知导入类型: {etype}")
+    rows = _parse_csv_rows(etype, csv_text)
+    return import_rows(etype, shop_id, rows)
+
+
+def import_xlsx(etype: str, shop_id: int, xlsx_b64: str) -> dict:
+    """网页导入入口（xlsx base64）：解析 → 写库。返回 {imported, skipped}。"""
+    import base64
+    if etype not in IMPORT_FIELDS:
+        raise ValueError(f"未知导入类型: {etype}")
+    raw = base64.b64decode(xlsx_b64)
+    rows = xlsx_rows_from_bytes(raw)
+    parsed = _parse_table_rows(etype, rows)
+    return import_rows(etype, shop_id, parsed)
 
 
 def template_csv(etype: str) -> tuple:

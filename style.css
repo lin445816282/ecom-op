@@ -506,6 +506,14 @@ textarea { min-height: 72px; resize: vertical; }
 .perf-card .p-label { font-size: 12px; color: var(--muted); margin-bottom: 5px; font-weight: 600; }
 .perf-card .p-value { font-size: 21px; font-weight: 800; color: var(--ink); font-variant-numeric: tabular-nums; }
 .perf-card .p-hint { font-size: 11px; color: var(--faint); margin-top: 3px; }
+.perf-note { font-size: 12px; color: var(--muted); background: #fff7ed; border: 1px solid #fed7aa; border-radius: 9px; padding: 9px 13px; margin: 0 0 16px; line-height: 1.6; }
+.perf-shops { margin: 0 0 18px; }
+.perf-shops h4 { font-size: 14px; font-weight: 700; color: var(--ink); margin: 0 0 9px; }
+.perf-shop-table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+.perf-shop-table th, .perf-shop-table td { padding: 8px 10px; border: 1px solid var(--line-soft); text-align: right; white-space: nowrap; }
+.perf-shop-table th { background: #f4f6ff; color: var(--ink-2); font-weight: 700; }
+.perf-shop-table th:first-child, .perf-shop-table td:first-child { text-align: left; color: var(--muted); font-weight: 600; }
+.perf-shop-table tbody tr:hover { background: #fafbff; }
 .perf-cols { display: flex; gap: 16px; flex-wrap: wrap; }
 .perf-col { flex: 1 1 250px; min-width: 210px; }
 .perf-col h4 { font-size: 14px; font-weight: 700; color: var(--ink); margin: 0 0 9px; }

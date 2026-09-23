@@ -359,7 +359,7 @@ async function showImportDialog(defaultType = 'products') {
   const box = document.createElement('div');
   box.style.cssText = 'background:#fff;border-radius:16px;padding:24px;max-width:480px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.22)';
   box.innerHTML = `
-    <div style="font-size:16px;font-weight:700;color:#17203a;margin-bottom:16px">⬆ 导入 CSV</div>
+    <div style="font-size:16px;font-weight:700;color:#17203a;margin-bottom:16px">⬆ 导入 CSV / XLSX</div>
     <div class="imp-row"><label>目标店铺</label>
       <select id="imp-shop">${shops.map(s => `<option value="${s.id}">${esc(s.label)}</option>`).join('')}</select>
     </div>
@@ -371,8 +371,8 @@ async function showImportDialog(defaultType = 'products') {
         <option value="promotions">推广</option>
       </select>
     </div>
-    <div class="imp-row"><label>CSV 文件</label>
-      <input type="file" id="imp-file" accept=".csv,text/csv">
+    <div class="imp-row"><label>CSV / XLSX 文件</label>
+      <input type="file" id="imp-file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
     </div>
     <div class="imp-hint" id="imp-hint">${TYPE_HINT[defaultType] || TYPE_HINT.products}</div>
     <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:18px;flex-wrap:wrap">
@@ -399,19 +399,30 @@ async function showImportDialog(defaultType = 'products') {
 
   box.querySelector('[data-imp-go]').onclick = async () => {
     const file = fileInput.files[0];
-    if (!file) { toast('请先选择 CSV 文件'); return; }
-    const csvText = await new Promise((resolve, reject) => {
-      const fr = new FileReader();
-      fr.onload = () => resolve(fr.result);
-      fr.onerror = () => reject(new Error('文件读取失败'));
-      fr.readAsText(file, 'utf-8');
-    });
+    if (!file) { toast('请先选择 CSV 或 XLSX 文件'); return; }
+    const isXlsx = /\.xlsx?$/i.test(file.name);
+    let payload;
+    if (isXlsx) {
+      const b64 = await new Promise((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve(String(fr.result).split(',')[1] || '');
+        fr.onerror = () => reject(new Error('文件读取失败'));
+        fr.readAsDataURL(file);
+      });
+      payload = { type: typeSel.value, shop_id: parseInt(shopSel.value), format: 'xlsx', data: b64 };
+    } else {
+      const csvText = await new Promise((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve(fr.result);
+        fr.onerror = () => reject(new Error('文件读取失败'));
+        fr.readAsText(file, 'utf-8');
+      });
+      payload = { type: typeSel.value, shop_id: parseInt(shopSel.value), format: 'csv', csv: csvText };
+    }
     const btn = box.querySelector('[data-imp-go]');
     btn.disabled = true; btn.textContent = '⏳ 导入中…';
     try {
-      const r = await api('/api/catalog/import', 'POST', {
-        type: typeSel.value, shop_id: parseInt(shopSel.value), csv: csvText,
-      });
+      const r = await api('/api/catalog/import', 'POST', payload);
       if (r.ok) {
         toast(`导入成功：${r.imported} 条，跳过 ${r.skipped} 条`);
         close();
@@ -897,13 +908,13 @@ function renderProducts(editingProduct = null) {
 }
 
 /* ---------------- 商品库（平台 + 电商层级） ---------------- */
-const catalogCache = { tree: [], stats: {}, orders: [], analysis: null, filter: '', mods: [], modCounts: {}, goodsEffect: [], performance: null, promoAnalysis: null, lowStock: [], selection: null, freight: null, freightMatch: null, freightRate: [], freightCompare: null, suppliers: [], supplierProducts: {}, freightMonth: '', freightShop: null, deleteMode: false, perfShop: null };
+const catalogCache = { tree: [], stats: {}, orders: [], analysis: null, filter: '', mods: [], modCounts: {}, goodsEffect: [], performance: null, perfAll: null, promoAnalysis: null, lowStock: [], selection: null, freight: null, freightMatch: null, freightRate: [], freightCompare: null, suppliers: [], supplierProducts: {}, freightMonth: '', freightShop: null, deleteMode: false, perfShop: null };
 
 async function renderCatalog() {
   const el = $('#view-catalog');
   el.innerHTML = '<div class="empty"><div class="big">📦</div>加载中…</div>';
   try {
-    const [stats, treeResp, ordersResp, analysis, modsResp, countsResp, geResp, perfResp, promoResp, lowResp, selResp, freightResp, freightMatchResp, freightRateResp, freightCompareResp, suppliersResp] = await Promise.all([
+    const [stats, treeResp, ordersResp, analysis, modsResp, countsResp, geResp, perfResp, perfAllResp, promoResp, lowResp, selResp, freightResp, freightMatchResp, freightRateResp, freightCompareResp, suppliersResp] = await Promise.all([
       api('/api/catalog/stats'),
       api('/api/catalog/tree'),
       api('/api/catalog/orders?limit=5000'),
@@ -912,6 +923,7 @@ async function renderCatalog() {
       api('/api/catalog/modifications/counts'),
       api('/api/catalog/goods-effect'),
       api('/api/catalog/performance' + (catalogCache.perfShop ? `?shop_id=${catalogCache.perfShop}` : '')),
+      api('/api/catalog/performance-all'),
       api('/api/catalog/promotions-analysis'),
       api('/api/catalog/low-stock'),
       api('/api/catalog/selection'),
@@ -929,6 +941,7 @@ async function renderCatalog() {
     catalogCache.modCounts = countsResp || {};
     catalogCache.goodsEffect = geResp.items || [];
     catalogCache.performance = perfResp || null;
+    catalogCache.perfAll = perfAllResp || null;
     catalogCache.promoAnalysis = promoResp || null;
     catalogCache.lowStock = lowResp.items || [];
     catalogCache.selection = selResp || null;
@@ -1228,6 +1241,30 @@ function paintCatalog() {
   const f = (catalogCache.filter || '').toLowerCase();
   const modMap = buildModMap();
 
+  // 平台→店铺层级元数据（供订单/访问/推广/库存/选品 5 面板统一分组）
+  const shopMeta = {};
+  const shopList = [];
+  for (const pl of tree) {
+    for (const sh of (pl.shops || [])) {
+      shopMeta[sh.id] = { platform: pl.name, shop: sh.name };
+      shopList.push({ id: sh.id, platform: pl.name, shop: sh.name });
+    }
+  }
+  // 按平台归组：rows 每条用 keyFn 取 shop_id，输出 {平台名: [{shop, shopId, rows:[...]}]}
+  const groupByPlatform = (rows, keyFn) => {
+    const byShop = {};
+    for (const r of rows) {
+      const sid = keyFn(r);
+      (byShop[sid] = byShop[sid] || []).push(r);
+    }
+    const byPlatform = {};
+    for (const [sid, arr] of Object.entries(byShop)) {
+      const meta = shopMeta[sid] || { platform: '未分类', shop: '未知店铺' };
+      (byPlatform[meta.platform] = byPlatform[meta.platform] || []).push({ shop: meta.shop, shopId: Number(sid), rows: arr });
+    }
+    return byPlatform;
+  };
+
   const pct = (n, total) => total ? Math.round(n / total * 100) : 0;
   const pricePct = pct(a.priced, a.total_skus);
   const stockPct = pct(a.stocked, a.total_skus);
@@ -1257,6 +1294,29 @@ function paintCatalog() {
 
   // 经营分析看板（销售概览 + 商品销量 TOP + 日趋势 + 地区）
   const perf = catalogCache.performance;
+  // 汇总 + 各店铺对比表
+  const perfAll = catalogCache.perfAll;
+  let perfAllHTML = '';
+  if (perfAll && perfAll.shops && perfAll.shops.length) {
+    const pshops = perfAll.shops;
+    const prows = [
+      ['GMV', s => '¥' + fmt(s.gmv || 0)],
+      ['订单数', s => s.order_count || 0],
+      ['有发货', s => s.shipped_count || 0],
+      ['售后率', s => (s.aftersale_rate != null ? s.aftersale_rate + '%' : '—')],
+      ['未发货退款', s => s.unshipped_refund || 0],
+    ];
+    perfAllHTML = `
+    <div class="perf-shops">
+      <h4>🏪 汇总 + 各店铺</h4>
+      <table class="perf-shop-table">
+        <thead><tr><th>指标</th><th>全部</th>${pshops.map(sh => `<th>${esc(sh.shop_name)}</th>`).join('')}</tr></thead>
+        <tbody>${prows.map(([label, fn]) => `
+          <tr><td>${label}</td><td>${fn(perfAll.summary || {})}</td>${pshops.map(sh => `<td>${fn(sh.summary || {})}</td>`).join('')}</tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+  }
   let perfHTML = '';
   if (perf && perf.summary) {
     const sm = perf.summary || {};
@@ -1280,11 +1340,14 @@ function paintCatalog() {
       </div>
       <div class="perf-summary">
         <div class="perf-card"><div class="p-label">GMV（实付）</div><div class="p-value">¥${fmt(sm.gmv)}</div></div>
-        <div class="perf-card"><div class="p-label">订单数</div><div class="p-value">${sm.order_count}</div></div>
+        <div class="perf-card"><div class="p-label">订单数</div><div class="p-value">${sm.order_count}</div><div class="p-hint">有发货 ${sm.shipped_count} 单</div></div>
         <div class="perf-card"><div class="p-label">客单价</div><div class="p-value">¥${fmt(sm.avg_order)}</div></div>
         <div class="perf-card"><div class="p-label">件数</div><div class="p-value">${sm.item_count}</div></div>
-        <div class="perf-card"><div class="p-label">售后率</div><div class="p-value">${sm.aftersale_rate}%</div><div class="p-hint">${sm.refund_count} 单退款</div></div>
+        <div class="perf-card"><div class="p-label">售后率</div><div class="p-value">${sm.aftersale_rate}%</div><div class="p-hint">发货后售后 ${sm.aftersale_count} ÷ 有发货 ${sm.shipped_count} 单</div></div>
+        <div class="perf-card"><div class="p-label">未发货退款</div><div class="p-value">${sm.unshipped_refund}</div><div class="p-hint">下单流失，不计售后</div></div>
       </div>
+      <div class="perf-note">📌 售后率 = 发货后售后 ÷ 有发货订单（来源：订单「订单状态 / 售后状态」字段；未发货退款单独列「下单流失」，不计入售后率）。</div>
+      ${perfAllHTML}
       <div class="perf-cols">
         <div class="perf-col">
           <h4>🏆 商品销量 TOP${topRest.length ? `<span class="perf-hint">共 ${top.length} 个</span>` : ''}</h4>
@@ -1354,11 +1417,11 @@ function paintCatalog() {
       <div class="stat-card"><div class="label">商品 SPU</div><div class="value">${stats.products || 0}</div></div>
       <div class="stat-card"><div class="label">SKU</div><div class="value">${stats.skus || 0}</div><div class="hint">已标价 ${stats.sku_priced || 0} · 已设库存 ${stats.sku_stocked || 0}</div></div>
       <div class="stat-card"><div class="label">订单</div><div class="value">${stats.orders || 0}</div></div>
-      <div class="stat-card"><div class="label">推广记录</div><div class="value">${stats.promotions || 0}</div><div class="hint">8月汇总待导入</div></div>
+      <div class="stat-card"><div class="label">推广记录</div><div class="value">${stats.promotions || 0}</div><div class="hint">待导入</div></div>
     </div>
     ${overview}
     ${perfHTML}
-    <div class="callout">📌 真实平台数据（拼多多商家后台导出，2026-09-21）。价格/库存/推广数值当前为空，待重新导出带数值版本后导入补全。</div>
+    <div class="callout">📌 多平台真实数据（拼多多/京东/小红书/微信/淘宝/抖音，2026-09-23 导入）。推广数据待导入；商品访问明细仅拼多多已采集。</div>
     <div class="catalog-searchbar"><input id="catalog-search" class="search" placeholder="🔍 搜索商品名 / 商品ID / 货号…" value="${esc(catalogCache.filter)}"></div>
     <div id="catalog-body"></div>
     <div class="orders-panel">
@@ -1539,6 +1602,7 @@ function paintCatalog() {
     if (pa && pa.summary && pa.summary.count > 0) {
       const sm = pa.summary;
       const top = pa.top_roi || [];
+      const promoByPlatform = groupByPlatform(top, r => r.shop_id || 0);
       promoEl.innerHTML = `
         <div class="perf-summary" style="margin-bottom:14px">
           <div class="perf-card"><div class="p-label">推广计划</div><div class="p-value">${sm.count}</div></div>
@@ -1547,19 +1611,43 @@ function paintCatalog() {
           <div class="perf-card"><div class="p-label">平均ROI</div><div class="p-value">${sm.avg_roi != null ? sm.avg_roi : '—'}</div></div>
           <div class="perf-card"><div class="p-label">曝光/点击</div><div class="p-value">${sm.impressions}/${sm.clicks}</div></div>
         </div>
-        <div class="table-wrap"><table>
-          <thead><tr><th>商品</th><th>花费</th><th>成交额</th><th>ROI</th><th>成交笔数</th><th>曝光</th><th>点击</th></tr></thead>
-          <tbody>${top.map(r => `
-            <tr>
-              <td title="${esc(r.product_name)}">${esc((r.product_name || '').slice(0, 16))}${(r.product_name || '').length > 16 ? '…' : ''}</td>
-              <td>¥${fmt(r.total_spend)}</td>
-              <td>¥${fmt(r.amt)}</td>
-              <td>${r.roi != null ? r.roi : '—'}</td>
-              <td>${r.deals}</td>
-              <td>${r.imp}</td>
-              <td>${r.clk}</td>
-            </tr>`).join('')}
-          </tbody></table></div>`;
+        ${Object.entries(promoByPlatform).map(([pname, shops]) => `
+        <div class="orders-platform">
+          <div class="orders-platform-head"><h4>🛒 ${esc(pname)}</h4></div>
+          ${shops.map(sg => `
+            <div class="orders-shop">
+              <div class="orders-shop-head" data-toggle-order-shop>
+                <span class="orders-shop-fold">▸</span>
+                <h5>🏪 ${esc(sg.shop)} <span class="badge">${sg.rows.length} 条</span></h5>
+              </div>
+              <div class="orders-shop-body" hidden>
+                <div class="table-wrap"><table>
+                  <thead><tr><th>商品</th><th>花费</th><th>成交额</th><th>ROI</th><th>成交笔数</th><th>曝光</th><th>点击</th></tr></thead>
+                  <tbody>${sg.rows.map(r => `
+                    <tr>
+                      <td title="${esc(r.product_name)}">${esc((r.product_name || '').slice(0, 16))}${(r.product_name || '').length > 16 ? '…' : ''}</td>
+                      <td>¥${fmt(r.total_spend)}</td>
+                      <td>¥${fmt(r.amt)}</td>
+                      <td>${r.roi != null ? r.roi : '—'}</td>
+                      <td>${r.deals}</td>
+                      <td>${r.imp}</td>
+                      <td>${r.clk}</td>
+                    </tr>`).join('')}
+                  </tbody></table></div>
+              </div>
+            </div>`).join('')}
+        </div>`).join('')}`;
+      // 推广明细内店铺折叠切换
+      promoEl.querySelectorAll('[data-toggle-order-shop]').forEach(t => {
+        t.onclick = () => {
+          const shop = t.closest('.orders-shop');
+          const body = shop.querySelector('.orders-shop-body');
+          const icon = t.querySelector('.orders-shop-fold');
+          const willOpen = body.hidden;
+          body.hidden = !willOpen;
+          icon.textContent = willOpen ? '▾' : '▸';
+        };
+      });
     } else {
       promoEl.innerHTML = '<div class="empty">暂无推广数据，点「⬆ 导入」导入推广 CSV</div>';
     }
@@ -1575,18 +1663,45 @@ function paintCatalog() {
       lowToggle.querySelector('.orders-fold-icon').textContent = willOpen ? '▾' : '▸';
     };
     const low = catalogCache.lowStock || [];
-    lowEl.innerHTML = low.length ? `
-      <div class="table-wrap"><table>
-        <thead><tr><th>商品</th><th>货号</th><th>规格</th><th>库存</th></tr></thead>
-        <tbody>${low.map(r => `
-          <tr>
-            <td title="${esc(r.name)}">${esc((r.name || '').slice(0, 16))}${(r.name || '').length > 16 ? '…' : ''}</td>
-            <td>${esc(r.code || '')}</td>
-            <td>${esc(r.spec_name || '')}</td>
-            <td><span class="stock-low">${r.stock}</span></td>
-          </tr>`).join('')}
-        </tbody></table></div>`
-      : '<div class="empty">暂无低库存 SKU（库存 ≤ 10）</div>';
+    if (!low.length) {
+      lowEl.innerHTML = '<div class="empty">暂无低库存 SKU（库存 ≤ 10）</div>';
+    } else {
+      const lowByPlatform = groupByPlatform(low, r => r.shop_id || 0);
+      lowEl.innerHTML = Object.entries(lowByPlatform).map(([pname, shops]) => `
+        <div class="orders-platform">
+          <div class="orders-platform-head"><h4>🛒 ${esc(pname)}</h4></div>
+          ${shops.map(sg => `
+            <div class="orders-shop">
+              <div class="orders-shop-head" data-toggle-order-shop>
+                <span class="orders-shop-fold">▸</span>
+                <h5>🏪 ${esc(sg.shop)} <span class="badge">${sg.rows.length} 条</span></h5>
+              </div>
+              <div class="orders-shop-body" hidden>
+                <div class="table-wrap"><table>
+                  <thead><tr><th>商品</th><th>货号</th><th>规格</th><th>库存</th></tr></thead>
+                  <tbody>${sg.rows.map(r => `
+                    <tr>
+                      <td title="${esc(r.name)}">${esc((r.name || '').slice(0, 16))}${(r.name || '').length > 16 ? '…' : ''}</td>
+                      <td>${esc(r.code || '')}</td>
+                      <td>${esc(r.spec_name || '')}</td>
+                      <td><span class="stock-low">${r.stock}</span></td>
+                    </tr>`).join('')}
+                  </tbody></table></div>
+              </div>
+            </div>`).join('')}
+        </div>`).join('');
+      // 库存预警内店铺折叠切换
+      lowEl.querySelectorAll('[data-toggle-order-shop]').forEach(t => {
+        t.onclick = () => {
+          const shop = t.closest('.orders-shop');
+          const body = shop.querySelector('.orders-shop-body');
+          const icon = t.querySelector('.orders-shop-fold');
+          const willOpen = body.hidden;
+          body.hidden = !willOpen;
+          icon.textContent = willOpen ? '▾' : '▸';
+        };
+      });
+    }
   }
 
   // 选品联动折叠切换 + 渲染
@@ -1613,11 +1728,11 @@ function paintCatalog() {
       };
       const labels = Object.entries(summary.labels || {}).map(([k, v]) =>
         `<span class="${labelBadge[k] || 'sel-label'}">${esc(k)} ${v}</span>`).join(' ');
-      selEl.innerHTML = `
-        <div class="sel-summary">${labels}</div>
+      const selByPlatform = groupByPlatform(items, r => r.shop_id || 0);
+      const selTable = rows => `
         <div class="table-wrap"><table>
           <thead><tr><th>商品</th><th>建议</th><th>成交</th><th>毛利</th><th>访问</th><th>ROI</th><th>原因</th></tr></thead>
-          <tbody>${items.map(r => `
+          <tbody>${rows.map(r => `
             <tr>
               <td title="${esc(r.name)}">${esc((r.name || '').slice(0, 14))}${(r.name || '').length > 14 ? '…' : ''}${r.code ? ' <em>' + esc(r.code) + '</em>' : ''}</td>
               <td><span class="${labelBadge[r.label] || 'sel-label'}">${esc(r.label)}</span></td>
@@ -1628,6 +1743,31 @@ function paintCatalog() {
               <td class="sel-reason">${esc(r.reason)}</td>
             </tr>`).join('')}
           </tbody></table></div>`;
+      selEl.innerHTML = `
+        <div class="sel-summary">${labels}</div>
+        ${Object.entries(selByPlatform).map(([pname, shops]) => `
+        <div class="orders-platform">
+          <div class="orders-platform-head"><h4>🛒 ${esc(pname)}</h4></div>
+          ${shops.map(sg => `
+            <div class="orders-shop">
+              <div class="orders-shop-head" data-toggle-order-shop>
+                <span class="orders-shop-fold">▸</span>
+                <h5>🏪 ${esc(sg.shop)} <span class="badge">${sg.rows.length} 条</span></h5>
+              </div>
+              <div class="orders-shop-body" hidden>${selTable(sg.rows)}</div>
+            </div>`).join('')}
+        </div>`).join('')}`;
+      // 选品联动内店铺折叠切换
+      selEl.querySelectorAll('[data-toggle-order-shop]').forEach(t => {
+        t.onclick = () => {
+          const shop = t.closest('.orders-shop');
+          const body = shop.querySelector('.orders-shop-body');
+          const icon = t.querySelector('.orders-shop-fold');
+          const willOpen = body.hidden;
+          body.hidden = !willOpen;
+          icon.textContent = willOpen ? '▾' : '▸';
+        };
+      });
     }
   }
 
@@ -1994,26 +2134,53 @@ function paintCatalog() {
     };
     const renderGe = () => {
       const ge = allGe.filter(g => matchGe(g.stat_date));
-      geTable.innerHTML = ge.length
-        ? `<div class="table-wrap"><table>
-            <thead><tr><th>商品</th><th>访客数</th><th>浏览量</th><th>成交金额</th><th>订单数</th><th>买家数</th><th>转化率</th><th>收藏数</th><th>日期</th></tr></thead>
-            <tbody>${ge.map(g => {
-              const name = g.goods_name || '';
-              return `
-              <tr>
-                <td title="${esc(name)}">${esc(name.slice(0, 22))}${name.length > 22 ? '…' : ''}</td>
-                <td>${g.goods_uv != null ? g.goods_uv : '—'}</td>
-                <td>${g.goods_pv != null ? g.goods_pv : '—'}</td>
-                <td>${g.pay_ordr_amt != null ? '¥' + fmt(g.pay_ordr_amt) : '—'}</td>
-                <td>${g.pay_ordr_cnt != null ? g.pay_ordr_cnt : '—'}</td>
-                <td>${g.pay_ordr_usr_cnt != null ? g.pay_ordr_usr_cnt : '—'}</td>
-                <td>${g.goods_vcr != null ? fmt(g.goods_vcr, 2) + '%' : '—'}</td>
-                <td>${g.goods_fav_cnt != null ? g.goods_fav_cnt : '—'}</td>
-                <td>${esc(g.stat_date || '')}</td>
-              </tr>`;
-            }).join('')}
-            </tbody></table></div>`
-        : '<div class="empty">该日期范围暂无数据，点「🔄 采集最新数据」获取</div>';
+      if (!ge.length) {
+        geTable.innerHTML = '<div class="empty">该日期范围暂无数据，点「🔄 采集最新数据」获取</div>';
+        return;
+      }
+      const geByPlatform = groupByPlatform(ge, g => g.shop_id || 0);
+      geTable.innerHTML = Object.entries(geByPlatform).map(([pname, shops]) => `
+        <div class="orders-platform">
+          <div class="orders-platform-head"><h4>🛒 ${esc(pname)}</h4></div>
+          ${shops.map(sg => `
+            <div class="orders-shop">
+              <div class="orders-shop-head" data-toggle-order-shop>
+                <span class="orders-shop-fold">▸</span>
+                <h5>🏪 ${esc(sg.shop)} <span class="badge">${sg.rows.length} 条</span></h5>
+              </div>
+              <div class="orders-shop-body" hidden>
+                <div class="table-wrap"><table>
+                  <thead><tr><th>商品</th><th>访客数</th><th>浏览量</th><th>成交金额</th><th>订单数</th><th>买家数</th><th>转化率</th><th>收藏数</th><th>日期</th></tr></thead>
+                  <tbody>${sg.rows.map(g => {
+                    const name = g.goods_name || '';
+                    return `
+                    <tr>
+                      <td title="${esc(name)}">${esc(name.slice(0, 22))}${name.length > 22 ? '…' : ''}</td>
+                      <td>${g.goods_uv != null ? g.goods_uv : '—'}</td>
+                      <td>${g.goods_pv != null ? g.goods_pv : '—'}</td>
+                      <td>${g.pay_ordr_amt != null ? '¥' + fmt(g.pay_ordr_amt) : '—'}</td>
+                      <td>${g.pay_ordr_cnt != null ? g.pay_ordr_cnt : '—'}</td>
+                      <td>${g.pay_ordr_usr_cnt != null ? g.pay_ordr_usr_cnt : '—'}</td>
+                      <td>${g.goods_vcr != null ? fmt(g.goods_vcr, 2) + '%' : '—'}</td>
+                      <td>${g.goods_fav_cnt != null ? g.goods_fav_cnt : '—'}</td>
+                      <td>${esc(g.stat_date || '')}</td>
+                    </tr>`;
+                  }).join('')}
+                  </tbody></table></div>
+              </div>
+            </div>`).join('')}
+        </div>`).join('');
+      // 访问明细内店铺折叠切换
+      geTable.querySelectorAll('[data-toggle-order-shop]').forEach(t => {
+        t.onclick = () => {
+          const shop = t.closest('.orders-shop');
+          const body = shop.querySelector('.orders-shop-body');
+          const icon = t.querySelector('.orders-shop-fold');
+          const willOpen = body.hidden;
+          body.hidden = !willOpen;
+          icon.textContent = willOpen ? '▾' : '▸';
+        };
+      });
     };
     renderGe();
 
@@ -2044,85 +2211,82 @@ function paintCatalog() {
     }
   }
 
-  // 订单记录（按平台 + 店铺层级分组）
+  // 订单记录（按平台 + 店铺层级分组，含无订单的新店铺）
   const ordersEl = $('#catalog-orders');
   if (ordersEl) {
-    if (!catalogCache.orders.length) {
-      ordersEl.innerHTML = '<div class="empty">暂无订单数据</div>';
-    } else {
-      // shop_id -> {platform, shop}
-      const shopMeta = {};
-      for (const pl of tree) {
-        for (const sh of (pl.shops || [])) {
-          shopMeta[sh.id] = { platform: pl.name, shop: sh.name };
-        }
-      }
-      // 按 shop_id 分组
-      const byShop = {};
-      for (const o of catalogCache.orders) {
-        const sid = o.shop_id || 0;
-        (byShop[sid] = byShop[sid] || []).push(o);
-      }
-      // 按平台分组
-      const byPlatform = {};
-      for (const [sid, os] of Object.entries(byShop)) {
-        const meta = shopMeta[sid] || { platform: '未分类', shop: '未知店铺' };
-        (byPlatform[meta.platform] = byPlatform[meta.platform] || []).push({ shop: meta.shop, orders: os });
-      }
-
-      const orderTable = os => {
-        const MAX = 100;
-        const shown = os.slice(0, MAX);
-        const more = os.length - MAX;
-        return `
-        ${more > 0 ? `<div class="orders-more">仅显示最近 ${MAX} 单，共 ${os.length} 单（用「⬇ 订单」导出全部）</div>` : ''}
-        <div class="table-wrap"><table>
-          <thead><tr><th>订单号</th><th>状态</th><th>商品规格</th><th>省</th><th>市</th><th>区</th><th>实付</th><th>实收</th><th>快递公司</th><th>快递单号</th><th>支付时间</th><th>售后</th></tr></thead>
-          <tbody>${shown.map(o => `
-            <tr>
-              <td class="orders-no">${esc(o.order_no)}</td>
-              <td>${esc(o.status)}</td>
-              <td>${esc(o.spec)}</td>
-              <td>${esc(o.province || '')}</td>
-              <td>${esc(o.city || '')}</td>
-              <td>${esc(o.district || '')}</td>
-              <td>¥${fmt(o.buyer_amount)}</td>
-              <td>¥${fmt(o.seller_amount)}</td>
-              <td>${esc(o.courier || '')}</td>
-              <td class="orders-no">${esc(o.tracking_no || '')}</td>
-              <td>${esc(o.pay_time)}</td>
-              <td>${esc(o.aftersale_status)}</td>
-            </tr>`).join('')}
-          </tbody></table></div>`;
-        };
-
-      ordersEl.innerHTML = Object.entries(byPlatform).map(([pname, shops]) => `
-        <div class="orders-platform">
-          <div class="orders-platform-head"><h4>🛒 ${esc(pname)}</h4></div>
-          ${shops.map(sg => `
-            <div class="orders-shop">
-              <div class="orders-shop-head" data-toggle-order-shop>
-                <span class="orders-shop-fold">▸</span>
-                <h5>🏪 ${esc(sg.shop)} <span class="badge">${sg.orders.length} 单</span></h5>
-              </div>
-              <div class="orders-shop-body" hidden>
-                ${orderTable(sg.orders)}
-              </div>
-            </div>`).join('')}
-        </div>`).join('');
-
-      // 订单记录内各店铺折叠切换
-      ordersEl.querySelectorAll('[data-toggle-order-shop]').forEach(t => {
-        t.onclick = () => {
-          const shop = t.closest('.orders-shop');
-          const body = shop.querySelector('.orders-shop-body');
-          const icon = t.querySelector('.orders-shop-fold');
-          const willOpen = body.hidden;
-          body.hidden = !willOpen;
-          icon.textContent = willOpen ? '▾' : '▸';
-        };
-      });
+    // 按 shop_id 分组
+    const byShop = {};
+    for (const o of catalogCache.orders) {
+      const sid = o.shop_id || 0;
+      (byShop[sid] = byShop[sid] || []).push(o);
     }
+    // 遍历所有平台+店铺（含无订单的新店铺），订单按 shop_id 归入
+    const byPlatform = {};
+    for (const pl of tree) {
+      for (const sh of (pl.shops || [])) {
+        (byPlatform[pl.name] = byPlatform[pl.name] || []).push({ shop: sh.name, orders: byShop[sh.id] || [] });
+      }
+    }
+    // 有订单但 shop_id 不在 tree 里的（如未分类），补到「未分类」平台
+    for (const [sid, os] of Object.entries(byShop)) {
+      const known = shopList.some(s => String(s.id) === String(sid));
+      if (!known && os.length) {
+        (byPlatform['未分类'] = byPlatform['未分类'] || []).push({ shop: '未知店铺', orders: os });
+      }
+    }
+
+    const orderTable = os => {
+      const MAX = 100;
+      const shown = os.slice(0, MAX);
+      const more = os.length - MAX;
+      return `
+      ${more > 0 ? `<div class="orders-more">仅显示最近 ${MAX} 单，共 ${os.length} 单（用「⬇ 订单」导出全部）</div>` : ''}
+      <div class="table-wrap"><table>
+        <thead><tr><th>订单号</th><th>状态</th><th>商品规格</th><th>省</th><th>市</th><th>区</th><th>实付</th><th>实收</th><th>快递公司</th><th>快递单号</th><th>支付时间</th><th>售后</th></tr></thead>
+        <tbody>${shown.map(o => `
+          <tr>
+            <td class="orders-no">${esc(o.order_no)}</td>
+            <td>${esc(o.status)}</td>
+            <td>${esc(o.spec)}</td>
+            <td>${esc(o.province || '')}</td>
+            <td>${esc(o.city || '')}</td>
+            <td>${esc(o.district || '')}</td>
+            <td>¥${fmt(o.buyer_amount)}</td>
+            <td>¥${fmt(o.seller_amount)}</td>
+            <td>${esc(o.courier || '')}</td>
+            <td class="orders-no">${esc(o.tracking_no || '')}</td>
+            <td>${esc(o.pay_time)}</td>
+            <td>${esc(o.aftersale_status)}</td>
+          </tr>`).join('')}
+        </tbody></table></div>`;
+      };
+
+    ordersEl.innerHTML = Object.entries(byPlatform).map(([pname, shops]) => `
+      <div class="orders-platform">
+        <div class="orders-platform-head"><h4>🛒 ${esc(pname)}</h4></div>
+        ${shops.map(sg => `
+          <div class="orders-shop">
+            <div class="orders-shop-head" data-toggle-order-shop>
+              <span class="orders-shop-fold">▸</span>
+              <h5>🏪 ${esc(sg.shop)} <span class="badge">${sg.orders.length} 单</span></h5>
+            </div>
+            <div class="orders-shop-body" hidden>
+              ${sg.orders.length ? orderTable(sg.orders) : '<div class="empty">暂无订单</div>'}
+            </div>
+          </div>`).join('')}
+      </div>`).join('');
+
+    // 订单记录内各店铺折叠切换
+    ordersEl.querySelectorAll('[data-toggle-order-shop]').forEach(t => {
+      t.onclick = () => {
+        const shop = t.closest('.orders-shop');
+        const body = shop.querySelector('.orders-shop-body');
+        const icon = t.querySelector('.orders-shop-fold');
+        const willOpen = body.hidden;
+        body.hidden = !willOpen;
+        icon.textContent = willOpen ? '▾' : '▸';
+      };
+    });
   }
 }
 

@@ -509,6 +509,9 @@ class Handler(BaseHTTPRequestHandler):
             shop_id = qs.get("shop_id", [None])[0]
             return _json(self, catalog.catalog_performance(int(shop_id) if shop_id else None))
 
+        if path == "/api/catalog/performance-all" and self.command == "GET":
+            return _json(self, catalog.catalog_performance_all())
+
         if path == "/api/catalog/product/cost" and self.command == "POST":
             item = self._read_body()
             shop_id = int(item.get("shop_id") or 0)
@@ -607,9 +610,12 @@ class Handler(BaseHTTPRequestHandler):
             body = self._read_body()
             etype = body.get("type", "")
             shop_id = int(body.get("shop_id") or 0)
-            csv_text = body.get("csv", "")
+            fmt = (body.get("format") or "csv").lower()
             try:
-                result = catalog.import_csv(etype, shop_id, csv_text)
+                if fmt == "xlsx":
+                    result = catalog.import_xlsx(etype, shop_id, body.get("data", ""))
+                else:
+                    result = catalog.import_csv(etype, shop_id, body.get("csv", ""))
                 return _json(self, {"ok": True, **result})
             except ValueError as e:
                 return _json(self, {"ok": False, "error": str(e)}, 400)
