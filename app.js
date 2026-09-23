@@ -3370,17 +3370,42 @@ async function loadKeywordsOnly() {
   state.keywords = kw.items || [];
 }
 
-async function init() {
-  $('#date-pill').textContent = todayCN();
-  $$('.nav-item').forEach(b => b.onclick = () => setView(b.dataset.view));
-  $$('[data-nav]').forEach(b => b.onclick = () => setView(b.dataset.nav));
-  // 店铺切换
+function bindShopButtons() {
   $$('.shop-btn').forEach(b => b.onclick = () => {
     $$('.shop-btn').forEach(x => x.classList.remove('active'));
     b.classList.add('active');
     state.shop = b.dataset.shop;
     setView(state.view);
   });
+}
+
+async function init() {
+  $('#date-pill').textContent = todayCN();
+  $$('.nav-item').forEach(b => b.onclick = () => setView(b.dataset.view));
+  $$('[data-nav]').forEach(b => b.onclick = () => setView(b.dataset.nav));
+  // 动态生成店铺切换按钮（从商品库平台列表），覆盖 index.html 默认按钮
+  try {
+    const resp = await api('/api/catalog/platform-overview');
+    const plats = (resp && resp.items) || [];
+    if (plats.length) {
+      const order = ['拼多多', '淘宝'];
+      plats.sort((a, b) => {
+        const ia = order.indexOf(a.name), ib = order.indexOf(b.name);
+        if (ia !== -1 || ib !== -1) {
+          if (ia === -1) return 1;
+          if (ib === -1) return -1;
+          return ia - ib;
+        }
+        return (a.platform_id || 0) - (b.platform_id || 0);
+      });
+      const pill = $('#shop-pill');
+      const cur = state.shop || '拼多多';
+      pill.innerHTML = plats.map(pl =>
+        `<button class="shop-btn ${pl.name === cur ? 'active' : ''}" data-shop="${esc(pl.name)}">${esc(pl.name)}</button>`
+      ).join('');
+    }
+  } catch (e) {}
+  bindShopButtons();
   await loadAll();
   setView('dashboard');
 }
