@@ -1442,7 +1442,8 @@ function paintCatalog() {
         <div class="perf-card"><div class="p-label">售后率</div><div class="p-value">${sm.aftersale_rate}%</div><div class="p-hint">发货后售后 ${sm.aftersale_count} ÷ 有发货 ${sm.shipped_count} 单</div></div>
         <div class="perf-card"><div class="p-label">未发货退款</div><div class="p-value">${sm.unshipped_refund}</div><div class="p-hint">下单流失，不计售后</div></div>
       </div>
-      <div class="perf-note">📌 售后率 = 发货后售后 ÷ 有发货订单（来源：订单「订单状态 / 售后状态」字段；未发货退款单独列「下单流失」，不计入售后率）。</div>
+      <div class="perf-note" style="color:var(--red);font-weight:600">⚠️ 口径：GMV（实付）、订单数、件数 统计<b>全部订单状态</b>，包含「已发货退款」「已收货退款」「未发货退款」「已取消/关闭」（${sm.canceled || 0} 单）「待付款」「待发货」。已发货/已收货退款单仍计入 GMV 与订单数；未发货退款单独列「下单流失」，不计入售后率。</div>
+      <div class="perf-note">📌 售后率 = 发货后售后 ÷ 有发货订单（来源：订单「订单状态 / 售后状态」字段）。</div>
       ${perfAllHTML}
       <div class="perf-cols">
         <div class="perf-col">
