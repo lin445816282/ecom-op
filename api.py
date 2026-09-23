@@ -507,10 +507,15 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/catalog/performance" and self.command == "GET":
             shop_id = qs.get("shop_id", [None])[0]
-            return _json(self, catalog.catalog_performance(int(shop_id) if shop_id else None))
+            start = qs.get("start", [None])[0]
+            end = qs.get("end", [None])[0]
+            return _json(self, catalog.catalog_performance(
+                int(shop_id) if shop_id else None, start or None, end or None))
 
         if path == "/api/catalog/performance-all" and self.command == "GET":
-            return _json(self, catalog.catalog_performance_all())
+            start = qs.get("start", [None])[0]
+            end = qs.get("end", [None])[0]
+            return _json(self, catalog.catalog_performance_all(start or None, end or None))
 
         if path == "/api/catalog/product/cost" and self.command == "POST":
             item = self._read_body()

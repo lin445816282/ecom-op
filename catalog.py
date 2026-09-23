@@ -1079,8 +1079,10 @@ def catalog_analysis() -> dict:
         }
 
 
-def _perf_summary(c, shop_id=None) -> dict:
+def _perf_summary(c, shop_id=None, start=None, end=None) -> dict:
     """经营分析 summary（统一口径，供 catalog_performance / catalog_performance_all 复用）。
+
+    start/end: 日期字符串 "YYYY-MM-DD"，提供时仅统计该时间段订单（含边界当天）。
 
     口径（跨平台通用）：
     - order_count     总订单数（含未发货/已取消/待付款）
@@ -1095,8 +1097,18 @@ def _perf_summary(c, shop_id=None) -> dict:
                "OR status LIKE '%交易成功%' OR tracking_no != '')")
     REFUND = "(aftersale_status != '' AND aftersale_status NOT LIKE '无售后%')"
     CANCELED = "(status LIKE '%取消%' OR status LIKE '%关闭%')"
-    w = " WHERE shop_id=?" if shop_id else ""
-    args = [shop_id] if shop_id else []
+    conds = []
+    args = []
+    if shop_id:
+        conds.append("shop_id=?")
+        args.append(shop_id)
+    if start:
+        conds.append("pay_time >= ?")
+        args.append(start)
+    if end:
+        conds.append("pay_time <= ?")
+        args.append(end + " 23:59:59")
+    w = (" WHERE " + " AND ".join(conds)) if conds else ""
     s = c.execute(
         "SELECT COUNT(*) AS order_count, SUM(buyer_amount) AS gmv, "
         "SUM(seller_amount) AS seller_amt, SUM(quantity) AS item_count, "
@@ -1124,50 +1136,64 @@ def _perf_summary(c, shop_id=None) -> dict:
     }
 
 
-def catalog_performance(shop_id: int = None) -> dict:
+def catalog_performance(shop_id: int = None, start: str = None, end: str = None) -> dict:
     """商品库经营分析：销售概览 + 商品销量排行 + 日趋势 + 地区分布 + 售后。
-    shop_id 提供时按店铺筛选。
+    shop_id 提供时按店铺筛选；start/end 提供时按时间段筛选（含边界当天）。
     """
     with closing(_conn()) as c:
-        w = " WHERE shop_id=?" if shop_id else ""
-        args = [shop_id] if shop_id else []
+        def _w(prefix=""):
+            cs, as_ = [], []
+            if shop_id:
+                cs.append(prefix + "shop_id=?"); as_.append(shop_id)
+            if start:
+                cs.append(prefix + "pay_time >= ?"); as_.append(start)
+            if end:
+                cs.append(prefix + "pay_time <= ?"); as_.append(end + " 23:59:59")
+            return cs, as_
 
         # 商品销量/销售额排行（关联商品名/货号）
+        ocs, oargs = _w("o.")
         top_products = [dict(r) for r in c.execute(
             "SELECT o.platform_product_id, "
             "COALESCE(p.name,'') AS name, COALESCE(p.code,'') AS code, "
             "COUNT(*) AS orders, ROUND(SUM(o.buyer_amount),2) AS amount, SUM(o.quantity) AS qty "
             "FROM orders o LEFT JOIN products p ON p.platform_product_id = o.platform_product_id "
-            + (" WHERE o.shop_id=?" if shop_id else "") +
-            " GROUP BY o.platform_product_id ORDER BY amount DESC, orders DESC LIMIT 20", args
+            + ((" WHERE " + " AND ".join(ocs)) if ocs else "") +
+            " GROUP BY o.platform_product_id ORDER BY amount DESC, orders DESC LIMIT 20", oargs
         ).fetchall()]
 
-        # 按日趋势
+        # 按日趋势（排除空支付时间）
+        cs, args = _w("")
+        cs = ["pay_time != ''"] + cs
         daily_trend = [dict(r) for r in c.execute(
             "SELECT substr(pay_time,1,10) AS date, COUNT(*) AS orders, "
             "ROUND(SUM(buyer_amount),2) AS amount "
-            "FROM orders WHERE pay_time != ''" + (" AND shop_id=?" if shop_id else "") +
+            "FROM orders WHERE " + " AND ".join(cs) +
             " GROUP BY date ORDER BY date", args
         ).fetchall()]
 
         # 地区分布 TOP（过滤拼多多脱敏的 ****）
+        cs2, args2 = _w("")
+        cs2 = ["province != ''", "province != '****'"] + cs2
         regions = [dict(r) for r in c.execute(
             "SELECT province, COUNT(*) AS orders, ROUND(SUM(buyer_amount),2) AS amount "
-            "FROM orders WHERE province != '' AND province != '****'"
-            + (" AND shop_id=?" if shop_id else "") +
-            " GROUP BY province ORDER BY orders DESC LIMIT 10", args
+            "FROM orders WHERE " + " AND ".join(cs2) +
+            " GROUP BY province ORDER BY orders DESC LIMIT 10", args2
         ).fetchall()]
 
         return {
-            "summary": _perf_summary(c, shop_id),
+            "summary": _perf_summary(c, shop_id, start, end),
             "top_products": top_products,
             "daily_trend": daily_trend,
             "regions": regions,
         }
 
 
-def catalog_performance_all() -> dict:
-    """经营分析：全部店铺汇总 + 各店铺 summary 对比（供前端一屏直看）。"""
+def catalog_performance_all(start: str = None, end: str = None) -> dict:
+    """经营分析：全部店铺汇总 + 各店铺 summary 对比 + 服务器日期（供前端一屏直看）。
+
+    start/end: 日期字符串 "YYYY-MM-DD"，提供时仅统计该时间段订单。
+    """
     with closing(_conn()) as c:
         shops = c.execute(
             "SELECT s.id, s.name, COALESCE(p.name,'') AS platform FROM shops s "
@@ -1179,9 +1205,11 @@ def catalog_performance_all() -> dict:
                 "shop_id": sh["id"],
                 "shop_name": sh["name"],
                 "platform": sh["platform"],
-                "summary": _perf_summary(c, sh["id"]),
+                "summary": _perf_summary(c, sh["id"], start, end),
             })
-        return {"summary": _perf_summary(c, None), "shops": result}
+        server_today = c.execute("SELECT date('now','localtime') AS d").fetchone()["d"]
+        return {"summary": _perf_summary(c, None, start, end), "shops": result,
+                "server_today": server_today}
 
 
 # ----------------------------- 修改记录 -----------------------------

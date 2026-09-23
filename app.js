@@ -908,7 +908,61 @@ function renderProducts(editingProduct = null) {
 }
 
 /* ---------------- 商品库（平台 + 电商层级） ---------------- */
-const catalogCache = { tree: [], stats: {}, orders: [], analysis: null, filter: '', mods: [], modCounts: {}, goodsEffect: [], performance: null, perfAll: null, promoAnalysis: null, lowStock: [], selection: null, freight: null, freightMatch: null, freightRate: [], freightCompare: null, suppliers: [], supplierProducts: {}, freightMonth: '', freightShop: null, deleteMode: false, perfShop: null };
+const catalogCache = { tree: [], stats: {}, orders: [], analysis: null, filter: '', mods: [], modCounts: {}, goodsEffect: [], performance: null, perfAll: null, promoAnalysis: null, lowStock: [], selection: null, freight: null, freightMatch: null, freightRate: [], freightCompare: null, suppliers: [], supplierProducts: {}, freightMonth: '', freightShop: null, deleteMode: false, perfShop: null, perfRange: null, perfPreset: 'all', serverToday: '' };
+
+// 日期工具：'YYYY-MM-DD' -> 本地 Date / Date -> 'YYYY-MM-DD'
+const dToObj = (s) => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
+const fmtDate = (dt) => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+
+// 快捷时间段：本周/上周/本月/上月 -> {start, end}（today 用服务器日期）
+function rangeFor(key, today) {
+  const t = dToObj(today);
+  const dow = t.getDay(); // 0=周日
+  const mondayOffset = dow === 0 ? 6 : dow - 1;
+  if (key === 'week') {
+    const monday = new Date(t.getFullYear(), t.getMonth(), t.getDate() - mondayOffset);
+    return { start: fmtDate(monday), end: today };
+  }
+  if (key === 'last_week') {
+    const thisMonday = new Date(t.getFullYear(), t.getMonth(), t.getDate() - mondayOffset);
+    const lastMonday = new Date(thisMonday.getFullYear(), thisMonday.getMonth(), thisMonday.getDate() - 7);
+    const lastSunday = new Date(lastMonday.getFullYear(), lastMonday.getMonth(), lastMonday.getDate() + 6);
+    return { start: fmtDate(lastMonday), end: fmtDate(lastSunday) };
+  }
+  if (key === 'month') {
+    return { start: today.slice(0, 7) + '-01', end: today };
+  }
+  if (key === 'last_month') {
+    const first = new Date(t.getFullYear(), t.getMonth() - 1, 1);
+    const last = new Date(t.getFullYear(), t.getMonth(), 0);
+    return { start: fmtDate(first), end: fmtDate(last) };
+  }
+  return null; // all
+}
+
+// 经营分析时间段/店铺查询串
+const perfQs = () => {
+  const parts = [];
+  if (catalogCache.perfShop) parts.push(`shop_id=${catalogCache.perfShop}`);
+  const r = catalogCache.perfRange;
+  if (r) {
+    if (r.start) parts.push(`start=${r.start}`);
+    if (r.end) parts.push(`end=${r.end}`);
+  }
+  return parts.length ? '?' + parts.join('&') : '';
+};
+
+// 重新拉取经营分析（performance + performance-all），按当前时间段/店铺筛选
+async function reloadPerf() {
+  const [perfResp, perfAllResp] = await Promise.all([
+    api('/api/catalog/performance' + perfQs()),
+    api('/api/catalog/performance-all' + perfQs()),
+  ]);
+  catalogCache.performance = perfResp || null;
+  catalogCache.perfAll = perfAllResp || null;
+  if (perfAllResp && perfAllResp.server_today) catalogCache.serverToday = perfAllResp.server_today;
+  paintCatalog();
+}
 
 async function renderCatalog() {
   const el = $('#view-catalog');
@@ -922,8 +976,8 @@ async function renderCatalog() {
       api('/api/catalog/modifications'),
       api('/api/catalog/modifications/counts'),
       api('/api/catalog/goods-effect'),
-      api('/api/catalog/performance' + (catalogCache.perfShop ? `?shop_id=${catalogCache.perfShop}` : '')),
-      api('/api/catalog/performance-all'),
+      api('/api/catalog/performance' + perfQs()),
+      api('/api/catalog/performance-all' + perfQs()),
       api('/api/catalog/promotions-analysis'),
       api('/api/catalog/low-stock'),
       api('/api/catalog/selection'),
@@ -942,6 +996,7 @@ async function renderCatalog() {
     catalogCache.goodsEffect = geResp.items || [];
     catalogCache.performance = perfResp || null;
     catalogCache.perfAll = perfAllResp || null;
+    if (perfAllResp && perfAllResp.server_today) catalogCache.serverToday = perfAllResp.server_today;
     catalogCache.promoAnalysis = promoResp || null;
     catalogCache.lowStock = lowResp.items || [];
     catalogCache.selection = selResp || null;
@@ -1299,22 +1354,34 @@ function paintCatalog() {
   let perfAllHTML = '';
   if (perfAll && perfAll.shops && perfAll.shops.length) {
     const pshops = perfAll.shops;
-    const prows = [
+    // 店铺为行、指标为列（手机端更窄，横向滚动幅度小）
+    const pcols = [
       ['GMV', s => '¥' + fmt(s.gmv || 0)],
       ['订单数', s => s.order_count || 0],
       ['有发货', s => s.shipped_count || 0],
       ['售后率', s => (s.aftersale_rate != null ? s.aftersale_rate + '%' : '—')],
       ['未发货退款', s => s.unshipped_refund || 0],
     ];
+    const pcell = (summary) => pcols.map(([, fn]) => `<td>${fn(summary)}</td>`).join('');
+    // 时间段快捷筛选（本周/上周/本月/上月/全部）
+    const preset = catalogCache.perfPreset || 'all';
+    const rangeBtns = [['week', '本周'], ['last_week', '上周'], ['month', '本月'], ['last_month', '上月'], ['all', '全部']]
+      .map(([k, label]) => `<button class="perf-rbtn ${preset === k ? 'active' : ''}" data-perf-range="${k}">${label}</button>`).join('');
     perfAllHTML = `
     <div class="perf-shops">
-      <h4>🏪 汇总 + 各店铺</h4>
-      <table class="perf-shop-table">
-        <thead><tr><th>指标</th><th>全部</th>${pshops.map(sh => `<th>${esc(sh.shop_name)}</th>`).join('')}</tr></thead>
-        <tbody>${prows.map(([label, fn]) => `
-          <tr><td>${label}</td><td>${fn(perfAll.summary || {})}</td>${pshops.map(sh => `<td>${fn(sh.summary || {})}</td>`).join('')}</tr>`).join('')}
-        </tbody>
-      </table>
+      <div class="perf-shops-head">
+        <h4>🏪 汇总 + 各店铺</h4>
+        <div class="perf-range">${rangeBtns}</div>
+      </div>
+      <div class="perf-shop-scroll">
+        <table class="perf-shop-table">
+          <thead><tr><th>平台</th><th>店铺</th>${pcols.map(([l]) => `<th>${l}</th>`).join('')}</tr></thead>
+          <tbody>
+            <tr class="perf-shop-all"><td>—</td><td>全部</td>${pcell(perfAll.summary || {})}</tr>
+            ${pshops.map(sh => `<tr><td>${esc(sh.platform)}</td><td>${esc(sh.shop_name)}</td>${pcell(sh.summary || {})}</tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
     </div>`;
   }
   let perfHTML = '';
@@ -1529,14 +1596,28 @@ function paintCatalog() {
       const sid = perfShopFilter.value;
       catalogCache.perfShop = sid ? parseInt(sid) : null;
       try {
-        const r = await api('/api/catalog/performance' + (catalogCache.perfShop ? `?shop_id=${catalogCache.perfShop}` : ''));
-        catalogCache.performance = r;
-        paintCatalog();
+        await reloadPerf();
       } catch (err) {
         toast(err.message);
       }
     };
   }
+
+  // 经营分析时间段快捷筛选（本周/上周/本月/上月/全部）
+  const rangeBtns = el.querySelectorAll('[data-perf-range]');
+  rangeBtns.forEach(btn => {
+    btn.onclick = async () => {
+      const key = btn.dataset.perfRange;
+      catalogCache.perfPreset = key;
+      const today = catalogCache.serverToday || new Date().toISOString().slice(0, 10);
+      catalogCache.perfRange = rangeFor(key, today);
+      try {
+        await reloadPerf();
+      } catch (err) {
+        toast(err.message);
+      }
+    };
+  });
 
   // 删除模式开关
   const deleteMode = el.querySelector('#delete-mode');
