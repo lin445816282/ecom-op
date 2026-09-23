@@ -176,7 +176,7 @@ def parse_taobao_orders():
             'order_no': order_no, 'status': _clean(g(5)) or '', 'aftersale_status': '',
             'province': province, 'city': city, 'district': district,
             'spec': _clean(g(9)) or '', 'quantity': _i(g(8)) or 0,
-            'buyer_amount': _f(g(4)), 'seller_amount': _f(g(3)),
+            'buyer_amount': _f(g(4)), 'seller_amount': None,
             'pay_time': _clean(g(7)) or '', 'courier': '', 'tracking_no': '',
             'platform_product_id': '', 'source': '淘宝',
         })
