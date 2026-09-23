@@ -1233,7 +1233,16 @@ def order_statuses() -> list[dict]:
 
 
 def platform_overview() -> dict:
-    """按平台聚合真实经营数据：商品数/SKU数/订单数/GMV，供运营总览展示。"""
+    """按平台聚合真实经营数据：商品数/SKU数/订单数/GMV，供运营总览展示。
+
+    订单数/GMV 只统计「有效成交」订单：排除退款（含「退款」）、取消（含「取消」）、
+    关闭（含「关闭」）、待付款、待发货；保留已收货/已发货待收货/交易成功/已完成等。
+    """
+    # 有效成交状态过滤：排除退款/取消/关闭/待定；
+    # status 为空但有快递单号（抖音等无状态列平台，已发货）也算有效
+    VALID = ("((status != '' AND status NOT LIKE '%退款%' AND status NOT LIKE '%取消%' "
+             "AND status NOT LIKE '%关闭%' AND status NOT IN ('待付款','待发货')) "
+             "OR (status = '' AND tracking_no != ''))")
     with closing(_conn()) as c:
         items = []
         for pl in c.execute("SELECT * FROM platforms ORDER BY id").fetchall():
@@ -1247,11 +1256,11 @@ def platform_overview() -> dict:
                 "SELECT COUNT(*) AS n FROM skus WHERE product_id IN (%s)" % prod_in,
                 (pid,)).fetchone()["n"]
             orders = c.execute(
-                "SELECT COUNT(*) AS n FROM orders WHERE shop_id IN (%s)" % shop_in,
+                "SELECT COUNT(*) AS n FROM orders WHERE shop_id IN (%s) AND %s" % (shop_in, VALID),
                 (pid,)).fetchone()["n"]
             gmv = c.execute(
                 "SELECT ROUND(COALESCE(SUM(buyer_amount),0),2) AS n FROM orders "
-                "WHERE shop_id IN (%s)" % shop_in,
+                "WHERE shop_id IN (%s) AND %s" % (shop_in, VALID),
                 (pid,)).fetchone()["n"]
             items.append({
                 "platform_id": pid,
