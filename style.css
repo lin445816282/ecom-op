@@ -517,6 +517,9 @@ textarea { min-height: 72px; resize: vertical; }
 .perf-date { padding: 4px 6px; border: 1px solid var(--line-soft); border-radius: 7px; font-size: 12px; color: var(--ink-2); background: #fff; max-width: 128px; }
 .perf-date.active { border-color: #4f46e5; color: #4f46e5; }
 .perf-date-sep { font-size: 12px; color: var(--muted); }
+.perf-status-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.perf-sbtn { padding: 5px 10px; border: 1px solid var(--line-soft); border-radius: 7px; font-size: 12px; color: var(--ink-2); background: #fff; cursor: pointer; }
+.perf-sbtn.active { background: #4f46e5; border-color: #4f46e5; color: #fff; font-weight: 600; }
 .perf-shop-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .perf-shop-table { width: 100%; min-width: 580px; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
 .perf-shop-table th, .perf-shop-table td { padding: 8px 10px; border: 1px solid var(--line-soft); text-align: right; white-space: nowrap; }

@@ -929,7 +929,7 @@ function renderProducts(editingProduct = null) {
 }
 
 /* ---------------- 商品库（平台 + 电商层级） ---------------- */
-const catalogCache = { tree: [], stats: {}, orders: [], analysis: null, filter: '', mods: [], modCounts: {}, goodsEffect: [], performance: null, perfAll: null, promoAnalysis: null, lowStock: [], selection: null, freight: null, freightMatch: null, freightRate: [], freightCompare: null, suppliers: [], supplierProducts: {}, freightMonth: '', freightShop: null, deleteMode: false, perfShop: null, perfRange: null, perfPreset: 'all', perfStatus: '', orderStatuses: [], serverToday: '' };
+const catalogCache = { tree: [], stats: {}, orders: [], analysis: null, filter: '', mods: [], modCounts: {}, goodsEffect: [], performance: null, perfAll: null, promoAnalysis: null, lowStock: [], selection: null, freight: null, freightMatch: null, freightRate: [], freightCompare: null, suppliers: [], supplierProducts: {}, freightMonth: '', freightShop: null, deleteMode: false, perfShop: null, perfRange: null, perfPreset: 'all', perfStatuses: [], orderStatuses: [], serverToday: '' };
 
 // 日期工具：'YYYY-MM-DD' -> 本地 Date / Date -> 'YYYY-MM-DD'
 const dToObj = (s) => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
@@ -965,7 +965,7 @@ function rangeFor(key, today) {
 const perfQs = () => {
   const parts = [];
   if (catalogCache.perfShop) parts.push(`shop_id=${catalogCache.perfShop}`);
-  if (catalogCache.perfStatus) parts.push(`status=${encodeURIComponent(catalogCache.perfStatus)}`);
+  (catalogCache.perfStatuses || []).forEach(st => parts.push(`status=${encodeURIComponent(st)}`));
   const r = catalogCache.perfRange;
   if (r) {
     if (r.start) parts.push(`start=${r.start}`);
@@ -1436,10 +1436,13 @@ function paintCatalog() {
           <option value="" ${!catalogCache.perfShop ? 'selected' : ''}>全部店铺</option>
           ${tree.flatMap(x => x.shops || []).map(sh => `<option value="${sh.id}" ${catalogCache.perfShop == sh.id ? 'selected' : ''}>${esc(sh.name)}</option>`).join('')}
         </select>
-        <select class="perf-status-filter" data-perf-status>
-          <option value="" ${!catalogCache.perfStatus ? 'selected' : ''}>全部状态</option>
-          ${(catalogCache.orderStatuses || []).map(s => `<option value="${esc(s.status)}" ${catalogCache.perfStatus === s.status ? 'selected' : ''}>${esc(s.status)}（${s.count}）</option>`).join('')}
-        </select>
+        <div class="perf-status-chips">
+          <button class="perf-sbtn ${(catalogCache.perfStatuses || []).length === 0 ? 'active' : ''}" data-perf-status="">全部</button>
+          ${(catalogCache.orderStatuses || []).map(s => {
+            const on = (catalogCache.perfStatuses || []).includes(s.status);
+            return `<button class="perf-sbtn ${on ? 'active' : ''}" data-perf-status="${esc(s.status)}">${esc(s.status)}（${s.count}）</button>`;
+          }).join('')}
+        </div>
       </div>
       <div class="perf-summary">
         <div class="perf-card"><div class="p-label">GMV（实付）</div><div class="p-value">¥${fmt(sm.gmv)}</div></div>
@@ -1640,18 +1643,26 @@ function paintCatalog() {
     };
   }
 
-  // 经营分析订单状态筛选
-  const perfStatusFilter = el.querySelector('[data-perf-status]');
-  if (perfStatusFilter) {
-    perfStatusFilter.onchange = async () => {
-      catalogCache.perfStatus = perfStatusFilter.value || '';
+  // 经营分析订单状态筛选（多选 chips）
+  const perfStatusBtns = el.querySelectorAll('[data-perf-status]');
+  perfStatusBtns.forEach(btn => {
+    btn.onclick = async () => {
+      const st = btn.dataset.perfStatus;
+      const cur = catalogCache.perfStatuses || [];
+      if (st === '') {
+        catalogCache.perfStatuses = []; // 全部 → 清空多选
+      } else {
+        const idx = cur.indexOf(st);
+        if (idx >= 0) cur.splice(idx, 1); else cur.push(st);
+        catalogCache.perfStatuses = cur;
+      }
       try {
         await reloadPerf();
       } catch (err) {
         toast(err.message);
       }
     };
-  }
+  });
 
   // 经营分析时间段快捷筛选（本周/上周/本月/上月/全部）
   const rangeBtns = el.querySelectorAll('[data-perf-range]');

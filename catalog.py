@@ -1079,11 +1079,11 @@ def catalog_analysis() -> dict:
         }
 
 
-def _perf_summary(c, shop_id=None, start=None, end=None, status=None) -> dict:
+def _perf_summary(c, shop_id=None, start=None, end=None, statuses=None) -> dict:
     """经营分析 summary（统一口径，供 catalog_performance / catalog_performance_all 复用）。
 
     start/end: 日期字符串 "YYYY-MM-DD"，提供时仅统计该时间段订单（含边界当天）。
-    status: 订单状态精确匹配，提供时仅统计该状态订单（None/'' = 全部状态）。
+    statuses: 订单状态列表，提供时仅统计这些状态订单（空/None = 全部状态，支持多选）。
 
     口径（跨平台通用）：
     - order_count     总订单数（含未发货/已取消/待付款）
@@ -1109,9 +1109,9 @@ def _perf_summary(c, shop_id=None, start=None, end=None, status=None) -> dict:
     if end:
         conds.append("pay_time <= ?")
         args.append(end + " 23:59:59")
-    if status:
-        conds.append("status=?")
-        args.append(status)
+    if statuses:
+        conds.append("status IN (" + ",".join("?" * len(statuses)) + ")")
+        args.extend(statuses)
     w = (" WHERE " + " AND ".join(conds)) if conds else ""
     s = c.execute(
         "SELECT COUNT(*) AS order_count, SUM(buyer_amount) AS gmv, "
@@ -1141,10 +1141,10 @@ def _perf_summary(c, shop_id=None, start=None, end=None, status=None) -> dict:
 
 
 def catalog_performance(shop_id: int = None, start: str = None, end: str = None,
-                        status: str = None) -> dict:
+                        statuses: list = None) -> dict:
     """商品库经营分析：销售概览 + 商品销量排行 + 日趋势 + 地区分布 + 售后。
     shop_id 提供时按店铺筛选；start/end 提供时按时间段筛选（含边界当天）；
-    status 提供时按订单状态精确筛选（None/'' = 全部状态）。
+    statuses 提供时按订单状态筛选（列表，支持多选；空/None = 全部状态）。
     """
     with closing(_conn()) as c:
         def _w(prefix=""):
@@ -1155,8 +1155,9 @@ def catalog_performance(shop_id: int = None, start: str = None, end: str = None,
                 cs.append(prefix + "pay_time >= ?"); as_.append(start)
             if end:
                 cs.append(prefix + "pay_time <= ?"); as_.append(end + " 23:59:59")
-            if status:
-                cs.append(prefix + "status=?"); as_.append(status)
+            if statuses:
+                cs.append(prefix + "status IN (" + ",".join("?" * len(statuses)) + ")")
+                as_.extend(statuses)
             return cs, as_
 
         # 商品销量/销售额排行（关联商品名/货号）
@@ -1190,18 +1191,18 @@ def catalog_performance(shop_id: int = None, start: str = None, end: str = None,
         ).fetchall()]
 
         return {
-            "summary": _perf_summary(c, shop_id, start, end, status),
+            "summary": _perf_summary(c, shop_id, start, end, statuses),
             "top_products": top_products,
             "daily_trend": daily_trend,
             "regions": regions,
         }
 
 
-def catalog_performance_all(start: str = None, end: str = None, status: str = None) -> dict:
+def catalog_performance_all(start: str = None, end: str = None, statuses: list = None) -> dict:
     """经营分析：全部店铺汇总 + 各店铺 summary 对比 + 服务器日期（供前端一屏直看）。
 
     start/end: 日期字符串 "YYYY-MM-DD"，提供时仅统计该时间段订单。
-    status: 订单状态精确筛选（None/'' = 全部状态）。
+    statuses: 订单状态列表（支持多选；空/None = 全部状态）。
     """
     with closing(_conn()) as c:
         shops = c.execute(
@@ -1214,10 +1215,10 @@ def catalog_performance_all(start: str = None, end: str = None, status: str = No
                 "shop_id": sh["id"],
                 "shop_name": sh["name"],
                 "platform": sh["platform"],
-                "summary": _perf_summary(c, sh["id"], start, end, status),
+                "summary": _perf_summary(c, sh["id"], start, end, statuses),
             })
         server_today = c.execute("SELECT date('now','localtime') AS d").fetchone()["d"]
-        return {"summary": _perf_summary(c, None, start, end, status), "shops": result,
+        return {"summary": _perf_summary(c, None, start, end, statuses), "shops": result,
                 "server_today": server_today}
 
 
