@@ -195,6 +195,40 @@ CREATE TABLE IF NOT EXISTS freight_rate (
     remark TEXT DEFAULT '',
     created_at TEXT DEFAULT (datetime('now','localtime'))
 );
+
+CREATE TABLE IF NOT EXISTS suppliers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT UNIQUE NOT NULL,
+    contact TEXT DEFAULT '',
+    phone TEXT DEFAULT '',
+    address TEXT DEFAULT '',
+    source TEXT DEFAULT '',
+    remark TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS supplier_products (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    supplier_id INTEGER NOT NULL,
+    category TEXT DEFAULT '',
+    product_name TEXT DEFAULT '',
+    product_code TEXT DEFAULT '',
+    spec TEXT DEFAULT '',
+    color TEXT DEFAULT '',
+    supply_price REAL,
+    retail_price REAL,
+    weight REAL,
+    box_spec TEXT DEFAULT '',
+    stock TEXT DEFAULT '',
+    source_url TEXT DEFAULT '',
+    image TEXT DEFAULT '',
+    remark TEXT DEFAULT '',
+    raw_json TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now','localtime')),
+    FOREIGN KEY(supplier_id) REFERENCES suppliers(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_sp_supplier ON supplier_products(supplier_id);
 """
 
 
@@ -230,6 +264,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # products 表 status 列（商品状态标签）
     if "status" not in pcols:
         conn.execute("ALTER TABLE products ADD COLUMN status TEXT DEFAULT ''")
+    # supplier_products 表 image 列（产品图片）
+    spcols = {r[1] for r in conn.execute("PRAGMA table_info(supplier_products)").fetchall()}
+    if "image" not in spcols:
+        conn.execute("ALTER TABLE supplier_products ADD COLUMN image TEXT DEFAULT ''")
     conn.commit()
 
 
@@ -608,34 +646,46 @@ def list_freight(limit: int = 5000, unmatched_only: bool = False) -> list[dict]:
         return [dict(r) for r in c.execute(sql, (limit,)).fetchall()]
 
 
-def freight_analysis() -> dict:
-    """运费账单分析：汇总 + 匹配率 + 月度趋势 + 目的地 + 快递公司。"""
+def freight_analysis(month: str = None, shop_id: int = None) -> dict:
+    """运费账单分析：汇总 + 匹配率 + 月度趋势 + 目的地 + 快递公司。
+    month: 按月筛选（YYYY-MM）；shop_id: 按匹配到的店铺筛选。"""
     with closing(_conn()) as c:
-        total = c.execute("SELECT COUNT(*) FROM freight").fetchone()[0]
-        matched = c.execute("SELECT COUNT(*) FROM freight WHERE matched=1").fetchone()[0]
+        w = []
+        args = []
+        if month:
+            w.append("substr(f.ship_date,1,7) = ?")
+            args.append(month)
+        if shop_id:
+            w.append("f.matched_shop_id = ?")
+            args.append(shop_id)
+        where = (" WHERE " + " AND ".join(w)) if w else ""
+        ext = (" AND " + " AND ".join(w)) if w else ""
+        wargs = tuple(args)
+
+        total = c.execute("SELECT COUNT(*) FROM freight f" + where, wargs).fetchone()[0]
+        matched = c.execute(
+            "SELECT COUNT(*) FROM freight f WHERE f.matched=1" + ext, wargs).fetchone()[0]
         tot_fee = c.execute(
-            "SELECT COALESCE(SUM(total),0) FROM freight").fetchone()[0]
+            "SELECT COALESCE(SUM(f.total),0) FROM freight f" + where, wargs).fetchone()[0]
         tot_fee = round(tot_fee, 2)
         avg_fee = round(tot_fee / total, 2) if total else 0
+        # 月度趋势始终返回全量（供前端月份导航），不受筛选影响
         monthly = c.execute(
-            "SELECT substr(ship_date,1,7) ym, COUNT(*) n, ROUND(SUM(COALESCE(total,0)),2) amt "
-            "FROM freight GROUP BY ym ORDER BY ym"
+            "SELECT substr(f.ship_date,1,7) ym, COUNT(*) n, ROUND(SUM(COALESCE(f.total,0)),2) amt "
+            "FROM freight f GROUP BY ym ORDER BY ym"
         ).fetchall()
         provs = c.execute(
-            "SELECT province, COUNT(*) n FROM freight WHERE province != '' "
-            "GROUP BY province ORDER BY n DESC LIMIT 10"
-        ).fetchall()
+            "SELECT f.province, COUNT(*) n FROM freight f WHERE f.province != ''" + ext +
+            " GROUP BY f.province ORDER BY n DESC LIMIT 10", wargs).fetchall()
         couriers = c.execute(
-            "SELECT courier, COUNT(*) n FROM freight WHERE courier != '' "
-            "GROUP BY courier ORDER BY n DESC"
-        ).fetchall()
+            "SELECT f.courier, COUNT(*) n FROM freight f WHERE f.courier != ''" + ext +
+            " GROUP BY f.courier ORDER BY n DESC", wargs).fetchall()
         gmv = c.execute(
             "SELECT COALESCE(SUM(o.buyer_amount),0) FROM freight f "
-            "JOIN orders o ON o.order_no = f.matched_order_no"
-        ).fetchone()[0]
+            "JOIN orders o ON o.order_no = f.matched_order_no" + where, wargs).fetchone()[0]
         gmv = round(gmv, 2)
         matched_fee = c.execute(
-            "SELECT COALESCE(SUM(total),0) FROM freight WHERE matched=1").fetchone()[0]
+            "SELECT COALESCE(SUM(f.total),0) FROM freight f WHERE f.matched=1" + ext, wargs).fetchone()[0]
         matched_fee = round(matched_fee, 2)
         return {
             "total": total, "matched": matched,
@@ -649,19 +699,29 @@ def freight_analysis() -> dict:
         }
 
 
-def freight_match_analysis() -> dict:
+def freight_match_analysis(month: str = None, shop_id: int = None) -> dict:
     """运费匹配分析：相同商品+规格+数量的订单，标准运费 vs 异常运费。
 
     按 (platform_product_id, spec, quantity) 分组，每组找标准运费（众数），
     标出偏离标准运费的异常单（显示差值/重量/目的地，判断成因）。
+    month: 按月筛选（YYYY-MM）；shop_id: 按匹配到的店铺筛选。
     """
     from collections import Counter
     with closing(_conn()) as c:
+        w = ["o.spec != ''"]
+        args = []
+        if month:
+            w.append("substr(f.ship_date,1,7) = ?")
+            args.append(month)
+        if shop_id:
+            w.append("f.matched_shop_id = ?")
+            args.append(shop_id)
         rows = c.execute(
             "SELECT f.tracking_no, f.total, f.weight, f.province, f.city, "
             "o.platform_product_id, o.spec, o.quantity, o.order_no "
             "FROM freight f JOIN orders o ON o.order_no = f.matched_order_no "
-            "WHERE o.spec != ''"
+            "WHERE " + " AND ".join(w),
+            tuple(args),
         ).fetchall()
         groups = {}
         for r in rows:
@@ -1387,6 +1447,20 @@ def export_csv(etype: str) -> tuple:
                             r["matched_order_no"], r["shop_name"] or ""])
             return "运费账单.csv", out.getvalue()
 
+        if etype == "supplier":
+            # 供应商商品库导出（采购侧）
+            w.writerow(["供应商名称", "分类", "货号", "商品名称", "供货价", "零售价",
+                        "规格", "颜色", "重量(kg)", "箱规", "库存", "来源链接", "备注"])
+            for r in c.execute(
+                "SELECT sp.*, s.name AS supplier_name FROM supplier_products sp "
+                "LEFT JOIN suppliers s ON s.id = sp.supplier_id ORDER BY sp.supplier_id, sp.id"
+            ).fetchall():
+                w.writerow([r["supplier_name"] or "", r["category"], r["product_code"],
+                            r["product_name"], _v(r["supply_price"]), _v(r["retail_price"]),
+                            r["spec"], r["color"], _v(r["weight"]), r["box_spec"],
+                            r["stock"], r["source_url"], r["remark"]])
+            return "供应商商品库.csv", out.getvalue()
+
         raise ValueError(f"未知导出类型: {etype}")
 
 
@@ -1739,3 +1813,167 @@ def template_csv(etype: str) -> tuple:
         "products": "商品列表", "skus": "SKU价格库存", "orders": "订单", "promotions": "推广",
     }
     return f"导入模板-{names.get(etype, etype)}.csv", out.getvalue()
+
+
+# ===== 供应商商品库（采购侧，2026-09-23） =====
+
+def _num(v):
+    """数值清洗：'19.9'/'16.6'→float，空/非数字/'-'→None。"""
+    import re
+    if v is None:
+        return None
+    s = str(v).strip().replace(',', '').replace('￥', '').replace('元', '')
+    if not s or s in ('-', '/', '—', '无', 'None'):
+        return None
+    m = re.search(r'-?\d+(\.\d+)?', s)
+    if not m:
+        return None
+    try:
+        return float(m.group(0))
+    except ValueError:
+        return None
+
+
+def upsert_supplier(name, contact='', phone='', address='', source='', remark=''):
+    """创建或更新供应商，返回 supplier_id。"""
+    with closing(_conn()) as c:
+        row = c.execute("SELECT id FROM suppliers WHERE name=?", (name,)).fetchone()
+        if row:
+            c.execute(
+                "UPDATE suppliers SET contact=COALESCE(?,contact), phone=COALESCE(?,phone), "
+                "address=COALESCE(?,address), source=COALESCE(?,source), remark=COALESCE(?,remark) WHERE id=?",
+                (contact or None, phone or None, address or None, source or None, remark or None, row['id']))
+            c.commit()
+            return row['id']
+        cur = c.execute(
+            "INSERT INTO suppliers (name, contact, phone, address, source, remark) VALUES (?,?,?,?,?,?)",
+            (name, contact, phone, address, source, remark))
+        c.commit()
+        return cur.lastrowid
+
+
+def replace_supplier_products(supplier_id, rows):
+    """全量替换某供应商的商品（先删后插）。rows = [dict]。返回导入条数。"""
+    with closing(_conn()) as c:
+        c.execute("DELETE FROM supplier_products WHERE supplier_id=?", (supplier_id,))
+        n = 0
+        for r in rows:
+            c.execute(
+                """INSERT INTO supplier_products
+                (supplier_id, category, product_name, product_code, spec, color,
+                 supply_price, retail_price, weight, box_spec, stock, source_url, image, remark, raw_json)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (supplier_id, r.get('category', ''), r.get('product_name', ''), r.get('product_code', ''),
+                 r.get('spec', ''), r.get('color', ''), r.get('supply_price'), r.get('retail_price'),
+                 r.get('weight'), r.get('box_spec', ''), r.get('stock', ''), r.get('source_url', ''),
+                 r.get('image', ''), r.get('remark', ''), r.get('raw_json', '')))
+            n += 1
+        c.commit()
+        return n
+
+
+def import_supplier_csv(csv_text: str) -> dict:
+    """网页导入供应商商品：CSV → 按供应商名分组 → upsert 供应商 + 追加商品（货号去重）。
+
+    CSV 表头：供应商名称,分类,货号,商品名称,供货价,零售价,规格,颜色,重量(kg),箱规,库存,来源链接,备注
+    返回 {imported, suppliers, skipped}。
+    """
+    import csv
+    import io
+    text = csv_text.lstrip("\ufeff")
+    reader = csv.DictReader(io.StringIO(text))
+    if not reader.fieldnames:
+        return {"imported": 0, "suppliers": 0, "skipped": 0}
+    # 列名归一（去空白）
+    fieldnames = [f.strip() for f in reader.fieldnames]
+    field_map = {
+        "供应商名称": "supplier_name", "供应商": "supplier_name",
+        "分类": "category", "货号": "product_code", "编号": "product_code",
+        "商品名称": "product_name", "名称": "product_name", "品名": "product_name",
+        "供货价": "supply_price", "代发价": "supply_price", "出厂价": "supply_price", "进货价": "supply_price",
+        "零售价": "retail_price", "控价": "retail_price", "售价": "retail_price",
+        "规格": "spec", "尺寸": "spec", "颜色": "color",
+        "重量(kg)": "weight", "净重": "weight", "重量": "weight", "克重": "weight",
+        "箱规": "box_spec", "装箱数": "box_spec", "库存": "stock",
+        "来源链接": "source_url", "网址": "source_url", "链接": "source_url",
+        "备注": "remark",
+    }
+    NUM = {"supply_price", "retail_price", "weight"}
+
+    def _pick(row):
+        rec = {}
+        for fn in fieldnames:
+            field = field_map.get(fn)
+            if not field:
+                continue
+            v = (row.get(fn) or "").strip()
+            if field in NUM:
+                rec[field] = _num(v)
+            else:
+                rec[field] = v
+        return rec
+
+    groups = {}  # supplier_name -> [rec]
+    for raw in reader:
+        rec = _pick(raw)
+        name = rec.get("supplier_name", "")
+        if not name:
+            continue
+        if not rec.get("product_name") and not rec.get("product_code"):
+            continue
+        groups.setdefault(name, []).append(rec)
+
+    imported = 0
+    with closing(_conn()) as c:
+        for name, recs in groups.items():
+            sid = upsert_supplier(name)
+            # 已有货号集合（去重）
+            existing = {r["product_code"] for r in c.execute(
+                "SELECT product_code FROM supplier_products WHERE supplier_id=?", (sid,)).fetchall()
+                if r["product_code"]}
+            for r in recs:
+                code = r.get("product_code", "")
+                if code and code in existing:
+                    continue
+                c.execute(
+                    """INSERT INTO supplier_products
+                    (supplier_id, category, product_name, product_code, spec, color,
+                     supply_price, retail_price, weight, box_spec, stock, source_url, image, remark, raw_json)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (sid, r.get("category", ""), r.get("product_name", ""), r.get("product_code", ""),
+                     r.get("spec", ""), r.get("color", ""), r.get("supply_price"), r.get("retail_price"),
+                     r.get("weight"), r.get("box_spec", ""), r.get("stock", ""), r.get("source_url", ""),
+                     "", r.get("remark", ""), ""))
+                imported += 1
+                if code:
+                    existing.add(code)
+        c.commit()
+    return {"imported": imported, "suppliers": len(groups), "skipped": 0}
+
+
+def list_suppliers():
+    with closing(_conn()) as c:
+        rows = c.execute(
+            """SELECT s.*, (SELECT COUNT(*) FROM supplier_products sp WHERE sp.supplier_id=s.id) AS product_count
+            FROM suppliers s ORDER BY s.id""").fetchall()
+        return [dict(r) for r in rows]
+
+
+def list_supplier_products(supplier_id=None, q='', limit=5000):
+    with closing(_conn()) as c:
+        sql = ("SELECT sp.*, s.name AS supplier_name FROM supplier_products sp "
+               "LEFT JOIN suppliers s ON s.id = sp.supplier_id")
+        args = []
+        where = []
+        if supplier_id:
+            where.append("sp.supplier_id=?")
+            args.append(supplier_id)
+        if q:
+            where.append("(sp.product_name LIKE ? OR sp.product_code LIKE ? OR sp.spec LIKE ? OR s.name LIKE ?)")
+            args += [f'%{q}%', f'%{q}%', f'%{q}%', f'%{q}%']
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY sp.id LIMIT ?"
+        args.append(limit)
+        rows = c.execute(sql, args).fetchall()
+        return [dict(r) for r in rows]

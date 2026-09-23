@@ -543,7 +543,10 @@ class Handler(BaseHTTPRequestHandler):
             return _json(self, {"items": catalog.low_stock(threshold)})
 
         if path == "/api/catalog/freight" and self.command == "GET":
-            return _json(self, catalog.freight_analysis())
+            month = qs.get("month", [""])[0] or None
+            shop_id = qs.get("shop_id", [""])[0]
+            sid = int(shop_id) if shop_id else None
+            return _json(self, catalog.freight_analysis(month, sid))
 
         if path == "/api/catalog/freight/list" and self.command == "GET":
             unmatched = qs.get("unmatched", ["0"])[0] == "1"
@@ -554,13 +557,36 @@ class Handler(BaseHTTPRequestHandler):
             return _json(self, catalog.match_freight())
 
         if path == "/api/catalog/freight/match-analysis" and self.command == "GET":
-            return _json(self, catalog.freight_match_analysis())
+            month = qs.get("month", [""])[0] or None
+            shop_id = qs.get("shop_id", [""])[0]
+            sid = int(shop_id) if shop_id else None
+            return _json(self, catalog.freight_match_analysis(month, sid))
 
         if path == "/api/catalog/freight-rate" and self.command == "GET":
             return _json(self, {"items": catalog.list_freight_rate()})
 
         if path == "/api/catalog/freight-compare" and self.command == "GET":
             return _json(self, catalog.freight_compare())
+
+        if path == "/api/catalog/suppliers" and self.command == "GET":
+            return _json(self, {"items": catalog.list_suppliers()})
+
+        if path == "/api/catalog/supplier-products" and self.command == "GET":
+            supplier_id = qs.get("supplier_id", [""])[0]
+            q = qs.get("q", [""])[0]
+            sid = int(supplier_id) if supplier_id else None
+            return _json(self, {"items": catalog.list_supplier_products(sid, q)})
+
+        if path == "/api/catalog/supplier-import" and self.command == "POST":
+            body = self._read_body()
+            csv_text = body.get("csv", "")
+            if not csv_text.strip():
+                return _json(self, {"error": "CSV 内容为空"}, 400)
+            try:
+                result = catalog.import_supplier_csv(csv_text)
+            except Exception as e:
+                return _json(self, {"error": str(e)}, 500)
+            return _json(self, {"ok": True, **result})
 
         if path == "/api/catalog/export" and self.command == "GET":
             etype = qs.get("type", ["products"])[0]
@@ -677,7 +703,32 @@ class Handler(BaseHTTPRequestHandler):
         if path in ("/style.css",) and self.command == "GET":
             return self._serve_file("style.css", "text/css; charset=utf-8")
 
+        # 静态资源（供应商产品图片等）
+        if path.startswith("/static/") and self.command == "GET":
+            return self._serve_static(path)
+
         return _json(self, {"error": "not found", "path": path}, 404)
+
+    def _serve_static(self, path):
+        """服务 static/ 目录下的文件（含图片），防路径穿越。"""
+        rel = os.path.normpath(path.lstrip("/"))
+        if rel != path.lstrip("/") or not rel.startswith("static/"):
+            return _json(self, {"error": "forbidden"}, 403)
+        fp = os.path.join(BASE_DIR, rel)
+        if not os.path.exists(fp) or os.path.isdir(fp):
+            return _json(self, {"error": "file not found"}, 404)
+        ext = os.path.splitext(fp)[1].lower()
+        ctype = {
+            ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+            ".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml",
+        }.get(ext, "application/octet-stream")
+        with open(fp, "rb") as f:
+            body = f.read()
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def _serve_file(self, rel, content_type):
         fp = os.path.join(BASE_DIR, rel)

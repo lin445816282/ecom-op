@@ -8,3 +8,6 @@ venv/
 # 可重建的数据库 + 临时备份
 catalog.db
 *.bak_reorder
+
+# 供应商图片（467M，可用 extract_supplier_images.py 从 Excel 重新提取，不入库）
+static/

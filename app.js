@@ -11,6 +11,7 @@ const VIEWS = {
   guide: {title:'操作手册', sub:'从第一次打开，到每天跑完一套运营动作。'},
   products: {title:'商品投产', sub:'记录售价、毛利与广告数据，自动计算保本/目标 ROI。'},
   catalog: {title:'商品库', sub:'平台 + 电商层级真实商品数据（平台 → 店铺 → 商品 → SKU）。'},
+  suppliers: {title:'供应商', sub:'采购侧报价 · 供货价 / 零售价 / 商品图片，支持搜索与导入导出。'},
   knowledge: {title:'运营知识库', sub:'只保留合规、可持续的起店与推广方法论。'},
   calendar: {title:'选品日历', sub:'按月提前布局应季商品，建议提前 2-4 周预热。'},
   keywords: {title:'关键词库', sub:'储备核心词、属性词、场景词、规格词，用于标题优化与选品拓词。'},
@@ -47,6 +48,22 @@ async function api(path, method='GET', body) {
     throw new Error(msg);
   }
   return res.json();
+}
+
+// 图片大图预览弹框（点击缩略图弹出，点遮罩/✕关闭）
+function showImageLightbox(src) {
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:1000;display:flex;align-items:center;justify-content:center;padding:12px';
+  const box = document.createElement('div');
+  box.style.cssText = 'position:relative;max-width:96vw;max-height:96vh;display:flex;align-items:center;justify-content:center';
+  box.innerHTML = `
+    <img src="${esc(src)}" style="max-width:96vw;max-height:90vh;object-fit:contain;border-radius:10px;box-shadow:0 12px 48px rgba(0,0,0,.55);background:#fff">
+    <button style="position:absolute;top:-15px;right:-15px;width:34px;height:34px;border-radius:50%;border:none;background:#fff;color:#333;font-size:20px;line-height:1;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.35)">✕</button>`;
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  box.querySelector('button').onclick = close;
+  overlay.onclick = e => { if (e.target === overlay) close(); };
 }
 
 // 自定义二次确认弹窗（替代原生 confirm，微信内置浏览器可用）
@@ -425,6 +442,7 @@ function setView(view) {
   if (view === 'guide') renderGuide();
   if (view === 'products') renderProducts();
   if (view === 'catalog') renderCatalog();
+  if (view === 'suppliers') renderSuppliersView();
   if (view === 'knowledge') renderKnowledge();
   if (view === 'calendar') renderCalendar();
   if (view === 'keywords') renderKeywords();
@@ -879,13 +897,13 @@ function renderProducts(editingProduct = null) {
 }
 
 /* ---------------- 商品库（平台 + 电商层级） ---------------- */
-const catalogCache = { tree: [], stats: {}, orders: [], analysis: null, filter: '', mods: [], modCounts: {}, goodsEffect: [], performance: null, promoAnalysis: null, lowStock: [], selection: null, freight: null, freightMatch: null, freightRate: [], freightCompare: null, deleteMode: false, perfShop: null };
+const catalogCache = { tree: [], stats: {}, orders: [], analysis: null, filter: '', mods: [], modCounts: {}, goodsEffect: [], performance: null, promoAnalysis: null, lowStock: [], selection: null, freight: null, freightMatch: null, freightRate: [], freightCompare: null, suppliers: [], supplierProducts: {}, freightMonth: '', freightShop: null, deleteMode: false, perfShop: null };
 
 async function renderCatalog() {
   const el = $('#view-catalog');
   el.innerHTML = '<div class="empty"><div class="big">📦</div>加载中…</div>';
   try {
-    const [stats, treeResp, ordersResp, analysis, modsResp, countsResp, geResp, perfResp, promoResp, lowResp, selResp, freightResp, freightMatchResp, freightRateResp, freightCompareResp] = await Promise.all([
+    const [stats, treeResp, ordersResp, analysis, modsResp, countsResp, geResp, perfResp, promoResp, lowResp, selResp, freightResp, freightMatchResp, freightRateResp, freightCompareResp, suppliersResp] = await Promise.all([
       api('/api/catalog/stats'),
       api('/api/catalog/tree'),
       api('/api/catalog/orders?limit=5000'),
@@ -901,6 +919,7 @@ async function renderCatalog() {
       api('/api/catalog/freight/match-analysis'),
       api('/api/catalog/freight-rate'),
       api('/api/catalog/freight-compare'),
+      api('/api/catalog/suppliers'),
     ]);
     catalogCache.stats = stats;
     catalogCache.tree = treeResp.items || [];
@@ -917,11 +936,289 @@ async function renderCatalog() {
     catalogCache.freightMatch = freightMatchResp || null;
     catalogCache.freightRate = freightRateResp.items || [];
     catalogCache.freightCompare = freightCompareResp || null;
+    catalogCache.suppliers = suppliersResp.items || [];
     paintCatalog();
   } catch (err) {
     el.innerHTML = `<div class="empty">❌ ${esc(err.message)}</div>`;
   }
 }
+
+
+async function renderSuppliersView() {
+  const supEl = $('#view-suppliers');
+  supEl.innerHTML = '<div class="empty"><div class="big">🏭</div>加载中…</div>';
+
+  // 懒加载供应商列表（若商品库尚未加载过）
+  if (!catalogCache.suppliers.length) {
+    try {
+      const resp = await api('/api/catalog/suppliers');
+      catalogCache.suppliers = resp.items || [];
+    } catch (err) {
+      supEl.innerHTML = `<div class="empty">❌ ${esc(err.message)}</div>`;
+      return;
+    }
+  }
+
+  // 图片点击弹框预览（事件委托，只绑定一次）
+  if (!supEl.dataset.bound) {
+    supEl.dataset.bound = '1';
+    supEl.addEventListener('click', e => {
+      const img = e.target.closest('[data-lightbox]');
+      if (img) showImageLightbox(img.dataset.lightbox);
+    });
+  }
+
+  // 商品表格渲染（供应商内 / 搜索结果共用，showSupplier 控制是否显示供应商列）
+  const supTableHTML = (items, showSupplier) => items.length
+    ? `<div class="table-wrap"><table>
+      <thead><tr>${showSupplier ? '<th>供应商</th>' : ''}<th>图</th><th>货号</th><th>名称</th><th>供货价</th><th>零售价</th><th>规格</th><th>颜色</th><th>重量</th></tr></thead>
+      <tbody>${items.map(r => `<tr>
+        ${showSupplier ? `<td class="sup-src">${esc(r.supplier_name || '')}</td>` : ''}
+        <td class="sup-img-cell">${r.image ? `<img src="${BASE}/static/${esc(r.image)}" loading="lazy" alt="" data-lightbox="${BASE}/static/${esc(r.image)}">` : '<span class="sup-noimg">—</span>'}</td>
+        <td>${esc(r.product_code || '')}</td>
+        <td title="${esc(r.product_name)}">${esc((r.product_name || '').slice(0, 20))}${(r.product_name || '').length > 20 ? '…' : ''}</td>
+        <td class="sup-price">${r.supply_price != null ? r.supply_price : '—'}</td>
+        <td class="sup-price">${r.retail_price != null ? r.retail_price : '—'}</td>
+        <td title="${esc(r.spec)}">${esc((r.spec || '').slice(0, 14))}</td>
+        <td>${esc(r.color || '')}</td>
+        <td>${r.weight != null ? r.weight : ''}</td>
+      </tr>`).join('')}</tbody></table></div>`
+    : '<div class="empty">暂无商品</div>';
+
+  // 渲染供应商列表
+  const renderSupplierList = () => {
+    const sups = catalogCache.suppliers || [];
+    const listEl = supEl.querySelector('[data-sup-list]');
+    if (!listEl) return;
+    if (!sups.length) {
+      listEl.innerHTML = '<div class="empty">暂无供应商数据。点「⬆ 导入」粘贴 CSV 导入。</div>';
+      return;
+    }
+    listEl.innerHTML = sups.map(s => `
+      <div class="sup-item">
+        <div class="sup-head" data-sup-id="${s.id}">
+          <span class="sup-fold">▸</span>
+          <span class="sup-name">🏭 ${esc(s.name)}</span>
+          <span class="sup-count">${s.product_count} 条</span>
+          ${s.source ? `<span class="sup-src">${esc(s.source)}</span>` : ''}
+        </div>
+        <div class="sup-body" id="sup-body-${s.id}" hidden></div>
+      </div>`).join('');
+    listEl.querySelectorAll('[data-sup-id]').forEach(h => {
+      h.onclick = async () => {
+        const body = $('#sup-body-' + h.dataset.supId);
+        const fold = h.querySelector('.sup-fold');
+        const willOpen = body.hidden;
+        body.hidden = !willOpen;
+        if (fold) fold.textContent = willOpen ? '▾' : '▸';
+        if (willOpen && !body.dataset.loaded) {
+          body.dataset.loaded = '1';
+          body.innerHTML = '<div class="empty">加载中…</div>';
+          try {
+            const resp = await api('/api/catalog/supplier-products?supplier_id=' + h.dataset.supId);
+            body.innerHTML = supTableHTML(resp.items || [], false);
+          } catch (e) {
+            body.innerHTML = '<div class="empty">加载失败</div>';
+          }
+        }
+      };
+    });
+  };
+
+  // 初始渲染：工具栏 + 列表
+  supEl.innerHTML = `
+    <div class="sup-toolbar">
+      <input class="sup-search" data-sup-search placeholder="🔍 搜索货号/名称/规格/供应商">
+      <button class="btn sm" data-sup-import>⬆ 导入</button>
+      <button class="btn sm" data-sup-export>⬇ 导出</button>
+    </div>
+    <div data-sup-list></div>`;
+  renderSupplierList();
+
+  // 搜索（防抖 300ms）
+  let searchTimer;
+  supEl.querySelector('[data-sup-search]').addEventListener('input', e => {
+    clearTimeout(searchTimer);
+    const q = e.target.value.trim();
+    const listEl = supEl.querySelector('[data-sup-list]');
+    if (!q) { renderSupplierList(); return; }
+    searchTimer = setTimeout(async () => {
+      listEl.innerHTML = '<div class="empty">搜索中…</div>';
+      try {
+        const resp = await api('/api/catalog/supplier-products?q=' + encodeURIComponent(q));
+        const items = resp.items || [];
+        listEl.innerHTML = items.length
+          ? `<div class="sup-search-tip">🔍 找到 ${items.length} 条匹配</div>` + supTableHTML(items, true)
+          : '<div class="empty">无匹配商品</div>';
+      } catch (err) {
+        listEl.innerHTML = '<div class="empty">搜索失败</div>';
+      }
+    }, 300);
+  });
+
+  // 导入
+  supEl.querySelector('[data-sup-import]').onclick = async () => {
+    const r = await promptDialog([{ key: 'csv', label: 'CSV 内容（粘贴，首行表头）', value: '', placeholder: '供应商名称,货号,商品名称,供货价,零售价,规格,颜色,重量(kg),箱规,库存,来源链接,备注\n示例供应商,S001,示例商品,10.5,29.9,大号,白色,0.5,,,\n…' }], { title: '导入供应商商品', confirmText: '导入' });
+    if (!r) return;
+    try {
+      const res = await api('/api/catalog/supplier-import', 'POST', { csv: r.csv });
+      toast(`导入成功：${res.imported} 条商品（${res.suppliers} 个供应商）`);
+      const resp = await api('/api/catalog/suppliers');
+      catalogCache.suppliers = resp.items || [];
+      supEl.querySelector('[data-sup-search]').value = '';
+      renderSupplierList();
+    } catch (err) { toast(err.message); }
+  };
+
+  // 导出
+  supEl.querySelector('[data-sup-export]').onclick = () => {
+    window.open(BASE + '/api/catalog/export?type=supplier', '_blank');
+  };
+}
+
+async function loadFreight(month, shop) {
+  const q = [];
+  if (month) q.push('month=' + encodeURIComponent(month));
+  if (shop) q.push('shop_id=' + shop);
+  catalogCache.freightMonth = month || '';
+  catalogCache.freightShop = shop || null;
+  try {
+    const qs = q.length ? '?' + q.join('&') : '';
+    const [fr, ma] = await Promise.all([
+      api('/api/catalog/freight' + qs),
+      api('/api/catalog/freight/match-analysis' + qs),
+    ]);
+    catalogCache.freight = fr;
+    catalogCache.freightMatch = ma;
+  } catch (e) { toast(e.message); return; }
+  const freightEl = $('#catalog-freight');
+  if (freightEl) renderFreightPanel(freightEl);
+}
+
+function renderFreightPanel(freightEl) {
+  const fr = catalogCache.freight;
+  if (!fr || fr.total <= 0) {
+    freightEl.innerHTML = '<div class="empty">暂无运费账单。用 import_freight.py 导入快递账单 xlsx。</div>';
+    return;
+  }
+  const months = (fr.monthly || []).map(m => m.ym);
+  const shops = (catalogCache.tree || []).flatMap(x => x.shops || []);
+  const filterBar = `
+    <div class="freight-filter">
+      <span class="ff-label">筛选</span>
+      <select data-freight-month class="ff-select">
+        <option value="">全部月份</option>
+        ${months.map(m => `<option value="${m}" ${catalogCache.freightMonth === m ? 'selected' : ''}>${m}</option>`).join('')}
+      </select>
+      <select data-freight-shop class="ff-select">
+        <option value="">全部店铺</option>
+        ${shops.map(s => `<option value="${s.id}" ${catalogCache.freightShop == s.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}
+      </select>
+    </div>`;
+  const provs = (fr.provinces || []).slice(0, 8);
+  const maxProv = provs.length ? provs[0].n : 1;
+  const ratio = fr.fee_gmv_ratio != null ? fr.fee_gmv_ratio + '%' : '—';
+  const unmatched = fr.total - fr.matched;
+  const fm = catalogCache.freightMatch;
+  const anomalies = (fm && fm.anomalies) || [];
+  const matchHTML = anomalies.length
+    ? `
+    <div class="callout" style="margin-bottom:10px">共 ${fm.total_groups} 组「相同 SKU+数量」，其中 ${fm.anomaly_total} 单运费偏离标准（多为重量差异）。</div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>规格</th><th>标准运费</th><th>实际运费</th><th>差值</th><th>重量</th><th>目的地</th></tr></thead>
+      <tbody>${anomalies.slice(0, 30).map(a => `
+        <tr>
+          <td title="${esc(a.spec)}">${esc((a.spec || '').slice(0, 16))}${(a.spec || '').length > 16 ? '…' : ''}</td>
+          <td>¥${fmt(a.standard_fee)}</td>
+          <td>¥${fmt(a.actual_fee)}</td>
+          <td class="${a.diff > 0 ? 'stock-low' : ''}">${a.diff > 0 ? '+' : ''}${fmt(a.diff)}</td>
+          <td>${a.weight != null ? a.weight + 'kg' : '—'}</td>
+          <td>${esc(a.province)}${esc(a.city)}</td>
+        </tr>`).join('')}
+      </tbody></table></div>
+    ${fm.anomaly_total > 30 ? `<div class="orders-more">仅显示前 30 条，共 ${fm.anomaly_total} 条异常单</div>` : ''}`
+    : '<div class="empty">暂无异常运费（所有匹配单运费一致）</div>';
+  const rates = catalogCache.freightRate || [];
+  const rateHTML = rates.length ? rates.map(r => `
+        <tr>
+          <td title="${esc(r.provinces)}">${esc(r.region_group)}</td>
+          <td>${r.w0_05 != null ? r.w0_05 : '—'}</td>
+          <td>${r.w05_1 != null ? r.w05_1 : '—'}</td>
+          <td>${r.w1_2 != null ? r.w1_2 : '/'}</td>
+          <td>${r.w2_3 != null ? r.w2_3 : '/'}</td>
+          <td>${r.first_price}</td>
+          <td>${r.add_price}</td>
+        </tr>`).join('') : '';
+  const cmp = catalogCache.freightCompare;
+  const cmpHTML = cmp && cmp.total_compared > 0 ? `
+    <div class="perf-summary" style="margin-bottom:12px">
+      <div class="perf-card"><div class="p-label">已对账</div><div class="p-value">${cmp.total_compared}</div></div>
+      <div class="perf-card"><div class="p-label">相符</div><div class="p-value">${cmp.match}</div></div>
+      <div class="perf-card"><div class="p-label">多收</div><div class="p-value" style="color:var(--red)">${cmp.over}</div></div>
+      <div class="perf-card"><div class="p-label">少收</div><div class="p-value">${cmp.under}</div></div>
+      <div class="perf-card"><div class="p-label">多收总额</div><div class="p-value" style="color:var(--red)">¥${fmt(cmp.over_amount)}</div></div>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>规格</th><th>重量</th><th>标准</th><th>实际</th><th>差</th><th>目的地</th></tr></thead>
+      <tbody>${cmp.items.slice(0, 20).map(x => `
+        <tr>
+          <td title="${esc(x.spec)}">${esc((x.spec || '').slice(0, 14))}${(x.spec || '').length > 14 ? '…' : ''}</td>
+          <td>${x.weight}kg</td>
+          <td>¥${fmt(x.standard)}</td>
+          <td>¥${fmt(x.actual)}</td>
+          <td class="${x.diff > 0 ? 'stock-low' : ''}">${x.diff > 0 ? '+' : ''}${fmt(x.diff)}</td>
+          <td>${esc(x.province)}</td>
+        </tr>`).join('')}
+      </tbody></table></div>
+    ${cmp.items.length > 20 ? `<div class="orders-more">仅显示前 20 条，共 ${cmp.items.length} 条</div>` : ''}`
+    : '<div class="empty">暂无对账数据（需匹配订单且有重量）</div>';
+  freightEl.innerHTML = filterBar + `
+    <div class="perf-summary" style="margin-bottom:14px">
+      <div class="perf-card"><div class="p-label">运费单数</div><div class="p-value">${fr.total}</div></div>
+      <div class="perf-card"><div class="p-label">总运费</div><div class="p-value">¥${fmt(fr.total_fee)}</div></div>
+      <div class="perf-card"><div class="p-label">匹配率</div><div class="p-value">${fr.match_rate}%</div></div>
+      <div class="perf-card"><div class="p-label">平均运费</div><div class="p-value">¥${fr.avg_fee}</div></div>
+      <div class="perf-card"><div class="p-label">运费/GMV</div><div class="p-value">${ratio}</div><div class="p-hint">匹配订单口径</div></div>
+    </div>
+    ${unmatched > 0 ? `<div class="callout">⚠️ 还有 ${unmatched} 单运费未匹配到订单（多为对应月份订单尚未导入）。补导订单后点「🔁 重新匹配」。</div>` : `<div class="callout" style="border-color:var(--green)">✅ 全部运费已匹配订单</div>`}
+    <div style="display:flex;gap:8px;margin:10px 0 14px;flex-wrap:wrap">
+      <button class="btn sm" data-freight-rematch>🔁 重新匹配</button>
+      <button class="btn sm" data-freight-export>⬇ 导出运费</button>
+    </div>
+    <h4 style="margin:0 0 8px">🗺️ 目的地省份 TOP</h4>
+    ${provs.length ? provs.map(p => `
+      <div class="perf-bar-row">
+        <span class="perf-date">${esc(p.province)}</span>
+        <div class="perf-bar"><div class="perf-fill" style="width:${Math.max(Math.round(p.n / maxProv * 100), 2)}%"></div></div>
+        <span class="perf-amt">${p.n}单</span>
+      </div>`).join('') : '<div class="empty">暂无</div>'}
+    <hr style="margin:16px 0;border:none;border-top:1px solid var(--line)">
+    <h4 style="margin:0 0 8px">🔍 匹配分析 <span class="perf-hint">相同 SKU+数量，标准运费 vs 异常</span></h4>
+    ${matchHTML}
+    <hr style="margin:16px 0;border:none;border-top:1px solid var(--line)">
+    <h4 style="margin:0 0 8px">📋 运费报价单 <span class="perf-hint">中通·嘉裕工艺品 2025-11-10</span></h4>
+    <div class="table-wrap"><table>
+      <thead><tr><th>地区</th><th>0-0.5kg</th><th>0.5-1kg</th><th>1-2kg</th><th>2-3kg</th><th>首重1kg</th><th>续重/kg</th></tr></thead>
+      <tbody>${rateHTML}</tbody></table></div>
+    <div class="perf-hint" style="margin:6px 0 0">附加票费：北京+1.5 / 上海+1 / 深圳·海南+0.5；「/」=该区间走首重+续重</div>
+    <hr style="margin:16px 0;border:none;border-top:1px solid var(--line)">
+    <h4 style="margin:0 0 8px">💰 自动对账 <span class="perf-hint">实际运费 vs 报价单标准</span></h4>
+    ${cmpHTML}`;
+  freightEl.querySelector('[data-freight-month]').onchange = e => loadFreight(e.target.value, catalogCache.freightShop);
+  freightEl.querySelector('[data-freight-shop]').onchange = e => loadFreight(catalogCache.freightMonth, e.target.value);
+  freightEl.querySelector('[data-freight-rematch]').onclick = async () => {
+    try {
+      const r = await api('/api/catalog/freight/match', 'POST');
+      toast(`重新匹配完成：新匹配 ${r.new_matched} 单（共 ${r.matched}/${r.total}）`);
+      catalogCache.freight = await api('/api/catalog/freight');
+      renderFreightPanel(freightEl);
+    } catch (err) { toast(err.message); }
+  };
+  freightEl.querySelector('[data-freight-export]').onclick = () => {
+    window.open(BASE + '/api/catalog/export?type=freight', '_blank');
+  };
+}
+
 
 function paintCatalog() {
   const el = $('#view-catalog');
@@ -1343,111 +1640,7 @@ function paintCatalog() {
       freightEl.hidden = !willOpen;
       freightToggle.querySelector('.orders-fold-icon').textContent = willOpen ? '▾' : '▸';
     };
-    const fr = catalogCache.freight;
-    if (fr && fr.total > 0) {
-      const provs = (fr.provinces || []).slice(0, 8);
-      const maxProv = provs.length ? provs[0].n : 1;
-      const ratio = fr.fee_gmv_ratio != null ? fr.fee_gmv_ratio + '%' : '—';
-      const unmatched = fr.total - fr.matched;
-      const fm = catalogCache.freightMatch;
-      const anomalies = (fm && fm.anomalies) || [];
-      const matchHTML = anomalies.length
-        ? `
-        <div class="callout" style="margin-bottom:10px">共 ${fm.total_groups} 组「相同 SKU+数量」，其中 ${fm.anomaly_total} 单运费偏离标准（多为重量差异）。</div>
-        <div class="table-wrap"><table>
-          <thead><tr><th>规格</th><th>标准运费</th><th>实际运费</th><th>差值</th><th>重量</th><th>目的地</th></tr></thead>
-          <tbody>${anomalies.slice(0, 30).map(a => `
-            <tr>
-              <td title="${esc(a.spec)}">${esc((a.spec || '').slice(0, 16))}${(a.spec || '').length > 16 ? '…' : ''}</td>
-              <td>¥${fmt(a.standard_fee)}</td>
-              <td>¥${fmt(a.actual_fee)}</td>
-              <td class="${a.diff > 0 ? 'stock-low' : ''}">${a.diff > 0 ? '+' : ''}${fmt(a.diff)}</td>
-              <td>${a.weight != null ? a.weight + 'kg' : '—'}</td>
-              <td>${esc(a.province)}${esc(a.city)}</td>
-            </tr>`).join('')}
-          </tbody></table></div>
-        ${fm.anomaly_total > 30 ? `<div class="orders-more">仅显示前 30 条，共 ${fm.anomaly_total} 条异常单</div>` : ''}`
-        : '<div class="empty">暂无异常运费（所有匹配单运费一致）</div>';
-      const rates = catalogCache.freightRate || [];
-      const rateHTML = rates.length ? rates.map(r => `
-            <tr>
-              <td title="${esc(r.provinces)}">${esc(r.region_group)}</td>
-              <td>${r.w0_05 != null ? r.w0_05 : '—'}</td>
-              <td>${r.w05_1 != null ? r.w05_1 : '—'}</td>
-              <td>${r.w1_2 != null ? r.w1_2 : '/'}</td>
-              <td>${r.w2_3 != null ? r.w2_3 : '/'}</td>
-              <td>${r.first_price}</td>
-              <td>${r.add_price}</td>
-            </tr>`).join('') : '';
-      const cmp = catalogCache.freightCompare;
-      const cmpHTML = cmp && cmp.total_compared > 0 ? `
-        <div class="perf-summary" style="margin-bottom:12px">
-          <div class="perf-card"><div class="p-label">已对账</div><div class="p-value">${cmp.total_compared}</div></div>
-          <div class="perf-card"><div class="p-label">相符</div><div class="p-value">${cmp.match}</div></div>
-          <div class="perf-card"><div class="p-label">多收</div><div class="p-value" style="color:var(--red)">${cmp.over}</div></div>
-          <div class="perf-card"><div class="p-label">少收</div><div class="p-value">${cmp.under}</div></div>
-          <div class="perf-card"><div class="p-label">多收总额</div><div class="p-value" style="color:var(--red)">¥${fmt(cmp.over_amount)}</div></div>
-        </div>
-        <div class="table-wrap"><table>
-          <thead><tr><th>规格</th><th>重量</th><th>标准</th><th>实际</th><th>差</th><th>目的地</th></tr></thead>
-          <tbody>${cmp.items.slice(0, 20).map(x => `
-            <tr>
-              <td title="${esc(x.spec)}">${esc((x.spec || '').slice(0, 14))}${(x.spec || '').length > 14 ? '…' : ''}</td>
-              <td>${x.weight}kg</td>
-              <td>¥${fmt(x.standard)}</td>
-              <td>¥${fmt(x.actual)}</td>
-              <td class="${x.diff > 0 ? 'stock-low' : ''}">${x.diff > 0 ? '+' : ''}${fmt(x.diff)}</td>
-              <td>${esc(x.province)}</td>
-            </tr>`).join('')}
-          </tbody></table></div>
-        ${cmp.items.length > 20 ? `<div class="orders-more">仅显示前 20 条，共 ${cmp.items.length} 条</div>` : ''}`
-        : '<div class="empty">暂无对账数据（需匹配订单且有重量）</div>';
-      freightEl.innerHTML = `
-        <div class="perf-summary" style="margin-bottom:14px">
-          <div class="perf-card"><div class="p-label">运费单数</div><div class="p-value">${fr.total}</div></div>
-          <div class="perf-card"><div class="p-label">总运费</div><div class="p-value">¥${fmt(fr.total_fee)}</div></div>
-          <div class="perf-card"><div class="p-label">匹配率</div><div class="p-value">${fr.match_rate}%</div></div>
-          <div class="perf-card"><div class="p-label">平均运费</div><div class="p-value">¥${fr.avg_fee}</div></div>
-          <div class="perf-card"><div class="p-label">运费/GMV</div><div class="p-value">${ratio}</div><div class="p-hint">匹配订单口径</div></div>
-        </div>
-        ${unmatched > 0 ? `<div class="callout">⚠️ 还有 ${unmatched} 单运费未匹配到订单（多为对应月份订单尚未导入）。补导订单后点「🔁 重新匹配」。</div>` : `<div class="callout" style="border-color:var(--green)">✅ 全部运费已匹配订单</div>`}
-        <div style="display:flex;gap:8px;margin:10px 0 14px;flex-wrap:wrap">
-          <button class="btn sm" data-freight-rematch>🔁 重新匹配</button>
-          <button class="btn sm" data-freight-export>⬇ 导出运费</button>
-        </div>
-        <h4 style="margin:0 0 8px">🗺️ 目的地省份 TOP</h4>
-        ${provs.length ? provs.map(p => `
-          <div class="perf-bar-row">
-            <span class="perf-date">${esc(p.province)}</span>
-            <div class="perf-bar"><div class="perf-fill" style="width:${Math.max(Math.round(p.n / maxProv * 100), 2)}%"></div></div>
-            <span class="perf-amt">${p.n}单</span>
-          </div>`).join('') : '<div class="empty">暂无</div>'}
-        <hr style="margin:16px 0;border:none;border-top:1px solid var(--line)">
-        <h4 style="margin:0 0 8px">🔍 匹配分析 <span class="perf-hint">相同 SKU+数量，标准运费 vs 异常</span></h4>
-        ${matchHTML}
-        <hr style="margin:16px 0;border:none;border-top:1px solid var(--line)">
-        <h4 style="margin:0 0 8px">📋 运费报价单 <span class="perf-hint">中通·嘉裕工艺品 2025-11-10</span></h4>
-        <div class="table-wrap"><table>
-          <thead><tr><th>地区</th><th>0-0.5kg</th><th>0.5-1kg</th><th>1-2kg</th><th>2-3kg</th><th>首重1kg</th><th>续重/kg</th></tr></thead>
-          <tbody>${rateHTML}</tbody></table></div>
-        <div class="perf-hint" style="margin:6px 0 0">附加票费：北京+1.5 / 上海+1 / 深圳·海南+0.5；「/」=该区间走首重+续重</div>
-        <hr style="margin:16px 0;border:none;border-top:1px solid var(--line)">
-        <h4 style="margin:0 0 8px">💰 自动对账 <span class="perf-hint">实际运费 vs 报价单标准</span></h4>
-        ${cmpHTML}`;
-      freightEl.querySelector('[data-freight-rematch]').onclick = async () => {
-        try {
-          const r = await api('/api/catalog/freight/match', 'POST');
-          toast(`重新匹配完成：新匹配 ${r.new_matched} 单（共 ${r.matched}/${r.total}）`);
-          catalogCache.freight = await api('/api/catalog/freight');
-          paintCatalog();
-        } catch (err) { toast(err.message); }
-      };
-      freightEl.querySelector('[data-freight-export]').onclick = () => {
-        window.open(BASE + '/api/catalog/export?type=freight', '_blank');
-      };
-    } else {
-      freightEl.innerHTML = '<div class="empty">暂无运费账单。用 import_freight.py 导入快递账单 xlsx。</div>';
-    }
+    renderFreightPanel(freightEl);
   }
 
   const body = $('#catalog-body');

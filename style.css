@@ -621,3 +621,27 @@ textarea { min-height: 72px; resize: vertical; }
   table { font-size: 12px; }
   th, td { padding: 9px 7px; }
 }
+
+/* 供应商面板 */
+.sup-toolbar { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; flex-wrap: wrap; }
+.sup-search { flex: 1; min-width: 160px; padding: 8px 12px; border: 1px solid #e4e7f1; border-radius: 9px; font-size: 13px; background: #fff; }
+.sup-search:focus { outline: none; border-color: #4f46e5; }
+.sup-search-tip { font-size: 12px; color: #4f46e5; font-weight: 600; margin: 0 0 8px; }
+.sup-item { border: 1px solid #eef1f5; border-radius: 8px; margin-bottom: 8px; overflow: hidden; }
+.sup-head { display: flex; align-items: center; gap: 8px; padding: 9px 12px; cursor: pointer; background: #f8fafc; }
+.sup-head:hover { background: #f1f5f9; }
+.sup-fold { color: #94a3b8; font-size: 12px; width: 12px; }
+.sup-name { font-weight: 700; color: #1e3a5f; font-size: 13px; }
+.sup-count { background: #e0e7ff; color: #4f46e5; border-radius: 10px; padding: 1px 8px; font-size: 11px; font-weight: 600; }
+.sup-src { color: #94a3b8; font-size: 11px; margin-left: auto; }
+.sup-body { padding: 4px 8px 8px; }
+.sup-price { font-weight: 700; color: #dc2626; }
+.sup-img-cell { width: 48px; padding: 3px !important; }
+.sup-img-cell img { width: 44px; height: 44px; object-fit: cover; border-radius: 6px; display: block; border: 1px solid #eef1f5; cursor: zoom-in; }
+.sup-img-cell a { display: block; line-height: 0; }
+.sup-noimg { color: #cbd5e1; font-size: 12px; }
+
+/* 运费分析筛选 */
+.freight-filter { display: flex; align-items: center; gap: 8px; margin: 0 0 14px; flex-wrap: wrap; }
+.ff-label { font-size: 12px; color: var(--muted); font-weight: 600; }
+.ff-select { padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px; color: var(--ink-2); background: #fff; cursor: pointer; }
