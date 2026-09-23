@@ -509,13 +509,20 @@ class Handler(BaseHTTPRequestHandler):
             shop_id = qs.get("shop_id", [None])[0]
             start = qs.get("start", [None])[0]
             end = qs.get("end", [None])[0]
+            status = qs.get("status", [None])[0]
             return _json(self, catalog.catalog_performance(
-                int(shop_id) if shop_id else None, start or None, end or None))
+                int(shop_id) if shop_id else None, start or None, end or None,
+                status or None))
 
         if path == "/api/catalog/performance-all" and self.command == "GET":
             start = qs.get("start", [None])[0]
             end = qs.get("end", [None])[0]
-            return _json(self, catalog.catalog_performance_all(start or None, end or None))
+            status = qs.get("status", [None])[0]
+            return _json(self, catalog.catalog_performance_all(
+                start or None, end or None, status or None))
+
+        if path == "/api/catalog/order-statuses" and self.command == "GET":
+            return _json(self, {"items": catalog.order_statuses()})
 
         if path == "/api/catalog/platform-overview" and self.command == "GET":
             return _json(self, catalog.platform_overview())

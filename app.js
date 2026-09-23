@@ -929,7 +929,7 @@ function renderProducts(editingProduct = null) {
 }
 
 /* ---------------- 商品库（平台 + 电商层级） ---------------- */
-const catalogCache = { tree: [], stats: {}, orders: [], analysis: null, filter: '', mods: [], modCounts: {}, goodsEffect: [], performance: null, perfAll: null, promoAnalysis: null, lowStock: [], selection: null, freight: null, freightMatch: null, freightRate: [], freightCompare: null, suppliers: [], supplierProducts: {}, freightMonth: '', freightShop: null, deleteMode: false, perfShop: null, perfRange: null, perfPreset: 'all', serverToday: '' };
+const catalogCache = { tree: [], stats: {}, orders: [], analysis: null, filter: '', mods: [], modCounts: {}, goodsEffect: [], performance: null, perfAll: null, promoAnalysis: null, lowStock: [], selection: null, freight: null, freightMatch: null, freightRate: [], freightCompare: null, suppliers: [], supplierProducts: {}, freightMonth: '', freightShop: null, deleteMode: false, perfShop: null, perfRange: null, perfPreset: 'all', perfStatus: '', orderStatuses: [], serverToday: '' };
 
 // 日期工具：'YYYY-MM-DD' -> 本地 Date / Date -> 'YYYY-MM-DD'
 const dToObj = (s) => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
@@ -965,6 +965,7 @@ function rangeFor(key, today) {
 const perfQs = () => {
   const parts = [];
   if (catalogCache.perfShop) parts.push(`shop_id=${catalogCache.perfShop}`);
+  if (catalogCache.perfStatus) parts.push(`status=${encodeURIComponent(catalogCache.perfStatus)}`);
   const r = catalogCache.perfRange;
   if (r) {
     if (r.start) parts.push(`start=${r.start}`);
@@ -989,7 +990,7 @@ async function renderCatalog() {
   const el = $('#view-catalog');
   el.innerHTML = '<div class="empty"><div class="big">📦</div>加载中…</div>';
   try {
-    const [stats, treeResp, ordersResp, analysis, modsResp, countsResp, geResp, perfResp, perfAllResp, promoResp, lowResp, selResp, freightResp, freightMatchResp, freightRateResp, freightCompareResp, suppliersResp] = await Promise.all([
+    const [stats, treeResp, ordersResp, analysis, modsResp, countsResp, geResp, perfResp, perfAllResp, promoResp, lowResp, selResp, freightResp, freightMatchResp, freightRateResp, freightCompareResp, suppliersResp, statusesResp] = await Promise.all([
       api('/api/catalog/stats'),
       api('/api/catalog/tree'),
       api('/api/catalog/orders?limit=5000'),
@@ -1007,6 +1008,7 @@ async function renderCatalog() {
       api('/api/catalog/freight-rate'),
       api('/api/catalog/freight-compare'),
       api('/api/catalog/suppliers'),
+      api('/api/catalog/order-statuses'),
     ]);
     catalogCache.stats = stats;
     catalogCache.tree = treeResp.items || [];
@@ -1026,6 +1028,7 @@ async function renderCatalog() {
     catalogCache.freightRate = freightRateResp.items || [];
     catalogCache.freightCompare = freightCompareResp || null;
     catalogCache.suppliers = suppliersResp.items || [];
+    catalogCache.orderStatuses = (statusesResp && statusesResp.items) || [];
     paintCatalog();
   } catch (err) {
     el.innerHTML = `<div class="empty">❌ ${esc(err.message)}</div>`;
@@ -1433,6 +1436,10 @@ function paintCatalog() {
           <option value="" ${!catalogCache.perfShop ? 'selected' : ''}>全部店铺</option>
           ${tree.flatMap(x => x.shops || []).map(sh => `<option value="${sh.id}" ${catalogCache.perfShop == sh.id ? 'selected' : ''}>${esc(sh.name)}</option>`).join('')}
         </select>
+        <select class="perf-status-filter" data-perf-status>
+          <option value="" ${!catalogCache.perfStatus ? 'selected' : ''}>全部状态</option>
+          ${(catalogCache.orderStatuses || []).map(s => `<option value="${esc(s.status)}" ${catalogCache.perfStatus === s.status ? 'selected' : ''}>${esc(s.status)}（${s.count}）</option>`).join('')}
+        </select>
       </div>
       <div class="perf-summary">
         <div class="perf-card"><div class="p-label">GMV（实付）</div><div class="p-value">¥${fmt(sm.gmv)}</div></div>
@@ -1625,6 +1632,19 @@ function paintCatalog() {
     perfShopFilter.onchange = async () => {
       const sid = perfShopFilter.value;
       catalogCache.perfShop = sid ? parseInt(sid) : null;
+      try {
+        await reloadPerf();
+      } catch (err) {
+        toast(err.message);
+      }
+    };
+  }
+
+  // 经营分析订单状态筛选
+  const perfStatusFilter = el.querySelector('[data-perf-status]');
+  if (perfStatusFilter) {
+    perfStatusFilter.onchange = async () => {
+      catalogCache.perfStatus = perfStatusFilter.value || '';
       try {
         await reloadPerf();
       } catch (err) {
