@@ -3538,19 +3538,34 @@ function paintTitleOpt(el) {
   h += '<input id="to-search" placeholder="搜索商品名/货号/ID" value="' + esc(titleOptCache.filter) + '" style="flex:1;min-width:160px;padding:8px 10px;border:1px solid #cdd7e5;border-radius:8px;font-size:13px">';
   h += '</div>';
 
-  h += '<div style="font-size:13px;font-weight:700;color:#1e3a5f;margin:14px 12px 6px">📋 已挑商品 · 跟踪日志（' + opts.length + '/5）</div>';
+  h += '<div style="font-size:13px;font-weight:700;color:#1e3a5f;margin:14px 12px 6px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">';
+  h += '<span>📋 已挑商品 · 跟踪日志（' + opts.length + '/5）</span>';
+  const applyable = opts.filter(o => o.new_title && o.status !== 'done');
+  if (applyable.length) {
+    h += '<span style="display:flex;gap:8px;align-items:center">';
+    h += '<button class="btn xs primary" onclick="titleOptApply()">🚀 执行更新（<span id="to-sel-count">0</span>）</button>';
+    h += '<label style="font-size:11px;color:#5a6b85;cursor:pointer;white-space:nowrap"><input type="checkbox" id="to-sel-all" style="vertical-align:middle"> 全选</label>';
+    h += '</span>';
+  }
+  h += '</div>';
   if (!opts.length) {
     h += '<div class="empty" style="margin:0 12px">暂无挑选商品，从下方候选列表挑选 5 个</div>';
   } else {
     opts.forEach(o => {
       const st = statusMap[o.status] || statusMap.selected;
+      const applying = o.note === '执行中…';
+      const hasErr = o.note && !applying;
+      const applyable = o.new_title && o.status !== 'done';
       let bl = null;
       try { bl = o.baseline ? JSON.parse(o.baseline) : null; } catch (e) { bl = null; }
       h += '<div style="background:#fff;border-radius:12px;padding:12px;margin:8px 12px;box-shadow:0 1px 3px rgba(0,0,0,.05)">';
-      h += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">';
-      h += '<div style="font-weight:700;color:#1e3a5f;font-size:13px;word-break:break-all">' + esc(o.product_name || '') + '</div>';
-      h += '<span style="font-size:11px;font-weight:700;color:' + st.color + ';background:' + st.bg + ';padding:2px 8px;border-radius:6px;flex-shrink:0;margin-left:8px">' + st.label + '</span>';
+      h += '<div style="display:flex;align-items:center;margin-bottom:4px;gap:8px">';
+      if (applyable) h += '<input type="checkbox" class="to-apply" value="' + o.id + '" style="flex-shrink:0;width:16px;height:16px;cursor:pointer">';
+      h += '<div style="font-weight:700;color:#1e3a5f;font-size:13px;word-break:break-all;flex:1">' + esc(o.product_name || '') + '</div>';
+      if (applying) h += '<span style="font-size:11px;font-weight:700;color:#92400e;background:#fed7aa;padding:2px 8px;border-radius:6px;flex-shrink:0">⏳ 执行中</span>';
+      else h += '<span style="font-size:11px;font-weight:700;color:' + st.color + ';background:' + st.bg + ';padding:2px 8px;border-radius:6px;flex-shrink:0">' + st.label + '</span>';
       h += '</div>';
+      if (hasErr) h += '<div style="font-size:11px;color:#dc2626;margin-bottom:4px">⚠️ ' + esc(o.note) + '</div>';
       h += '<div style="font-size:11px;color:#8899b0;margin-bottom:6px">货号 ' + esc(o.product_code || '—') + ' · ID ' + esc(o.platform_product_id) + '</div>';
       h += '<div style="font-size:12px;line-height:1.7;margin-bottom:4px">';
       h += '<div style="color:#8899b0">旧：<span style="color:#5a6b85">' + esc(o.old_title || '') + '</span></div>';
@@ -3605,6 +3620,47 @@ function paintTitleOpt(el) {
       }, 400);
     };
   }
+  const selAll = el.querySelector('#to-sel-all');
+  const boxes = el.querySelectorAll('.to-apply');
+  const syncSel = () => {
+    const cnt = el.querySelector('#to-sel-count');
+    if (cnt) cnt.textContent = [...boxes].filter(b => b.checked).length;
+  };
+  if (selAll) selAll.onchange = () => { boxes.forEach(b => { b.checked = selAll.checked; }); syncSel(); };
+  boxes.forEach(b => { b.onchange = syncSel; });
+}
+
+async function titleOptApply() {
+  const el = $('#view-titleopt');
+  const boxes = [...el.querySelectorAll('.to-apply:checked')];
+  if (!boxes.length) { toast('⚠️ 请先勾选要更新的商品'); return; }
+  const ids = boxes.map(b => parseInt(b.value));
+  const ok = await confirmDialog('确定把选中的 ' + ids.length + ' 个商品的优化标题更新到拼多多后台？', { title: '执行更新', confirmText: '更新' });
+  if (!ok) return;
+  try {
+    const r = await api('/api/catalog/title-opt/apply', 'POST', { ids });
+    if (!r.ok) { toast('❌ ' + (r.error || '失败')); return; }
+    toast('🚀 已开始更新 ' + r.count + ' 个商品，约需 ' + (r.count * 30) + ' 秒…');
+    await titleOptPollApply();
+  } catch (e) { toast('❌ ' + e.message); }
+}
+
+async function titleOptPollApply() {
+  const el = $('#view-titleopt');
+  const check = async () => {
+    try { await loadTitleOptData(); } catch (e) {}
+    const running = titleOptCache.opts.filter(o => o.note === '执行中…');
+    if (running.length) {
+      paintTitleOpt(el);
+      setTimeout(check, 3000);
+    } else {
+      paintTitleOpt(el);
+      const errs = titleOptCache.opts.filter(o => o.note && o.note !== '执行中…');
+      if (errs.length) toast('⚠️ 部分失败：' + errs.map(o => o.product_name + '：' + o.note).join('；'));
+      else toast('✅ 全部更新完成');
+    }
+  };
+  check();
 }
 
 async function titleOptPick(platformProductId) {

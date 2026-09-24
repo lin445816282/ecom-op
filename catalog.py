@@ -1581,6 +1581,16 @@ def delete_title_opt(opt_id: int) -> bool:
         return True
 
 
+def get_title_opt_by_ids(ids: list) -> list[dict]:
+    """按 id 批量查标题优化记录（执行更新用）。"""
+    if not ids:
+        return []
+    with closing(_conn()) as c:
+        ph = ",".join("?" * len(ids))
+        rows = c.execute(f"SELECT * FROM title_opt WHERE id IN ({ph})", ids).fetchall()
+        return [dict(r) for r in rows]
+
+
 def save_title_opt_baseline(opt_id: int) -> dict:
     """快照优化前基线：读该商品最新一条访问明细，写入 baseline 字段。"""
     import json as _json

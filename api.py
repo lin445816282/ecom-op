@@ -14,6 +14,11 @@ PORT = 8765
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROMOTION_HISTORY_PATH = os.path.expanduser("~/.hermes/pdd_promotion_history.json")
 
+# 店铺 → 拼多多 CDP 端口（Edge 独立 profile，详见 pdd-promotion-cdp skill）
+SHOP_CDP_PORT = {5: 9232, 3: 9230, 1: 9228}
+NODE_EXE = "/mnt/d/Program Files/nodejs/node.exe"
+PDD_SET_TITLE_JS = r"C:\tmp\pdd_set_titles.js"
+
 
 def _json(handler, obj, status=200):
     body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
@@ -760,6 +765,32 @@ class Handler(BaseHTTPRequestHandler):
             bl = catalog.save_title_opt_baseline(opt_id)
             return _json(self, {"ok": True, "baseline": bl})
 
+        if path == "/api/catalog/title-opt/apply" and self.command == "POST":
+            import threading
+            item = self._read_body()
+            ids = item.get("ids") or []
+            if not ids:
+                return _json(self, {"error": "ids required"}, 400)
+            try:
+                ids = [int(x) for x in ids]
+            except (TypeError, ValueError):
+                return _json(self, {"error": "非法 id"}, 400)
+            recs = catalog.get_title_opt_by_ids(ids)
+            todo = [r for r in recs if r.get("new_title") and r.get("status") != "done"]
+            if not todo:
+                return _json(self, {"ok": False, "error": "没有可执行记录（需已优化且未生效）"}, 400)
+            shops = {r["shop_id"] for r in todo}
+            if len(shops) > 1:
+                return _json(self, {"error": "一次只能执行同一店铺的商品"}, 400)
+            shop_id = todo[0]["shop_id"]
+            port = SHOP_CDP_PORT.get(shop_id)
+            if not port:
+                return _json(self, {"error": f"店铺 {shop_id} 未配置 CDP 端口"}, 400)
+            for r in todo:
+                catalog.update_title_opt(r["id"], note="执行中…")
+            threading.Thread(target=_apply_titles_bg, args=(todo, port), daemon=True).start()
+            return _json(self, {"ok": True, "started": True, "count": len(todo), "shop_id": shop_id})
+
         if path.startswith("/api/catalog/title-opt/") and self.command == "DELETE":
             try:
                 opt_id = int(path.split("/")[-1])
@@ -871,6 +902,56 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Content-Length", "0")
         self.end_headers()
+
+
+def _apply_titles_bg(todo, port):
+    """后台线程：调 node 脚本批量改标题，回写 title_opt 状态。"""
+    import subprocess
+    import time
+    ts = int(time.time())
+    base = f"pdd_apply_{ts}.json"
+    wsl_path = f"/mnt/c/tmp/{base}"
+    win_path = f"C:\\tmp\\{base}"
+    items = [{"gid": r["platform_product_id"], "title": r["new_title"]} for r in todo]
+    try:
+        with open(wsl_path, "w", encoding="utf-8") as f:
+            json.dump(items, f, ensure_ascii=False)
+    except Exception as e:
+        for r in todo:
+            catalog.update_title_opt(r["id"], note=f"清单写入失败:{e}")
+        return
+    try:
+        r = subprocess.run(
+            [NODE_EXE, PDD_SET_TITLE_JS, str(port), win_path],
+            capture_output=True, timeout=600,
+        )
+        out = r.stdout.decode("utf-8", errors="replace").strip()
+        results = []
+        for line in out.splitlines():
+            line = line.strip()
+            if line.startswith("["):
+                try:
+                    results = json.loads(line)
+                except Exception:
+                    pass
+        by_gid = {str(x.get("gid")): x for x in results}
+        for rec in todo:
+            gid = str(rec["platform_product_id"])
+            res = by_gid.get(gid)
+            if not res:
+                catalog.update_title_opt(rec["id"], note="无结果")
+                continue
+            st = res.get("status", "")
+            if st == "VERIFIED":
+                catalog.update_title_opt(rec["id"], status="done", note="")
+            else:
+                catalog.update_title_opt(rec["id"], note=st)
+    except subprocess.TimeoutExpired:
+        for rec in todo:
+            catalog.update_title_opt(rec["id"], note="执行超时")
+    except Exception as e:
+        for rec in todo:
+            catalog.update_title_opt(rec["id"], note=f"执行异常:{e}")
 
 
 def main():
