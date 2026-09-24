@@ -791,6 +791,11 @@ class Handler(BaseHTTPRequestHandler):
             threading.Thread(target=_apply_titles_bg, args=(todo, port), daemon=True).start()
             return _json(self, {"ok": True, "started": True, "count": len(todo), "shop_id": shop_id})
 
+        if path == "/api/catalog/title-opt/log" and self.command == "GET":
+            shop_id = qs.get("shop_id", [None])[0]
+            limit = int(qs.get("limit", [200])[0] or 200)
+            return _json(self, {"items": catalog.list_title_opt_log(int(shop_id) if shop_id else None, limit)})
+
         if path.startswith("/api/catalog/title-opt/") and self.command == "DELETE":
             try:
                 opt_id = int(path.split("/")[-1])
@@ -940,18 +945,23 @@ def _apply_titles_bg(todo, port):
             res = by_gid.get(gid)
             if not res:
                 catalog.update_title_opt(rec["id"], note="无结果")
+                catalog.log_title_opt(rec["shop_id"], gid, rec["product_name"], rec["old_title"], rec["new_title"], "apply", "fail", "无结果")
                 continue
             st = res.get("status", "")
             if st == "VERIFIED":
                 catalog.update_title_opt(rec["id"], status="done", note="")
+                catalog.log_title_opt(rec["shop_id"], gid, rec["product_name"], rec["old_title"], rec["new_title"], "apply", "success", "")
             else:
                 catalog.update_title_opt(rec["id"], note=st)
+                catalog.log_title_opt(rec["shop_id"], gid, rec["product_name"], rec["old_title"], rec["new_title"], "apply", "fail", st)
     except subprocess.TimeoutExpired:
         for rec in todo:
             catalog.update_title_opt(rec["id"], note="执行超时")
+            catalog.log_title_opt(rec["shop_id"], rec["platform_product_id"], rec["product_name"], rec["old_title"], rec["new_title"], "apply", "fail", "执行超时")
     except Exception as e:
         for rec in todo:
             catalog.update_title_opt(rec["id"], note=f"执行异常:{e}")
+            catalog.log_title_opt(rec["shop_id"], rec["platform_product_id"], rec["product_name"], rec["old_title"], rec["new_title"], "apply", "fail", f"执行异常:{e}")
 
 
 def main():

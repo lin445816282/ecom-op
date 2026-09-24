@@ -176,6 +176,22 @@ CREATE TABLE IF NOT EXISTS title_opt (
 
 CREATE INDEX IF NOT EXISTS idx_title_opt_shop ON title_opt(shop_id);
 
+CREATE TABLE IF NOT EXISTS title_opt_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    shop_id INTEGER NOT NULL,
+    platform_product_id TEXT NOT NULL,
+    product_name TEXT DEFAULT '',
+    old_title TEXT DEFAULT '',
+    new_title TEXT DEFAULT '',
+    action TEXT DEFAULT '',
+    status TEXT DEFAULT '',
+    note TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_title_opt_log_shop ON title_opt_log(shop_id);
+CREATE INDEX IF NOT EXISTS idx_title_opt_log_prod ON title_opt_log(platform_product_id);
+
 CREATE TABLE IF NOT EXISTS freight (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     account_name TEXT DEFAULT '',
@@ -1516,12 +1532,18 @@ def add_title_opt(shop_id: int, platform_product_id: str) -> int:
         ).fetchone()[0]
         if has_order:
             return -1
-        c.execute(
+        cur = c.execute(
             "INSERT INTO title_opt(shop_id, platform_product_id, product_name, product_code, old_title, status) "
             "VALUES(?,?,?,?,?,'selected') "
             "ON CONFLICT(shop_id, platform_product_id) DO NOTHING",
             (shop_id, platform_product_id, prod["name"], prod["code"] or "", prod["name"] or ""),
         )
+        if cur.rowcount > 0:
+            c.execute(
+                "INSERT INTO title_opt_log(shop_id, platform_product_id, product_name, old_title, new_title, action, status, note) "
+                "VALUES(?,?,?,?,?,'pick','success','')",
+                (shop_id, platform_product_id, prod["name"] or "", prod["name"] or "", ""),
+            )
         c.commit()
         row = c.execute(
             "SELECT id FROM title_opt WHERE shop_id=? AND platform_product_id=?",
@@ -1556,6 +1578,12 @@ def list_title_opt(shop_id: int = None) -> list[dict]:
 
 def update_title_opt(opt_id: int, new_title: str = None, status: str = None, note: str = None) -> bool:
     with closing(_conn()) as c:
+        prev = None
+        if new_title is not None:
+            prev = c.execute(
+                "SELECT shop_id, platform_product_id, product_name, old_title, new_title FROM title_opt WHERE id=?",
+                (opt_id,),
+            ).fetchone()
         sets, args = [], []
         if new_title is not None:
             sets.append("new_title=?")
@@ -1570,6 +1598,13 @@ def update_title_opt(opt_id: int, new_title: str = None, status: str = None, not
             return False
         args.append(opt_id)
         c.execute(f"UPDATE title_opt SET {', '.join(sets)} WHERE id=?", args)
+        if new_title is not None and prev and (prev["new_title"] or "") != new_title:
+            c.execute(
+                "INSERT INTO title_opt_log(shop_id, platform_product_id, product_name, old_title, new_title, action, status, note) "
+                "VALUES(?,?,?,?,?,'optimize','success','')",
+                (prev["shop_id"], prev["platform_product_id"], prev["product_name"] or "",
+                 prev["new_title"] or prev["old_title"] or "", new_title),
+            )
         c.commit()
         return True
 
@@ -1588,6 +1623,27 @@ def get_title_opt_by_ids(ids: list) -> list[dict]:
     with closing(_conn()) as c:
         ph = ",".join("?" * len(ids))
         rows = c.execute(f"SELECT * FROM title_opt WHERE id IN ({ph})", ids).fetchall()
+        return [dict(r) for r in rows]
+
+
+def log_title_opt(shop_id, platform_product_id, product_name, old_title, new_title, action, status="", note=""):
+    """记录标题优化操作日志（pick/optimize/apply）。"""
+    with closing(_conn()) as c:
+        c.execute(
+            "INSERT INTO title_opt_log(shop_id, platform_product_id, product_name, old_title, new_title, action, status, note) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            (shop_id, platform_product_id, product_name or "", old_title or "", new_title or "", action, status, note or ""),
+        )
+        c.commit()
+
+
+def list_title_opt_log(shop_id=None, limit=200) -> list[dict]:
+    """查询标题优化日志（倒序）。"""
+    with closing(_conn()) as c:
+        if shop_id:
+            rows = c.execute("SELECT * FROM title_opt_log WHERE shop_id=? ORDER BY id DESC LIMIT ?", (shop_id, limit)).fetchall()
+        else:
+            rows = c.execute("SELECT * FROM title_opt_log ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
         return [dict(r) for r in rows]
 
 

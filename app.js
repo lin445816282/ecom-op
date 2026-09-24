@@ -3458,12 +3458,14 @@ function titleOptShopOptions() {
 async function loadTitleOptData() {
   const sid = titleOptCache.shopId;
   const q = titleOptCache.filter ? '&q=' + encodeURIComponent(titleOptCache.filter) : '';
-  const [cand, opt] = await Promise.all([
+  const [cand, opt, log] = await Promise.all([
     api('/api/catalog/title-opt/candidates?shop_id=' + sid + q),
-    api('/api/catalog/title-opt?shop_id=' + sid)
+    api('/api/catalog/title-opt?shop_id=' + sid),
+    api('/api/catalog/title-opt/log?shop_id=' + sid + '&limit=50')
   ]);
   titleOptCache.candidates = cand.items || [];
   titleOptCache.opts = opt.items || [];
+  titleOptCache.logs = log.items || [];
 }
 
 async function renderTitleOptView() {
@@ -3600,6 +3602,8 @@ function paintTitleOpt(el) {
     h += '</div>';
   }
 
+  h += titleOptLogHtml(titleOptCache.logs);
+
   el.innerHTML = h;
 
   const shopSel = el.querySelector('#to-shop');
@@ -3628,6 +3632,38 @@ function paintTitleOpt(el) {
   };
   if (selAll) selAll.onchange = () => { boxes.forEach(b => { b.checked = selAll.checked; }); syncSel(); };
   boxes.forEach(b => { b.onchange = syncSel; });
+}
+
+function titleOptLogHtml(logs) {
+  if (!logs || !logs.length) return '';
+  const actionMap = {
+    pick: { label: '挑选', color: '#7c3aed', bg: '#ede9fe' },
+    optimize: { label: '优化', color: '#d97706', bg: '#fef3c7' },
+    apply: { label: '执行', color: '#2563eb', bg: '#dbeafe' }
+  };
+  let h = '<div style="font-size:13px;font-weight:700;color:#1e3a5f;margin:14px 12px 6px">📜 修改日志（最近 ' + logs.length + ' 条）</div>';
+  h += '<div style="max-height:360px;overflow-y:auto;margin:0 12px 16px;background:#fff;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.05)">';
+  logs.forEach(l => {
+    const a = actionMap[l.action] || { label: l.action, color: '#8899b0', bg: '#f3f4f6' };
+    const ok = l.status === 'success';
+    h += '<div style="padding:10px 12px;border-bottom:1px solid #f3f4f6">';
+    h += '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:3px">';
+    h += '<span style="font-size:11px;font-weight:700;color:' + a.color + ';background:' + a.bg + ';padding:1px 7px;border-radius:5px">' + a.label + '</span>';
+    if (l.action === 'apply') h += '<span style="font-size:11px;font-weight:700;color:' + (ok ? '#16a34a' : '#dc2626') + '">' + (ok ? '✅成功' : '❌失败') + '</span>';
+    h += '<span style="font-size:11px;color:#8899b0;margin-left:auto">' + esc(l.created_at || '') + '</span>';
+    h += '</div>';
+    h += '<div style="font-size:12px;color:#1e3a5f;font-weight:600">' + esc(l.product_name || '') + ' <span style="font-weight:400;color:#8899b0;font-size:11px">ID ' + esc(l.platform_product_id) + '</span></div>';
+    if (l.action === 'optimize' || l.action === 'apply') {
+      h += '<div style="font-size:11px;color:#8899b0;line-height:1.6">';
+      h += '<div>旧：' + esc(l.old_title || '') + '</div>';
+      h += '<div>新：<span style="color:#16a34a">' + esc(l.new_title || '') + '</span></div>';
+      h += '</div>';
+    }
+    if (l.note) h += '<div style="font-size:11px;color:#dc2626;margin-top:2px">' + esc(l.note) + '</div>';
+    h += '</div>';
+  });
+  h += '</div>';
+  return h;
 }
 
 async function titleOptApply() {
