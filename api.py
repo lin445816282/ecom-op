@@ -776,9 +776,20 @@ class Handler(BaseHTTPRequestHandler):
             except (TypeError, ValueError):
                 return _json(self, {"error": "非法 id"}, 400)
             recs = catalog.get_title_opt_by_ids(ids)
-            todo = [r for r in recs if r.get("new_title") and r.get("status") != "done"]
+            todo = []
+            skipped_order = 0
+            for r in recs:
+                if not (r.get("new_title") and r.get("status") != "done"):
+                    continue
+                if catalog.has_order(r["shop_id"], r["platform_product_id"]):
+                    catalog.update_title_opt(r["id"], note="已出单，跳过")
+                    catalog.log_title_opt(r["shop_id"], r["platform_product_id"], r["product_name"], r["old_title"], r["new_title"], "apply", "skip", "已出单，跳过")
+                    skipped_order += 1
+                    continue
+                todo.append(r)
             if not todo:
-                return _json(self, {"ok": False, "error": "没有可执行记录（需已优化且未生效）"}, 400)
+                msg = "没有可执行记录" + ("（" + str(skipped_order) + " 个已出单跳过）" if skipped_order else "（需已优化且未生效）")
+                return _json(self, {"ok": False, "error": msg}, 400)
             shops = {r["shop_id"] for r in todo}
             if len(shops) > 1:
                 return _json(self, {"error": "一次只能执行同一店铺的商品"}, 400)
@@ -789,7 +800,7 @@ class Handler(BaseHTTPRequestHandler):
             for r in todo:
                 catalog.update_title_opt(r["id"], note="执行中…")
             threading.Thread(target=_apply_titles_bg, args=(todo, port), daemon=True).start()
-            return _json(self, {"ok": True, "started": True, "count": len(todo), "shop_id": shop_id})
+            return _json(self, {"ok": True, "started": True, "count": len(todo), "skipped_order": skipped_order, "shop_id": shop_id})
 
         if path == "/api/catalog/title-opt/log" and self.command == "GET":
             shop_id = qs.get("shop_id", [None])[0]
@@ -913,6 +924,10 @@ def _apply_titles_bg(todo, port):
     """后台线程：调 node 脚本批量改标题，回写 title_opt 状态。"""
     import subprocess
     import time
+    # 执行前二次核对：有出单的跳过（弥补挑选→执行之间的异步时间差）
+    todo = [r for r in todo if not catalog.has_order(r["shop_id"], r["platform_product_id"])]
+    if not todo:
+        return
     ts = int(time.time())
     base = f"pdd_apply_{ts}.json"
     wsl_path = f"/mnt/c/tmp/{base}"

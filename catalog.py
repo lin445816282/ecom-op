@@ -1637,6 +1637,16 @@ def log_title_opt(shop_id, platform_product_id, product_name, old_title, new_tit
         c.commit()
 
 
+def has_order(shop_id, platform_product_id) -> bool:
+    """判断商品是否有订单（有出单不改标题）。"""
+    with closing(_conn()) as c:
+        n = c.execute(
+            "SELECT COUNT(*) FROM orders WHERE shop_id=? AND platform_product_id=?",
+            (shop_id, platform_product_id),
+        ).fetchone()[0]
+        return n > 0
+
+
 def list_title_opt_log(shop_id=None, limit=200) -> list[dict]:
     """查询标题优化日志（倒序）。"""
     with closing(_conn()) as c:

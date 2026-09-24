@@ -101,8 +101,10 @@ def main():
     cands = catalog.title_opt_candidates(shop_id)
     cands.sort(key=lambda c: c["sku_count"], reverse=True)
     picked = cands[:count]
+    # 重新核对订单：有出单的跳过（订单数据动态更新，执行前再拦一道）
+    picked = [p for p in picked if not catalog.has_order(shop_id, p["platform_product_id"])]
     if not picked:
-        print(json.dumps({"ok": False, "error": "无候选商品"}, ensure_ascii=False))
+        print(json.dumps({"ok": False, "error": "无候选商品（均已出单或已挑完）"}, ensure_ascii=False))
         return
 
     api_key = load_api_key()
