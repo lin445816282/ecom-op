@@ -158,6 +158,24 @@ CREATE TABLE IF NOT EXISTS goods_effect (
 
 CREATE INDEX IF NOT EXISTS idx_ge_product ON goods_effect(platform_product_id);
 
+CREATE TABLE IF NOT EXISTS title_opt (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    shop_id INTEGER NOT NULL,
+    platform_product_id TEXT NOT NULL,
+    product_name TEXT DEFAULT '',
+    product_code TEXT DEFAULT '',
+    old_title TEXT DEFAULT '',
+    new_title TEXT DEFAULT '',
+    status TEXT DEFAULT 'selected',
+    opt_date TEXT DEFAULT '',
+    baseline TEXT DEFAULT '',
+    note TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now','localtime')),
+    UNIQUE(shop_id, platform_product_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_title_opt_shop ON title_opt(shop_id);
+
 CREATE TABLE IF NOT EXISTS freight (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     account_name TEXT DEFAULT '',
@@ -1457,6 +1475,134 @@ def list_goods_effect(shop_id: int = None, limit: int = 500) -> list[dict]:
                 (limit,),
             ).fetchall()
         return [dict(r) for r in rows]
+
+
+# ----------------------------- 标题优化 -----------------------------
+
+def title_opt_candidates(shop_id: int, q: str = None, limit: int = 500) -> list[dict]:
+    """标题优化候选商品：排除已有订单的商品 + 排除已挑过的商品。"""
+    with closing(_conn()) as c:
+        sql = (
+            "SELECT p.id, p.platform_product_id, p.name, p.code, "
+            "(SELECT COUNT(*) FROM skus s WHERE s.product_id=p.id) AS sku_count "
+            "FROM products p "
+            "WHERE p.shop_id=? "
+            "AND p.platform_product_id NOT IN (SELECT DISTINCT platform_product_id FROM orders "
+            "  WHERE shop_id=? AND platform_product_id IS NOT NULL AND platform_product_id!='') "
+            "AND p.platform_product_id NOT IN (SELECT platform_product_id FROM title_opt WHERE shop_id=?)"
+        )
+        args = [shop_id, shop_id, shop_id]
+        if q:
+            sql += " AND (p.name LIKE ? OR p.platform_product_id LIKE ? OR p.code LIKE ?)"
+            like = f"%{q}%"
+            args += [like, like, like]
+        sql += " ORDER BY p.id LIMIT ?"
+        args.append(limit)
+        return [dict(r) for r in c.execute(sql, args).fetchall()]
+
+
+def add_title_opt(shop_id: int, platform_product_id: str) -> int:
+    """挑选商品进标题优化，快照旧标题，状态 selected。返回 id；有订单返回 -1；不存在返回 None。"""
+    with closing(_conn()) as c:
+        prod = c.execute(
+            "SELECT id, platform_product_id, name, code FROM products WHERE shop_id=? AND platform_product_id=?",
+            (shop_id, platform_product_id),
+        ).fetchone()
+        if not prod:
+            return None
+        has_order = c.execute(
+            "SELECT COUNT(*) FROM orders WHERE shop_id=? AND platform_product_id=?",
+            (shop_id, platform_product_id),
+        ).fetchone()[0]
+        if has_order:
+            return -1
+        c.execute(
+            "INSERT INTO title_opt(shop_id, platform_product_id, product_name, product_code, old_title, status) "
+            "VALUES(?,?,?,?,?,'selected') "
+            "ON CONFLICT(shop_id, platform_product_id) DO NOTHING",
+            (shop_id, platform_product_id, prod["name"], prod["code"] or "", prod["name"] or ""),
+        )
+        c.commit()
+        row = c.execute(
+            "SELECT id FROM title_opt WHERE shop_id=? AND platform_product_id=?",
+            (shop_id, platform_product_id),
+        ).fetchone()
+        return row["id"] if row else None
+
+
+def list_title_opt(shop_id: int = None) -> list[dict]:
+    """列出标题优化记录，附带该商品最新一条访问明细（效果跟踪对比用）。"""
+    with closing(_conn()) as c:
+        base = (
+            "SELECT t.*, "
+            "(SELECT stat_date FROM goods_effect g WHERE g.platform_product_id=t.platform_product_id "
+            "  ORDER BY g.stat_date DESC LIMIT 1) AS latest_stat_date, "
+            "(SELECT goods_uv FROM goods_effect g WHERE g.platform_product_id=t.platform_product_id "
+            "  ORDER BY g.stat_date DESC LIMIT 1) AS latest_uv, "
+            "(SELECT goods_pv FROM goods_effect g WHERE g.platform_product_id=t.platform_product_id "
+            "  ORDER BY g.stat_date DESC LIMIT 1) AS latest_pv, "
+            "(SELECT pay_ordr_cnt FROM goods_effect g WHERE g.platform_product_id=t.platform_product_id "
+            "  ORDER BY g.stat_date DESC LIMIT 1) AS latest_ordr, "
+            "(SELECT pay_ordr_amt FROM goods_effect g WHERE g.platform_product_id=t.platform_product_id "
+            "  ORDER BY g.stat_date DESC LIMIT 1) AS latest_amt "
+            "FROM title_opt t"
+        )
+        if shop_id:
+            rows = c.execute(base + " WHERE t.shop_id=? ORDER BY t.id DESC", (shop_id,)).fetchall()
+        else:
+            rows = c.execute(base + " ORDER BY t.id DESC").fetchall()
+        return [dict(r) for r in rows]
+
+
+def update_title_opt(opt_id: int, new_title: str = None, status: str = None, note: str = None) -> bool:
+    with closing(_conn()) as c:
+        sets, args = [], []
+        if new_title is not None:
+            sets.append("new_title=?")
+            args.append(new_title)
+        if status is not None:
+            sets.append("status=?")
+            args.append(status)
+        if note is not None:
+            sets.append("note=?")
+            args.append(note)
+        if not sets:
+            return False
+        args.append(opt_id)
+        c.execute(f"UPDATE title_opt SET {', '.join(sets)} WHERE id=?", args)
+        c.commit()
+        return True
+
+
+def delete_title_opt(opt_id: int) -> bool:
+    with closing(_conn()) as c:
+        c.execute("DELETE FROM title_opt WHERE id=?", (opt_id,))
+        c.commit()
+        return True
+
+
+def save_title_opt_baseline(opt_id: int) -> dict:
+    """快照优化前基线：读该商品最新一条访问明细，写入 baseline 字段。"""
+    import json as _json
+    with closing(_conn()) as c:
+        row = c.execute("SELECT * FROM title_opt WHERE id=?", (opt_id,)).fetchone()
+        if not row:
+            return None
+        ge = c.execute(
+            "SELECT stat_date, goods_uv, goods_pv, pay_ordr_cnt, pay_ordr_amt, goods_vcr FROM goods_effect "
+            "WHERE platform_product_id=? ORDER BY stat_date DESC LIMIT 1",
+            (row["platform_product_id"],),
+        ).fetchone()
+        baseline = {}
+        if ge:
+            baseline = {
+                "stat_date": ge["stat_date"], "uv": ge["goods_uv"], "pv": ge["goods_pv"],
+                "pay_ordr_cnt": ge["pay_ordr_cnt"], "pay_ordr_amt": ge["pay_ordr_amt"],
+                "vcr": ge["goods_vcr"],
+            }
+        c.execute("UPDATE title_opt SET baseline=? WHERE id=?", (_json.dumps(baseline, ensure_ascii=False), opt_id))
+        c.commit()
+        return baseline
 
 
 # ----------------------------- 导出 CSV -----------------------------

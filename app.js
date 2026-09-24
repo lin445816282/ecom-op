@@ -11,6 +11,7 @@ const VIEWS = {
   guide: {title:'操作手册', sub:'从第一次打开，到每天跑完一套运营动作。'},
   products: {title:'商品投产', sub:'记录售价、毛利与广告数据，自动计算保本/目标 ROI。'},
   catalog: {title:'商品库', sub:'平台 + 电商层级真实商品数据（平台 → 店铺 → 商品 → SKU）。'},
+  titleopt: {title:'标题优化', sub:'挑选无订单商品优化标题，跟踪近7天访问效果。'},
   suppliers: {title:'供应商', sub:'采购侧报价 · 供货价 / 零售价 / 商品图片，支持搜索与导入导出。'},
   knowledge: {title:'运营知识库', sub:'只保留合规、可持续的起店与推广方法论。'},
   calendar: {title:'选品日历', sub:'按月提前布局应季商品，建议提前 2-4 周预热。'},
@@ -453,6 +454,7 @@ function setView(view) {
   if (view === 'guide') renderGuide();
   if (view === 'products') renderProducts();
   if (view === 'catalog') renderCatalog();
+  if (view === 'titleopt') renderTitleOptView();
   if (view === 'suppliers') renderSuppliersView();
   if (view === 'knowledge') renderKnowledge();
   if (view === 'calendar') renderCalendar();
@@ -3441,4 +3443,228 @@ async function init() {
   await loadAll();
   setView('dashboard');
 }
+
+/* ================= 标题优化 Tab（挑选无订单商品 + 优化标题 + 效果跟踪） ================= */
+const titleOptCache = { shopId: 5, candidates: [], opts: [], filter: '' };
+
+function titleOptShopOptions() {
+  const opts = [];
+  (catalogCache.tree || []).forEach(pl => (pl.shops || []).forEach(sh => {
+    opts.push({ id: sh.id, name: sh.name, platform: pl.name });
+  }));
+  return opts;
+}
+
+async function loadTitleOptData() {
+  const sid = titleOptCache.shopId;
+  const q = titleOptCache.filter ? '&q=' + encodeURIComponent(titleOptCache.filter) : '';
+  const [cand, opt] = await Promise.all([
+    api('/api/catalog/title-opt/candidates?shop_id=' + sid + q),
+    api('/api/catalog/title-opt?shop_id=' + sid)
+  ]);
+  titleOptCache.candidates = cand.items || [];
+  titleOptCache.opts = opt.items || [];
+}
+
+async function renderTitleOptView() {
+  const el = $('#view-titleopt');
+  el.innerHTML = '<div class="empty"><div class="big">✏️</div>加载中…</div>';
+
+  if (!(catalogCache.tree || []).length) {
+    try {
+      const resp = await api('/api/catalog/tree');
+      catalogCache.tree = resp.tree || [];
+    } catch (e) {}
+  }
+
+  const shopOptions = titleOptShopOptions();
+  const def = shopOptions.find(s => s.id === 5) || shopOptions[0];
+  if (def) titleOptCache.shopId = def.id;
+  if (!shopOptions.find(s => s.id === titleOptCache.shopId)) titleOptCache.shopId = def ? def.id : 5;
+
+  try {
+    await loadTitleOptData();
+  } catch (e) {
+    el.innerHTML = `<div class="empty">❌ ${esc(e.message)}</div>`;
+    return;
+  }
+  paintTitleOpt(el);
+}
+
+function titleOptEffectHtml(o, bl) {
+  if (o.latest_stat_date == null && !bl) return '';
+  let h = '<div style="font-size:11px;line-height:1.7;background:#f8fafc;border-radius:8px;padding:8px;margin-bottom:4px">';
+  h += '<div style="font-weight:700;color:#1e3a5f;margin-bottom:2px">📈 近7天访问效果</div>';
+  const row = (label, base, latest) => {
+    let diff = '';
+    if (base != null && latest != null) {
+      const d = Math.round((latest - base) * 100) / 100;
+      if (d !== 0) diff = '<span style="color:' + (d > 0 ? '#16a34a' : '#dc2626') + '">（' + (d > 0 ? '+' : '') + d + '）</span>';
+    }
+    return '<div><span style="color:#8899b0">' + label + '：</span>基线 ' + (base != null ? base : '—') + ' → 最新 ' + (latest != null ? latest : '—') + ' ' + diff + '</div>';
+  };
+  h += row('访客 UV', bl ? bl.uv : null, o.latest_uv);
+  h += row('浏览量 PV', bl ? bl.pv : null, o.latest_pv);
+  h += row('成交单数', bl ? bl.pay_ordr_cnt : null, o.latest_ordr);
+  h += row('成交金额', bl ? bl.pay_ordr_amt : null, o.latest_amt);
+  if (bl && bl.stat_date) h += '<div style="color:#8899b0;margin-top:2px">基线 ' + bl.stat_date + (o.latest_stat_date ? ' · 最新 ' + o.latest_stat_date : '') + '</div>';
+  h += '</div>';
+  return h;
+}
+
+function paintTitleOpt(el) {
+  const shopOptions = titleOptShopOptions();
+  const opts = titleOptCache.opts;
+  const cands = titleOptCache.candidates;
+
+  const statusMap = {
+    selected: { label: '待优化', color: '#d97706', bg: '#fef3c7' },
+    optimized: { label: '已优化', color: '#16a34a', bg: '#dcfce7' },
+    done: { label: '已生效', color: '#2563eb', bg: '#dbeafe' }
+  };
+
+  let h = '';
+  h += '<div style="background:linear-gradient(135deg,#1e3a5f,#3b82f6);border-radius:12px;padding:14px 16px;margin:12px;color:#fff">';
+  h += '<div style="font-size:15px;font-weight:700">✏️ 标题优化 · 跟踪近7天访问效果</div>';
+  h += '<div style="font-size:11px;opacity:.88;margin-top:6px;line-height:1.7">规则：已有订单的商品标题不动；挑选 5 个无订单商品优化标题；优化后通过平台「近7天访问数据」对比 UV / PV / 成交变化。</div>';
+  h += '</div>';
+
+  h += '<div style="margin:0 12px 8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">';
+  h += '<select id="to-shop" style="padding:8px 10px;border:1px solid #cdd7e5;border-radius:8px;font-size:13px;background:#fff;max-width:200px">';
+  shopOptions.forEach(s => {
+    h += '<option value="' + s.id + '"' + (s.id === titleOptCache.shopId ? ' selected' : '') + '>' + esc(s.name) + '</option>';
+  });
+  h += '</select>';
+  h += '<input id="to-search" placeholder="搜索商品名/货号/ID" value="' + esc(titleOptCache.filter) + '" style="flex:1;min-width:160px;padding:8px 10px;border:1px solid #cdd7e5;border-radius:8px;font-size:13px">';
+  h += '</div>';
+
+  h += '<div style="font-size:13px;font-weight:700;color:#1e3a5f;margin:14px 12px 6px">📋 已挑商品 · 跟踪日志（' + opts.length + '/5）</div>';
+  if (!opts.length) {
+    h += '<div class="empty" style="margin:0 12px">暂无挑选商品，从下方候选列表挑选 5 个</div>';
+  } else {
+    opts.forEach(o => {
+      const st = statusMap[o.status] || statusMap.selected;
+      let bl = null;
+      try { bl = o.baseline ? JSON.parse(o.baseline) : null; } catch (e) { bl = null; }
+      h += '<div style="background:#fff;border-radius:12px;padding:12px;margin:8px 12px;box-shadow:0 1px 3px rgba(0,0,0,.05)">';
+      h += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">';
+      h += '<div style="font-weight:700;color:#1e3a5f;font-size:13px;word-break:break-all">' + esc(o.product_name || '') + '</div>';
+      h += '<span style="font-size:11px;font-weight:700;color:' + st.color + ';background:' + st.bg + ';padding:2px 8px;border-radius:6px;flex-shrink:0;margin-left:8px">' + st.label + '</span>';
+      h += '</div>';
+      h += '<div style="font-size:11px;color:#8899b0;margin-bottom:6px">货号 ' + esc(o.product_code || '—') + ' · ID ' + esc(o.platform_product_id) + '</div>';
+      h += '<div style="font-size:12px;line-height:1.7;margin-bottom:4px">';
+      h += '<div style="color:#8899b0">旧：<span style="color:#5a6b85">' + esc(o.old_title || '') + '</span></div>';
+      if (o.new_title) h += '<div style="color:#8899b0">新：<span style="color:#16a34a;font-weight:600">' + esc(o.new_title) + '</span></div>';
+      h += '</div>';
+      h += titleOptEffectHtml(o, bl);
+      h += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">';
+      h += '<button class="btn xs" onclick="titleOptOpenLink(\'' + esc(o.platform_product_id) + '\')">🔗 查看</button>';
+      h += '<button class="btn xs" onclick="titleOptEdit(' + o.id + ')">✏️ 优化标题</button>';
+      h += '<button class="btn xs" onclick="titleOptBaseline(' + o.id + ')">📸 基线快照</button>';
+      if (o.new_title && o.status !== 'done') h += '<button class="btn xs primary" onclick="titleOptMarkDone(' + o.id + ')">✅ 标注生效</button>';
+      h += '<button class="btn xs danger" onclick="titleOptDelete(' + o.id + ')">🗑️</button>';
+      h += '</div>';
+      h += '</div>';
+    });
+  }
+
+  h += '<div style="font-size:13px;font-weight:700;color:#1e3a5f;margin:14px 12px 6px">🎯 候选商品（无订单 · ' + cands.length + ' 个）</div>';
+  if (!cands.length) {
+    h += '<div class="empty" style="margin:0 12px">无候选商品（可能已挑满或该店无订单商品已挑完）</div>';
+  } else {
+    h += '<div style="max-height:420px;overflow-y:auto;margin:0 12px 16px;background:#fff;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.05)">';
+    cands.forEach(c => {
+      h += '<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-bottom:1px solid #f3f4f6">';
+      h += '<div style="flex:1;min-width:0">';
+      h += '<div style="font-size:12px;font-weight:600;color:#1e3a5f;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="' + esc(c.name) + '">' + esc(c.name) + '</div>';
+      h += '<div style="font-size:11px;color:#8899b0">' + esc(c.code || '—') + ' · ' + c.sku_count + ' SKU · ID ' + esc(c.platform_product_id) + '</div>';
+      h += '</div>';
+      h += '<button class="btn xs primary" onclick="titleOptPick(\'' + esc(c.platform_product_id) + '\')" style="flex-shrink:0;margin-left:8px">＋挑选</button>';
+      h += '</div>';
+    });
+    h += '</div>';
+  }
+
+  el.innerHTML = h;
+
+  const shopSel = el.querySelector('#to-shop');
+  if (shopSel) shopSel.onchange = async () => {
+    titleOptCache.shopId = parseInt(shopSel.value);
+    titleOptCache.filter = '';
+    try { await loadTitleOptData(); } catch (e) {}
+    paintTitleOpt(el);
+  };
+  const searchInput = el.querySelector('#to-search');
+  if (searchInput) {
+    searchInput.oninput = () => {
+      clearTimeout(searchInput._t);
+      searchInput._t = setTimeout(async () => {
+        titleOptCache.filter = searchInput.value.trim();
+        try { await loadTitleOptData(); } catch (e) {}
+        paintTitleOpt(el);
+      }, 400);
+    };
+  }
+}
+
+async function titleOptPick(platformProductId) {
+  try {
+    await api('/api/catalog/title-opt', 'POST', { shop_id: titleOptCache.shopId, platform_product_id: platformProductId });
+    toast('✅ 已挑选');
+    await loadTitleOptData();
+    paintTitleOpt($('#view-titleopt'));
+  } catch (e) { toast('❌ ' + e.message); }
+}
+
+async function titleOptEdit(optId) {
+  const o = titleOptCache.opts.find(x => x.id === optId);
+  if (!o) return;
+  const res = await promptDialog([
+    { key: 'new_title', label: '新标题', value: o.new_title || '', placeholder: '输入优化后的商品标题' }
+  ], { title: '优化标题' });
+  if (!res) return;
+  if (!res.new_title || !res.new_title.trim()) { toast('⚠️ 标题不能为空'); return; }
+  try {
+    await api('/api/catalog/title-opt/update', 'POST', { id: optId, new_title: res.new_title.trim(), status: 'optimized' });
+    toast('✅ 已保存新标题');
+    await loadTitleOptData();
+    paintTitleOpt($('#view-titleopt'));
+  } catch (e) { toast('❌ ' + e.message); }
+}
+
+async function titleOptBaseline(optId) {
+  try {
+    const r = await api('/api/catalog/title-opt/baseline', 'POST', { id: optId });
+    toast(r.baseline && r.baseline.stat_date ? '✅ 已快照基线（' + r.baseline.stat_date + '）' : '⚠️ 暂无访问数据，未快照');
+    await loadTitleOptData();
+    paintTitleOpt($('#view-titleopt'));
+  } catch (e) { toast('❌ ' + e.message); }
+}
+
+async function titleOptMarkDone(optId) {
+  const ok = await confirmDialog('确认该商品新标题已在拼多多后台生效？', { title: '标注生效', confirmText: '已生效', danger: false });
+  if (!ok) return;
+  try {
+    await api('/api/catalog/title-opt/update', 'POST', { id: optId, status: 'done' });
+    toast('✅ 已标注生效');
+    await loadTitleOptData();
+    paintTitleOpt($('#view-titleopt'));
+  } catch (e) { toast('❌ ' + e.message); }
+}
+
+async function titleOptDelete(optId) {
+  const ok = await confirmDialog('确定移除这条标题优化记录？（不会改动商品标题）', { title: '移除记录', confirmText: '移除' });
+  if (!ok) return;
+  try {
+    await api('/api/catalog/title-opt/' + optId, 'DELETE');
+    toast('✅ 已移除');
+    await loadTitleOptData();
+    paintTitleOpt($('#view-titleopt'));
+  } catch (e) { toast('❌ ' + e.message); }
+}
+
+function titleOptOpenLink(platformProductId) {
+  window.open('https://mobile.yangkeduo.com/goods.html?goods_id=' + platformProductId, '_blank');
+}
+
 init();

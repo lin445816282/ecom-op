@@ -716,6 +716,58 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 return _json(self, {"ok": False, "error": str(e)}, 500)
 
+        # 标题优化（挑选无订单商品 + 优化标题 + 效果跟踪）
+        if path == "/api/catalog/title-opt/candidates" and self.command == "GET":
+            shop_id = int(qs.get("shop_id", [0])[0] or 0)
+            q = qs.get("q", [""])[0]
+            if not shop_id:
+                return _json(self, {"error": "shop_id required"}, 400)
+            return _json(self, {"items": catalog.title_opt_candidates(shop_id, q or None)})
+
+        if path == "/api/catalog/title-opt" and self.command == "GET":
+            shop_id = qs.get("shop_id", [None])[0]
+            return _json(self, {"items": catalog.list_title_opt(int(shop_id) if shop_id else None)})
+
+        if path == "/api/catalog/title-opt" and self.command == "POST":
+            item = self._read_body()
+            shop_id = int(item.get("shop_id") or 0)
+            platform_product_id = (item.get("platform_product_id") or "").strip()
+            if not shop_id or not platform_product_id:
+                return _json(self, {"error": "参数不完整"}, 400)
+            rid = catalog.add_title_opt(shop_id, platform_product_id)
+            if rid == -1:
+                return _json(self, {"error": "该商品已有订单，标题不动"}, 400)
+            if rid is None:
+                return _json(self, {"error": "商品不存在"}, 404)
+            return _json(self, {"ok": True, "id": rid})
+
+        if path == "/api/catalog/title-opt/update" and self.command == "POST":
+            item = self._read_body()
+            opt_id = int(item.get("id") or 0)
+            new_title = item.get("new_title")
+            status = item.get("status")
+            note = item.get("note")
+            if not opt_id:
+                return _json(self, {"error": "id required"}, 400)
+            ok = catalog.update_title_opt(opt_id, new_title, status, note)
+            return _json(self, {"ok": ok})
+
+        if path == "/api/catalog/title-opt/baseline" and self.command == "POST":
+            item = self._read_body()
+            opt_id = int(item.get("id") or 0)
+            if not opt_id:
+                return _json(self, {"error": "id required"}, 400)
+            bl = catalog.save_title_opt_baseline(opt_id)
+            return _json(self, {"ok": True, "baseline": bl})
+
+        if path.startswith("/api/catalog/title-opt/") and self.command == "DELETE":
+            try:
+                opt_id = int(path.split("/")[-1])
+                catalog.delete_title_opt(opt_id)
+                return _json(self, {"ok": True})
+            except ValueError:
+                return _json(self, {"error": "非法 id"}, 400)
+
         # 静态页面
         if path in ("/", "/index.html") and self.command == "GET":
             return self._serve_file("index.html", "text/html; charset=utf-8")
