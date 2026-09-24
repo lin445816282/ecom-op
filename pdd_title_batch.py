@@ -30,7 +30,15 @@ def load_api_key():
 
 
 def gen_titles(products, api_key):
-    """调 DeepSeek 批量生成优化标题，返回 [新标题] 列表（按输入顺序）。"""
+    """调 DeepSeek 批量生成优化标题，返回 [新标题] 列表（按输入顺序）。分批 15 个/次，避免输出超限。"""
+    titles = []
+    for i in range(0, len(products), 15):
+        chunk = products[i:i + 15]
+        titles.extend(_gen_titles_chunk(chunk, api_key))
+    return titles
+
+
+def _gen_titles_chunk(products, api_key):
     names = [p["name"] for p in products]
     prompt = (
         "你是拼多多电商标题优化专家。以下是 N 个商品的当前标题，请为每个生成优化后的标题。\n"
@@ -47,14 +55,14 @@ def gen_titles(products, api_key):
         "model": "deepseek-chat",
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.3,
-        "max_tokens": 2000,
+        "max_tokens": 4000,
     }
     req = urllib.request.Request(
         DEEPSEEK_URL,
         data=json.dumps(body).encode("utf-8"),
         headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
     )
-    with urllib.request.urlopen(req, timeout=120) as r:
+    with urllib.request.urlopen(req, timeout=180) as r:
         resp = json.loads(r.read().decode("utf-8"))
     content = resp["choices"][0]["message"]["content"].strip()
     content = content.strip()
