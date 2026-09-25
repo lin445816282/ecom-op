@@ -91,11 +91,16 @@ def main():
     dry_run = "--dry-run" in args
     count = 10
     shop_id = 5
-    for i, a in enumerate(args):
-        if a.isdigit():
-            count = int(a)
+    i = 0
+    while i < len(args):
+        a = args[i]
         if a == "--shop" and i + 1 < len(args):
             shop_id = int(args[i + 1])
+            i += 2
+            continue
+        if a.isdigit():
+            count = int(a)
+        i += 1
 
     catalog.init_db()
     cands = catalog.title_opt_candidates(shop_id)
