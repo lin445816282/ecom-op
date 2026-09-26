@@ -2291,7 +2291,7 @@ function paintCatalog() {
               </div>
               <div class="orders-shop-body" hidden>
                 <div class="table-wrap"><table>
-                  <thead><tr><th>商品</th><th>花费</th><th>平台成交</th><th>平台ROI</th><th>真实成交</th><th>真实ROI</th><th>真实单数</th><th>利润</th><th>利润率</th><th>曝光</th><th>点击</th></tr></thead>
+                  <thead><tr><th>商品</th><th>花费</th><th>平台成交</th><th>平台ROI</th><th>真实成交</th><th>真实ROI</th><th>真实单数</th><th>利润</th><th>利润率</th><th>动作建议</th><th>曝光</th><th>点击</th></tr></thead>
                   <tbody>${rows.map(r => `<tr>
                     <td title="${esc(r.product_name)}">${esc((r.product_name || '').slice(0, 14))}${(r.product_name || '').length > 14 ? '…' : ''}</td>
                     <td>¥${fmt(r.total_spend)}</td>
@@ -2302,6 +2302,7 @@ function paintCatalog() {
                     <td>${r.real_count != null ? r.real_count : '—'}</td>
                     <td style="${profitColor(r)}">${r.profit != null ? '¥' + fmt(r.profit) : '—'}</td>
                     <td style="${profitColor(r)}">${r.profit_margin != null ? (r.profit_margin * 100).toFixed(1) + '%' : '—'}</td>
+                    <td style="${profitColor(r)};font-size:12px">${r.action_text || '—'}</td>
                     <td>${r.impressions}</td>
                     <td>${r.clicks}</td>
                   </tr>`).join('')}

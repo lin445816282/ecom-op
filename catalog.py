@@ -2315,9 +2315,17 @@ def product_real_roi(period: str = None) -> dict:
         for p in _data.load_products():
             pid = p.get("platform_product_id")
             if pid:
+                be_roi = None
+                try:
+                    _pr = _data.Product.from_dict(p)
+                    _be = _pr.break_even_roi
+                    be_roi = _be if _be != float("inf") else None
+                except Exception:
+                    pass
                 cost_map[pid] = {
                     "cost": p.get("cost") or 0.0,
                     "shipping": p.get("shipping") or 0.0,
+                    "break_even_roi": be_roi,
                 }
     except Exception:
         pass
@@ -2371,11 +2379,26 @@ def product_real_roi(period: str = None) -> dict:
             profit_margin = None
             cost_unit = None
             ship_unit = None
+            action_level = None
+            action_text = ""
             if cinfo:
                 cost_unit = cinfo["cost"]
                 ship_unit = cinfo["shipping"]
                 profit = round(real_amount - cost_unit * real_qty - ship_unit * real_count - total_spend, 2)
                 profit_margin = round(profit / real_amount, 4) if real_amount else None
+                be_roi = cinfo.get("break_even_roi")
+                if profit < 0:
+                    action_level = "red"
+                    action_text = "停推：亏钱，暂停推广并查成本/定价"
+                elif profit_margin is not None and profit_margin < 0.1:
+                    action_level = "yellow"
+                    action_text = "拖价：利润薄，降低出价或优化转化"
+                elif be_roi is not None and real_roi is not None and real_roi < be_roi:
+                    action_level = "yellow"
+                    action_text = f"优化：ROI {real_roi} 低于保本 {be_roi}，先优化再放量"
+                else:
+                    action_level = "green"
+                    action_text = "加预算：盈利且ROI达标，可递增放量"
             result.append({
                 "shop_id": shop_id, "shop_name": r["shop_name"], "platform_product_id": pid,
                 "product_name": r["product_name"] or "", "periods": r["periods"] or "",
@@ -2383,6 +2406,7 @@ def product_real_roi(period: str = None) -> dict:
                 "real_amount": round(real_amount, 2), "real_count": real_count, "real_roi": real_roi,
                 "real_qty": real_qty, "cost": cost_unit, "shipping": ship_unit,
                 "profit": profit, "profit_margin": profit_margin,
+                "action_level": action_level, "action_text": action_text,
                 "promo_deals": r["promo_deals"] or 0, "impressions": r["impressions"] or 0,
                 "clicks": r["clicks"] or 0,
             })
