@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import json
+import time
 from contextlib import closing
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -170,6 +172,7 @@ CREATE TABLE IF NOT EXISTS title_opt (
     opt_date TEXT DEFAULT '',
     baseline TEXT DEFAULT '',
     note TEXT DEFAULT '',
+    fixed INTEGER DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now','localtime')),
     UNIQUE(shop_id, platform_product_id)
 );
@@ -263,13 +266,129 @@ CREATE TABLE IF NOT EXISTS supplier_products (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sp_supplier ON supplier_products(supplier_id);
+
+CREATE TABLE IF NOT EXISTS scheduled_tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_key TEXT UNIQUE,
+    name TEXT DEFAULT '',
+    category TEXT DEFAULT '',
+    shop_id INTEGER,
+    cron_expr TEXT DEFAULT '',
+    schedule_desc TEXT DEFAULT '',
+    cron_job_id TEXT DEFAULT '',
+    script TEXT DEFAULT '',
+    enabled INTEGER DEFAULT 1,
+    note TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_cat ON scheduled_tasks(category);
+
+CREATE TABLE IF NOT EXISTS task_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_key TEXT DEFAULT '',
+    status TEXT DEFAULT '',
+    result TEXT DEFAULT '',
+    started_at TEXT DEFAULT '',
+    finished_at TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_runs_key ON task_runs(task_key);
+
+CREATE TABLE IF NOT EXISTS reviews (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    shop_id INTEGER DEFAULT 0,
+    review_id TEXT NOT NULL,
+    goods_id TEXT DEFAULT '',
+    order_id TEXT DEFAULT '',
+    order_sn TEXT DEFAULT '',
+    score INTEGER DEFAULT 0,
+    desc_score INTEGER DEFAULT 0,
+    logistics_score INTEGER DEFAULT 0,
+    service_score INTEGER DEFAULT 0,
+    comment TEXT DEFAULT '',
+    append_num INTEGER DEFAULT 0,
+    goods_name TEXT DEFAULT '',
+    specs TEXT DEFAULT '',
+    keywords TEXT DEFAULT '',
+    pictures TEXT DEFAULT '',
+    video TEXT DEFAULT '',
+    thumb_url TEXT DEFAULT '',
+    avatar TEXT DEFAULT '',
+    reply TEXT DEFAULT '',
+    reply_time INTEGER DEFAULT 0,
+    anonymous INTEGER DEFAULT 0,
+    status INTEGER DEFAULT 0,
+    create_time INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now','localtime')),
+    UNIQUE(review_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_reviews_shop ON reviews(shop_id);
+CREATE INDEX IF NOT EXISTS idx_reviews_goods ON reviews(goods_id);
+CREATE INDEX IF NOT EXISTS idx_reviews_time ON reviews(create_time);
+
+CREATE TABLE IF NOT EXISTS pack_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    record_date TEXT NOT NULL,
+    entry TEXT NOT NULL,
+    source TEXT NOT NULL,
+    count INTEGER NOT NULL DEFAULT 0,
+    remark TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now','localtime')),
+    created_by TEXT DEFAULT '打单员'
+);
+
+CREATE INDEX IF NOT EXISTS idx_pack_date ON pack_records(record_date);
+
+CREATE TABLE IF NOT EXISTS pack_scatter_shops (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS pack_entry_mapping (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    entry TEXT NOT NULL UNIQUE,
+    shop_ids TEXT DEFAULT '',
+    freight_account TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS competitors (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    shop_id INTEGER,
+    platform_product_id TEXT DEFAULT '',
+    keyword TEXT DEFAULT '',
+    comp_title TEXT DEFAULT '',
+    comp_price REAL,
+    comp_sales TEXT DEFAULT '',
+    comp_img TEXT DEFAULT '',
+    status TEXT DEFAULT 'pending',
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_competitors_ppid ON competitors(platform_product_id, keyword);
+
+CREATE TABLE IF NOT EXISTS buyer_reviews (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    goods_id TEXT DEFAULT '',
+    goods_name TEXT DEFAULT '',
+    total_count INTEGER DEFAULT 0,
+    tags TEXT DEFAULT '',
+    comments TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_buyer_reviews_gid ON buyer_reviews(goods_id);
 """
 
 
 def _conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 5000")
     return conn
 
 
@@ -279,6 +398,36 @@ def init_db() -> None:
         c.commit()
         _migrate(c)
         _seed_freight_rate(c)
+        _seed_scatter_shops(c)
+        _seed_pack_mapping(c)
+    seed_scheduled_tasks()  # 幂等 seed 定时任务清单
+
+
+def _seed_scatter_shops(conn: sqlite3.Connection) -> None:
+    """散单店铺初始数据（来自桌面 2.txt），仅在表为空时导入。"""
+    n = conn.execute("SELECT COUNT(*) FROM pack_scatter_shops").fetchone()[0]
+    if n == 0:
+        for name in ("贝之彤", "优品丫工艺", "养花花店", "轩聚园", "美世艺（林超群）"):
+            conn.execute("INSERT OR IGNORE INTO pack_scatter_shops(name) VALUES(?)", (name,))
+        conn.commit()
+
+
+def _seed_pack_mapping(conn: sqlite3.Connection) -> None:
+    """打单入口 → 店铺 / 运费账号 初始映射（仅在表为空时导入）。"""
+    n = conn.execute("SELECT COUNT(*) FROM pack_entry_mapping").fetchone()[0]
+    if n == 0:
+        rows = [
+            ("pdd_jiayu", "5,6,3", "嘉裕工艺品"),
+            ("pdd_xianshi", "1", ""),
+            ("taobao_jiayu", "12", ""),
+            ("doudian", "8", ""),
+        ]
+        for entry, shop_ids, freight_account in rows:
+            conn.execute(
+                "INSERT OR IGNORE INTO pack_entry_mapping(entry, shop_ids, freight_account) VALUES(?,?,?)",
+                (entry, shop_ids, freight_account),
+            )
+        conn.commit()
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
@@ -302,6 +451,18 @@ def _migrate(conn: sqlite3.Connection) -> None:
     spcols = {r[1] for r in conn.execute("PRAGMA table_info(supplier_products)").fetchall()}
     if "image" not in spcols:
         conn.execute("ALTER TABLE supplier_products ADD COLUMN image TEXT DEFAULT ''")
+    # title_opt 表 fixed 列（失败记录「确认修复」标记，0=待处理 1=已确认）
+    tocols = {r[1] for r in conn.execute("PRAGMA table_info(title_opt)").fetchall()}
+    if "fixed" not in tocols:
+        conn.execute("ALTER TABLE title_opt ADD COLUMN fixed INTEGER DEFAULT 0")
+    # pack_records 表 scatter_shop 列（散单店铺名）
+    prcols = {r[1] for r in conn.execute("PRAGMA table_info(pack_records)").fetchall()}
+    if "scatter_shop" not in prcols:
+        conn.execute("ALTER TABLE pack_records ADD COLUMN scatter_shop TEXT DEFAULT ''")
+    # buyer_reviews 表 source 列（brief 详情页简版 / full 评论列表页全文）
+    brcols = {r[1] for r in conn.execute("PRAGMA table_info(buyer_reviews)").fetchall()}
+    if "source" not in brcols:
+        conn.execute("ALTER TABLE buyer_reviews ADD COLUMN source TEXT DEFAULT 'brief'")
     conn.commit()
 
 
@@ -1266,23 +1427,33 @@ def order_statuses() -> list[dict]:
         return [{"status": r["status"], "count": r["n"]} for r in rows]
 
 
-def platform_overview() -> dict:
+def platform_overview(start: str = None, end: str = None) -> dict:
     """按平台聚合真实经营数据：商品数/SKU数/订单数/GMV，供运营总览展示。
 
     订单数/GMV 只统计「有效成交」订单：排除退款（含「退款」）、取消（含「取消」）、
     关闭（含「关闭」）、待付款、待发货；保留已收货/已发货待收货/交易成功/已完成等。
+    支持按付款时间 pay_time 过滤日期段（start/end，格式 YYYY-MM-DD）。
     """
     # 有效成交状态过滤：排除退款/取消/关闭/待定；
     # status 为空但有快递单号（抖音等无状态列平台，已发货）也算有效
     VALID = ("((status != '' AND status NOT LIKE '%退款%' AND status NOT LIKE '%取消%' "
              "AND status NOT LIKE '%关闭%' AND status NOT IN ('待付款','待发货')) "
              "OR (status = '' AND tracking_no != ''))")
+    # 日期段过滤（按付款时间）
+    date_cond = ""
+    date_params = []
+    if start:
+        date_cond += " AND pay_time >= ?"
+        date_params.append(start)
+    if end:
+        date_cond += " AND pay_time <= ?"
+        date_params.append(end + " 23:59:59")
     with closing(_conn()) as c:
         items = []
         for pl in c.execute("SELECT * FROM platforms ORDER BY id").fetchall():
             pid = pl["id"]
             shop_in = "SELECT id FROM shops WHERE platform_id=?"
-            prod_in = ("SELECT id FROM products WHERE shop_id IN (%s)" % shop_in)
+            prod_in = "SELECT id FROM products WHERE shop_id IN (%s)" % shop_in
             products = c.execute(
                 "SELECT COUNT(*) AS n FROM products WHERE shop_id IN (%s)" % shop_in,
                 (pid,)).fetchone()["n"]
@@ -1290,12 +1461,12 @@ def platform_overview() -> dict:
                 "SELECT COUNT(*) AS n FROM skus WHERE product_id IN (%s)" % prod_in,
                 (pid,)).fetchone()["n"]
             orders = c.execute(
-                "SELECT COUNT(*) AS n FROM orders WHERE shop_id IN (%s) AND %s" % (shop_in, VALID),
-                (pid,)).fetchone()["n"]
+                "SELECT COUNT(*) AS n FROM orders WHERE shop_id IN (%s) AND %s%s" % (shop_in, VALID, date_cond),
+                (pid, *date_params)).fetchone()["n"]
             gmv = c.execute(
                 "SELECT ROUND(COALESCE(SUM(buyer_amount),0),2) AS n FROM orders "
-                "WHERE shop_id IN (%s) AND %s" % (shop_in, VALID),
-                (pid,)).fetchone()["n"]
+                "WHERE shop_id IN (%s) AND %s%s" % (shop_in, VALID, date_cond),
+                (pid, *date_params)).fetchone()["n"]
             items.append({
                 "platform_id": pid,
                 "code": pl["code"],
@@ -1500,6 +1671,7 @@ def title_opt_candidates(shop_id: int, q: str = None, limit: int = 500) -> list[
     with closing(_conn()) as c:
         sql = (
             "SELECT p.id, p.platform_product_id, p.name, p.code, "
+            "(SELECT name FROM shops WHERE id=p.shop_id) AS shop_name, "
             "(SELECT COUNT(*) FROM skus s WHERE s.product_id=p.id) AS sku_count "
             "FROM products p "
             "WHERE p.shop_id=? "
@@ -1557,6 +1729,7 @@ def list_title_opt(shop_id: int = None) -> list[dict]:
     with closing(_conn()) as c:
         base = (
             "SELECT t.*, "
+            "(SELECT name FROM shops WHERE id=t.shop_id) AS shop_name, "
             "(SELECT stat_date FROM goods_effect g WHERE g.platform_product_id=t.platform_product_id "
             "  ORDER BY g.stat_date DESC LIMIT 1) AS latest_stat_date, "
             "(SELECT goods_uv FROM goods_effect g WHERE g.platform_product_id=t.platform_product_id "
@@ -1612,6 +1785,22 @@ def update_title_opt(opt_id: int, new_title: str = None, status: str = None, not
 def delete_title_opt(opt_id: int) -> bool:
     with closing(_conn()) as c:
         c.execute("DELETE FROM title_opt WHERE id=?", (opt_id,))
+        c.commit()
+        return True
+
+
+def mark_title_opt_fixed(opt_id: int) -> bool:
+    """标记失败记录为「已确认修复」（fixed=1），从失败清单移除。"""
+    with closing(_conn()) as c:
+        row = c.execute("SELECT shop_id, platform_product_id, product_name, old_title, new_title, note FROM title_opt WHERE id=?", (opt_id,)).fetchone()
+        if not row:
+            return False
+        c.execute("UPDATE title_opt SET fixed=1 WHERE id=?", (opt_id,))
+        c.execute(
+            "INSERT INTO title_opt_log(shop_id, platform_product_id, product_name, old_title, new_title, action, status, note) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            (row["shop_id"], row["platform_product_id"], row["product_name"] or "", row["old_title"] or "", row["new_title"] or "", "fix", "success", row["note"] or "确认修复"),
+        )
         c.commit()
         return True
 
@@ -2039,6 +2228,77 @@ def promotions_analysis() -> dict:
                 "impressions": s["imp"] or 0, "clicks": s["clk"] or 0,
             },
             "top_roi": top_roi,
+        }
+
+
+def product_real_roi(period: str = None) -> dict:
+    """逐商品真实 ROI：推广花费 × 订单成交打通。
+
+    按 (shop_id, platform_product_id) 聚合推广数据，关联 orders 表真实成交额，
+    对比「推广平台口径 ROI」与「真实订单口径 ROI」，识别纯烧钱商品。
+    周期对齐：orders 按 pay_time 落在 promotions.period 对应区间内聚合（若 period 为空则全量）。
+    """
+    with closing(_conn()) as c:
+        # 1. 聚合推广数据（按商品），带 period 范围
+        where = ""
+        args = []
+        if period:
+            where = "WHERE period = ?"
+            args = [period]
+        promo_rows = c.execute(
+            f"SELECT p.shop_id, sh.name AS shop_name, p.platform_product_id, "
+            f"MAX(p.product_name) AS product_name, "
+            f"GROUP_CONCAT(DISTINCT p.period) AS periods, "
+            f"ROUND(SUM(p.total_spend),2) AS total_spend, ROUND(SUM(p.deal_amount),2) AS deal_amount, "
+            f"SUM(p.net_deal_count) AS promo_deals, SUM(p.impressions) AS impressions, SUM(p.clicks) AS clicks "
+            f"FROM promotions p LEFT JOIN shops sh ON sh.id = p.shop_id "
+            f"{where} WHERE p.platform_product_id != '' "
+            f"GROUP BY p.shop_id, p.platform_product_id "
+            f"ORDER BY total_spend DESC",
+            args,
+        ).fetchall()
+        result = []
+        for r in promo_rows:
+            shop_id = r["shop_id"]
+            pid = r["platform_product_id"]
+            total_spend = r["total_spend"] or 0.0
+            deal_amount = r["deal_amount"] or 0.0
+            # 2. 关联 orders：按 pay_time 落在该商品的推广周期区间内聚合
+            periods = (r["periods"] or "").split(",")
+            real_amount = 0.0
+            real_count = 0
+            for per in periods:
+                if "~" not in per:
+                    continue
+                start, end = per.split("~", 1)
+                o = c.execute(
+                    "SELECT COALESCE(SUM(seller_amount),0) AS amt, COUNT(*) AS cnt FROM orders "
+                    "WHERE shop_id=? AND platform_product_id=? AND pay_time >= ? AND pay_time < ?",
+                    (shop_id, pid, start + " 00:00:00", end + " 23:59:59"),
+                ).fetchone()
+                real_amount += o["amt"] or 0.0
+                real_count += o["cnt"] or 0
+            promo_roi = round(deal_amount / total_spend, 2) if total_spend else None
+            real_roi = round(real_amount / total_spend, 2) if total_spend else None
+            result.append({
+                "shop_id": shop_id, "shop_name": r["shop_name"], "platform_product_id": pid,
+                "product_name": r["product_name"] or "", "periods": r["periods"] or "",
+                "total_spend": total_spend, "deal_amount": deal_amount, "promo_roi": promo_roi,
+                "real_amount": round(real_amount, 2), "real_count": real_count, "real_roi": real_roi,
+                "promo_deals": r["promo_deals"] or 0, "impressions": r["impressions"] or 0,
+                "clicks": r["clicks"] or 0,
+            })
+        # 汇总
+        total_spend = sum(x["total_spend"] for x in result)
+        real_amount = sum(x["real_amount"] for x in result)
+        return {
+            "items": result,
+            "summary": {
+                "count": len(result),
+                "total_spend": round(total_spend, 2),
+                "real_amount": round(real_amount, 2),
+                "real_roi": round(real_amount / total_spend, 2) if total_spend else None,
+            },
         }
 
 
@@ -2512,3 +2772,727 @@ def list_supplier_products(supplier_id=None, q='', limit=5000):
         args.append(limit)
         rows = c.execute(sql, args).fetchall()
         return [dict(r) for r in rows]
+
+
+# ----------------------------- 任务调度中心 -----------------------------
+
+_SEED_TASKS = [
+    # (task_key, name, category, shop_id, cron_expr, schedule_desc, cron_job_id, script, enabled)
+    # 订单类
+    ("order_export_shop3", "如若月下·月度订单导出", "订单", 3, "0 18 2 * *", "每月 2 日 18:00", "e446584ef4b9", "pdd_monthly_export.py 3", 1),
+    ("order_export_shop5", "嘉裕工艺品·月度订单导出", "订单", 5, "10 18 2 * *", "每月 2 日 18:10", "9c397fff3e20", "pdd_monthly_export.py 5", 1),
+    ("order_export_shop1", "闲时来工艺·月度订单导出", "订单", 1, "20 18 2 * *", "每月 2 日 18:20", "a958a9a91ff1", "pdd_monthly_export.py 1", 1),
+    ("order_export_shop6", "欧世艺旗舰店·月度订单导出", "订单", 6, "30 18 2 * *", "每月 2 日 18:30", "84a8de47609c", "pdd_monthly_export.py 6", 1),
+    # 推广类
+    ("promo_daily", "推广数据录入（近7日）", "推广", None, "0 9 * * *", "每天 09:00", "4c9b77f4e820", "pdd_weekly_promo.py", 1),
+    ("promo_track", "推广跟踪落地", "推广", None, "0 12,20 * * *", "每天 12:00 / 20:00", "68a919222821", "pdd_promotion_track.py", 1),
+    ("promo_audit", "运营主管每日审计", "推广", None, "0 9 * * *", "每天 09:00", "87332e04812d", "pdd 审计", 1),
+    # 商品类
+    ("goods_effect", "商品访问明细采集", "商品", None, "0 23 * * *", "每天 23:00", "51ef27356897", "collect_goods_effect.py", 1),
+    ("title_opt_shop5", "标题优化批量·嘉裕", "商品", 5, "0 9 * * *", "每天 09:00", "466412194529", "pdd_title_batch.py 40 --shop 5", 1),
+    ("title_opt_shop1", "标题优化批量·闲时来", "商品", 1, "10 9 * * *", "每天 09:10", "d843898d279e", "pdd_title_batch.py --shop 1", 1),
+    ("title_opt_shop6", "标题优化批量·欧世艺", "商品", 6, "20 9 * * *", "每天 09:20", "fa056bcee006", "pdd_title_batch.py --shop 6", 1),
+    ("title_opt_shop3", "标题优化批量·如若月下", "商品", 3, "30 9 * * *", "每天 09:30", "3d797b863695", "pdd_title_batch.py --shop 3", 1),
+    ("title_review", "标题优化复盘", "商品", None, "0 8 * * 1", "每周一 08:00", "4d6d161d6fe3", "pdd_title_review.py --apply", 1),
+    # 竞品/评价（待建设）
+    ("competitor_monitor", "竞品监控", "竞品", None, "", "待建设", "", "", 0),
+    ("review_monitor", "商品评价监控", "评价", None, "0 10 * * *", "每天 10:00", "901cd9406962", "collect_reviews.py", 1),
+]
+
+
+def seed_scheduled_tasks() -> int:
+    """幂等 seed 定时采集任务清单（与 Hermes cron 对应的任务登记）。返回新增数。"""
+    with closing(_conn()) as c:
+        n = 0
+        for t in _SEED_TASKS:
+            task_key, name, cat, shop_id, cron, desc, job_id, script, enabled = t
+            cur = c.execute("SELECT id FROM scheduled_tasks WHERE task_key=?", (task_key,)).fetchone()
+            if cur:
+                c.execute(
+                    "UPDATE scheduled_tasks SET name=?, category=?, shop_id=?, cron_expr=?, schedule_desc=?, cron_job_id=?, script=?, enabled=? WHERE task_key=?",
+                    (name, cat, shop_id, cron, desc, job_id, script, enabled, task_key),
+                )
+            else:
+                c.execute(
+                    "INSERT INTO scheduled_tasks(task_key, name, category, shop_id, cron_expr, schedule_desc, cron_job_id, script, enabled, note) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    (task_key, name, cat, shop_id, cron, desc, job_id, script, enabled, ""),
+                )
+                n += 1
+        c.commit()
+        return n
+
+
+def list_scheduled_tasks() -> list[dict]:
+    """列出任务清单，附带每个任务最近一次运行状态。"""
+    with closing(_conn()) as c:
+        rows = c.execute(
+            "SELECT t.*, sh.name AS shop_name, "
+            "(SELECT status FROM task_runs r WHERE r.task_key=t.task_key ORDER BY r.id DESC LIMIT 1) AS last_status, "
+            "(SELECT result FROM task_runs r WHERE r.task_key=t.task_key ORDER BY r.id DESC LIMIT 1) AS last_result, "
+            "(SELECT finished_at FROM task_runs r WHERE r.task_key=t.task_key ORDER BY r.id DESC LIMIT 1) AS last_run_at, "
+            "(SELECT COUNT(*) FROM task_runs r WHERE r.task_key=t.task_key) AS run_count "
+            "FROM scheduled_tasks t LEFT JOIN shops sh ON sh.id=t.shop_id "
+            "ORDER BY CASE t.category WHEN '订单' THEN 1 WHEN '推广' THEN 2 WHEN '商品' THEN 3 WHEN '竞品' THEN 4 WHEN '评价' THEN 5 ELSE 9 END, t.id"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def toggle_scheduled_task(task_key: str, enabled: int) -> bool:
+    """切换任务启用状态。"""
+    with closing(_conn()) as c:
+        c.execute("UPDATE scheduled_tasks SET enabled=? WHERE task_key=?", (1 if enabled else 0, task_key))
+        c.commit()
+        return c.execute("SELECT changes()").fetchone()[0] > 0
+
+
+def list_task_runs(task_key: str = None, limit: int = 100) -> list[dict]:
+    """列出运行日志（倒序，可按 task_key 过滤）。"""
+    with closing(_conn()) as c:
+        if task_key:
+            rows = c.execute("SELECT * FROM task_runs WHERE task_key=? ORDER BY id DESC LIMIT ?", (task_key, limit)).fetchall()
+        else:
+            rows = c.execute("SELECT * FROM task_runs ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def log_task_run(task_key: str, status: str, result: str = "", started_at: str = "", finished_at: str = "") -> bool:
+    """记录一次任务运行。"""
+    with closing(_conn()) as c:
+        c.execute(
+            "INSERT INTO task_runs(task_key, status, result, started_at, finished_at) VALUES(?,?,?,?,?)",
+            (task_key, status, result, started_at, finished_at),
+        )
+        c.commit()
+        return True
+
+
+# ----------------------------- 商品评价监控 -----------------------------
+
+def save_reviews(shop_id: int, records: list[dict]) -> int:
+    """批量 upsert 商品评价（拼多多评价管理 saturn/reviews/list）。
+
+    records 字段：review_id, goods_id, order_id, order_sn, score, desc_score,
+    logistics_score, service_score, comment, append_num, goods_name, specs,
+    keywords, pictures, video, thumb_url, avatar, reply, reply_time, anonymous,
+    status, create_time。
+    """
+    with closing(_conn()) as c:
+        n = 0
+        for r in records:
+            c.execute(
+                "INSERT INTO reviews(shop_id, review_id, goods_id, order_id, order_sn, score, "
+                "desc_score, logistics_score, service_score, comment, append_num, goods_name, "
+                "specs, keywords, pictures, video, thumb_url, avatar, reply, reply_time, "
+                "anonymous, status, create_time) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(review_id) DO UPDATE SET "
+                "shop_id=excluded.shop_id, goods_id=excluded.goods_id, order_id=excluded.order_id, "
+                "order_sn=excluded.order_sn, score=excluded.score, desc_score=excluded.desc_score, "
+                "logistics_score=excluded.logistics_score, service_score=excluded.service_score, "
+                "comment=excluded.comment, append_num=excluded.append_num, goods_name=excluded.goods_name, "
+                "specs=excluded.specs, keywords=excluded.keywords, pictures=excluded.pictures, "
+                "video=excluded.video, thumb_url=excluded.thumb_url, avatar=excluded.avatar, "
+                "reply=excluded.reply, reply_time=excluded.reply_time, anonymous=excluded.anonymous, "
+                "status=excluded.status, create_time=excluded.create_time",
+                (shop_id, r.get("review_id", ""), r.get("goods_id", ""), r.get("order_id", ""),
+                 r.get("order_sn", ""), r.get("score", 0), r.get("desc_score", 0),
+                 r.get("logistics_score", 0), r.get("service_score", 0), r.get("comment", ""),
+                 r.get("append_num", 0), r.get("goods_name", ""), r.get("specs", ""),
+                 r.get("keywords", ""), r.get("pictures", ""), r.get("video", ""),
+                 r.get("thumb_url", ""), r.get("avatar", ""), r.get("reply", ""),
+                 r.get("reply_time", 0), r.get("anonymous", 0), r.get("status", 0),
+                 r.get("create_time", 0)),
+            )
+            n += 1
+        c.commit()
+        return n
+
+
+def list_reviews(shop_id: int = None, goods_id: str = None, star: int = None,
+                 has_picture: bool = False, has_video: bool = False,
+                 keyword: str = "", limit: int = 200, offset: int = 0) -> list[dict]:
+    """查询评价（倒序），支持店铺/商品/星级/有图/有视频/关键词筛选。"""
+    with closing(_conn()) as c:
+        where = []
+        args = []
+        if shop_id:
+            where.append("r.shop_id=?")
+            args.append(shop_id)
+        if goods_id:
+            where.append("r.goods_id=?")
+            args.append(goods_id)
+        if star:
+            where.append("r.desc_score=?")
+            args.append(star)
+        if has_picture:
+            where.append("r.pictures != ''")
+        if has_video:
+            where.append("r.video != ''")
+        if keyword:
+            where.append("(r.comment LIKE ? OR r.goods_name LIKE ? OR r.order_sn LIKE ?)")
+            args += [f"%{keyword}%", f"%{keyword}%", f"%{keyword}%"]
+        sql = "SELECT r.*, s.name AS shop_name FROM reviews r LEFT JOIN shops s ON s.id=r.shop_id"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY r.create_time DESC LIMIT ? OFFSET ?"
+        args += [limit, offset]
+        rows = c.execute(sql, args).fetchall()
+        return [dict(r) for r in rows]
+
+
+def review_stats() -> dict:
+    """评价概览统计：各店评价数、带图/带视频数、差评数、近7天新增。"""
+    with closing(_conn()) as c:
+        rows = c.execute(
+            "SELECT r.shop_id, s.name AS shop_name, COUNT(*) AS total, "
+            "SUM(CASE WHEN r.pictures != '' THEN 1 ELSE 0 END) AS with_pic, "
+            "SUM(CASE WHEN r.video != '' THEN 1 ELSE 0 END) AS with_video, "
+            "SUM(CASE WHEN r.desc_score <= 3 THEN 1 ELSE 0 END) AS neg "
+            "FROM reviews r LEFT JOIN shops s ON s.id=r.shop_id "
+            "GROUP BY r.shop_id ORDER BY r.shop_id"
+        ).fetchall()
+        shops = [dict(r) for r in rows]
+        total = c.execute("SELECT COUNT(*) FROM reviews").fetchone()[0]
+        neg_total = c.execute("SELECT COUNT(*) FROM reviews WHERE desc_score <= 3").fetchone()[0]
+        week_ago = int(time.time()) - 7 * 86400
+        week_new = c.execute("SELECT COUNT(*) FROM reviews WHERE create_time >= ?", (week_ago,)).fetchone()[0]
+        return {"total": total, "neg_total": neg_total, "week_new": week_new, "shops": shops}
+
+
+# ----------------------------- 评论分析报表 -----------------------------
+
+_POS_KEYWORDS = {
+    "实用性": ["方便", "好用", "实用", "便捷", "顺手"],
+    "承重/牢固": ["承重", "承载", "结实", "牢固", "挂", "重"],
+    "质量/做工": ["质量", "做工", "耐用", "材质", "坚硬", "扎实"],
+    "安装体验": ["安装", "免打孔", "免钉", "简单", "贴合"],
+    "性价比": ["便宜", "实惠", "性价比", "超值", "值得", "划算"],
+    "外观设计": ["漂亮", "好看", "美观", "大气", "颜值", "精致"],
+    "物流服务": ["物流", "快递", "发货", "送货"],
+}
+_NEG_KEYWORDS = {
+    "做工/质量差": ["粗糙", "太细", "质感", "质量差", "做工差", "劣质", "不值"],
+    "不牢固/承重": ["不牢固", "不结实", "大门不能", "不能放", "松", "掉"],
+    "物流问题": ["没送", "地址", "慢", "破损", "压坏", "漏发"],
+    "尺寸/规格不符": ["尺寸", "规格", "不符", "短"],
+}
+_PRAISE_WORDS = ["质量好", "漂亮", "方便", "喜欢", "满意", "推荐", "不错", "结实", "好用", "超级"]
+
+
+def _review_has_text(r: dict) -> bool:
+    cm = (r.get("comment") or "").strip()
+    if not cm:
+        return False
+    if "该用户觉得商品很好" in cm or "未填写文字评价" in cm:
+        return False
+    return True
+
+
+def review_analysis() -> dict:
+    """评论分析报表（结构化数据），供前端「评论分析」区块渲染。"""
+    with closing(_conn()) as c:
+        rows = [dict(r) for r in c.execute(
+            "SELECT r.*, s.name AS shop_name FROM reviews r LEFT JOIN shops s ON s.id=r.shop_id")]
+
+    total = len(rows)
+    star_dist = {}
+    for r in rows:
+        star_dist[r["desc_score"]] = star_dist.get(r["desc_score"], 0) + 1
+
+    good = sum(1 for r in rows if r["desc_score"] >= 4)
+    neg_rows = [r for r in rows if r["desc_score"] <= 3]
+    neg = len(neg_rows)
+
+    # 各店
+    shops_map = {}
+    for r in rows:
+        sid = r["shop_id"]
+        s = shops_map.setdefault(sid, {"shop_id": sid, "name": r["shop_name"], "n": 0,
+                                       "good": 0, "neg": 0, "pic": 0, "vid": 0, "replied": 0})
+        s["n"] += 1
+        if r["desc_score"] >= 4:
+            s["good"] += 1
+        if r["desc_score"] <= 3:
+            s["neg"] += 1
+        if (r.get("pictures") or "").strip():
+            s["pic"] += 1
+        if (r.get("video") or "").strip():
+            s["vid"] += 1
+        if (r.get("reply") or "").strip():
+            s["replied"] += 1
+    shops = sorted(shops_map.values(), key=lambda x: -x["n"])
+
+    # 差评归类
+    neg_text = [r for r in neg_rows if _review_has_text(r)]
+    neg_cats = {}
+    contradict = []
+    neg_items = []
+    for r in neg_text:
+        cm = r.get("comment") or ""
+        hit = False
+        for cat, words in _NEG_KEYWORDS.items():
+            if any(w in cm for w in words):
+                neg_cats[cat] = neg_cats.get(cat, 0) + 1
+                hit = True
+                break
+        if not hit and any(w in cm for w in _PRAISE_WORDS):
+            contradict.append(r)
+        neg_items.append({
+            "star": r["desc_score"], "create_time": r.get("create_time", 0),
+            "shop_name": r.get("shop_name", ""), "comment": cm,
+            "goods_name": (r.get("goods_name") or "")[:40], "goods_id": r.get("goods_id", ""),
+        })
+    neg_items.sort(key=lambda x: -(x["create_time"] or 0))
+
+    # 好评关键词
+    pos_cats = {}
+    for r in rows:
+        if r["desc_score"] >= 4 and _review_has_text(r):
+            cm = r.get("comment") or ""
+            for cat, words in _POS_KEYWORDS.items():
+                if any(w in cm for w in words):
+                    pos_cats[cat] = pos_cats.get(cat, 0) + 1
+                    break
+    pos_list = sorted([{"dim": k, "count": v} for k, v in pos_cats.items()], key=lambda x: -x["count"])
+
+    # 差评集中商品
+    neg_goods_map = {}
+    for r in neg_rows:
+        gid = r["goods_id"]
+        g = neg_goods_map.setdefault(gid, {"goods_id": gid, "goods_name": (r.get("goods_name") or "")[:36], "count": 0})
+        g["count"] += 1
+    neg_goods = sorted(neg_goods_map.values(), key=lambda x: -x["count"])[:10]
+
+    # 可操作建议
+    suggestions = []
+    if neg > 0:
+        replied = sum(1 for r in neg_rows if (r.get("reply") or "").strip())
+        if replied == 0:
+            suggestions.append(f"差评 {neg} 条全部未回复——立即回复，尤其 {len(neg_text)} 条有文字的差评，避免拖 DSR 和转化。")
+    if neg_goods and neg_goods[0]["count"] >= 3:
+        g = neg_goods[0]
+        suggestions.append(f"差评集中在商品 {g['goods_id']}（{g['count']} 条）——核查详情页是否标注适用门型/承重，避免买家预期错位。")
+    if pos_list:
+        top2 = [p["dim"] for p in pos_list[:2]]
+        suggestions.append(f"好评核心卖点「{'、'.join(top2)}」——标题和详情页前置强化，并如实标注承重上限。")
+
+    return {
+        "total": total,
+        "good_rate": round(good / total * 100, 1) if total else 0,
+        "star_dist": star_dist,
+        "shops": shops,
+        "neg": {
+            "total": neg,
+            "with_text": len(neg_text),
+            "no_text": neg - len(neg_text),
+            "contradict": len(contradict),
+            "cats": [{"type": k, "count": v} for k, v in sorted(neg_cats.items(), key=lambda x: -x[1])],
+            "items": neg_items,
+        },
+        "pos_keywords": pos_list,
+        "neg_goods": neg_goods,
+        "suggestions": suggestions,
+    }
+
+
+# ----------------------------- 打单登记 -----------------------------
+
+PACK_ENTRIES = {
+    "pdd_jiayu": "拼多多·嘉裕工艺品",
+    "pdd_xianshi": "拼多多·闲时来工艺",
+    "taobao_jiayu": "淘宝·嘉裕工艺品",
+    "doudian": "抖店",
+}
+PACK_SOURCES = {
+    "platform": "平台订单",
+    "alijiayu": "阿里.嘉裕工艺品有限公司",
+    "sandan": "散单",
+}
+
+
+def save_pack_record(entry: str, source: str, count: int, remark: str = "", record_date: str = None, scatter_shop: str = "") -> dict:
+    """新增一条打单登记。record_date 缺省今天。scatter_shop 为散单店铺名（source=sandan 时用）。"""
+    if record_date is None:
+        record_date = time.strftime("%Y-%m-%d")
+    with closing(_conn()) as c:
+        cur = c.execute(
+            "INSERT INTO pack_records(record_date, entry, source, count, remark, scatter_shop) VALUES(?,?,?,?,?,?)",
+            (record_date, entry, source, int(count), remark or "", scatter_shop or ""),
+        )
+        c.commit()
+        return {
+            "id": cur.lastrowid,
+            "record_date": record_date,
+            "entry": entry,
+            "source": source,
+            "count": int(count),
+            "remark": remark or "",
+            "scatter_shop": scatter_shop or "",
+        }
+
+
+def list_pack_records(record_date: str = None, limit: int = 500) -> list[dict]:
+    """查询打单记录（指定日期查当天，不传查全部，倒序）。"""
+    with closing(_conn()) as c:
+        if record_date:
+            rows = c.execute(
+                "SELECT * FROM pack_records WHERE record_date=? ORDER BY id DESC LIMIT ?",
+                (record_date, limit),
+            ).fetchall()
+        else:
+            rows = c.execute(
+                "SELECT * FROM pack_records ORDER BY record_date DESC, id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def pack_summary(record_date: str = None) -> dict:
+    """某天打单汇总：各入口 × 各来源的数量矩阵 + 行/列/总计。"""
+    if record_date is None:
+        record_date = time.strftime("%Y-%m-%d")
+    with closing(_conn()) as c:
+        rows = c.execute(
+            "SELECT entry, source, SUM(count) AS total FROM pack_records "
+            "WHERE record_date=? GROUP BY entry, source",
+            (record_date,),
+        ).fetchall()
+    agg = {}
+    for r in rows:
+        agg.setdefault(r["entry"], {})[r["source"]] = r["total"] or 0
+    matrix = {}
+    entry_totals = {}
+    source_totals = {sk: 0 for sk in PACK_SOURCES}
+    grand = 0
+    for ek in PACK_ENTRIES:
+        row = {}
+        row_total = 0
+        for sk in PACK_SOURCES:
+            v = agg.get(ek, {}).get(sk, 0)
+            row[sk] = v
+            row_total += v
+            source_totals[sk] += v
+        row["total"] = row_total
+        matrix[ek] = row
+        entry_totals[ek] = row_total
+        grand += row_total
+    return {
+        "record_date": record_date,
+        "entries": PACK_ENTRIES,
+        "sources": PACK_SOURCES,
+        "matrix": matrix,
+        "entry_totals": entry_totals,
+        "source_totals": source_totals,
+        "grand": grand,
+    }
+
+
+def delete_pack_record(rid: int) -> bool:
+    """删除一条打单记录（打错撤销）。"""
+    with closing(_conn()) as c:
+        cur = c.execute("DELETE FROM pack_records WHERE id=?", (rid,))
+        c.commit()
+        return cur.rowcount > 0
+
+
+def update_pack_record(rid: int, entry: str = None, source: str = None, count=None, remark: str = None, record_date: str = None) -> bool:
+    """修改一条打单记录（只更新传入的字段，未传保持不变）。"""
+    fields, vals = [], []
+    if entry is not None:
+        fields.append("entry=?"); vals.append(entry)
+    if source is not None:
+        fields.append("source=?"); vals.append(source)
+    if count is not None:
+        fields.append("count=?"); vals.append(int(count))
+    if remark is not None:
+        fields.append("remark=?"); vals.append(remark or "")
+    if record_date is not None:
+        fields.append("record_date=?"); vals.append(record_date)
+    if not fields:
+        return False
+    vals.append(rid)
+    with closing(_conn()) as c:
+        cur = c.execute(f"UPDATE pack_records SET {', '.join(fields)} WHERE id=?", vals)
+        c.commit()
+        return cur.rowcount > 0
+
+
+def list_scatter_shops() -> list[dict]:
+    """列出散单店铺（下拉框选项）。"""
+    with closing(_conn()) as c:
+        rows = c.execute("SELECT * FROM pack_scatter_shops ORDER BY id ASC").fetchall()
+        return [dict(r) for r in rows]
+
+
+def add_scatter_shop(name: str) -> dict:
+    """新增散单店铺（重名则返回已有记录）。"""
+    name = (name or "").strip()
+    if not name:
+        return {}
+    with closing(_conn()) as c:
+        try:
+            cur = c.execute("INSERT INTO pack_scatter_shops(name) VALUES(?)", (name,))
+            c.commit()
+            return {"id": cur.lastrowid, "name": name}
+        except sqlite3.IntegrityError:
+            row = c.execute("SELECT * FROM pack_scatter_shops WHERE name=?", (name,)).fetchone()
+            return dict(row) if row else {"name": name}
+
+
+def delete_scatter_shop(sid: int) -> bool:
+    """删除散单店铺。"""
+    with closing(_conn()) as c:
+        cur = c.execute("DELETE FROM pack_scatter_shops WHERE id=?", (sid,))
+        c.commit()
+        return cur.rowcount > 0
+
+
+def pack_monthly_summary(entry: str = None, ym: str = None) -> dict:
+    """按月 × 平台 汇总打单数。entry=平台入口(可选)，ym=YYYY-MM(可选)。"""
+    sql = "SELECT substr(record_date,1,7) AS ym, entry, SUM(count) AS total FROM pack_records"
+    where, args = [], []
+    if entry:
+        where.append("entry=?"); args.append(entry)
+    if ym:
+        where.append("substr(record_date,1,7)=?"); args.append(ym)
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " GROUP BY ym, entry ORDER BY ym DESC, entry ASC"
+    with closing(_conn()) as c:
+        rows = [dict(r) for r in c.execute(sql, args).fetchall()]
+        months = [r["ym"] for r in c.execute(
+            "SELECT DISTINCT substr(record_date,1,7) AS ym FROM pack_records ORDER BY ym DESC"
+        ).fetchall()]
+    total = sum(r["total"] or 0 for r in rows)
+    return {"months": months, "rows": rows, "total": total}
+
+
+# ----------------------------- 三方比对（打单 / 订单 / 运费） -----------------------------
+
+ENTRY_NAMES = {
+    "pdd_jiayu": "拼多多·嘉裕",
+    "pdd_xianshi": "拼多多·闲时来",
+    "taobao_jiayu": "淘宝·嘉裕",
+    "doudian": "抖店",
+}
+
+
+def list_pack_mapping() -> list[dict]:
+    """列出打单入口映射（含店铺名解析）。"""
+    with closing(_conn()) as c:
+        rows = [dict(r) for r in c.execute("SELECT * FROM pack_entry_mapping ORDER BY id")]
+        shop_names = {r["id"]: r["name"] for r in c.execute("SELECT id, name FROM shops")}
+    for m in rows:
+        sids = [int(x) for x in (m["shop_ids"] or "").split(",") if x.strip().isdigit()]
+        m["shop_names"] = "、".join(shop_names[sid] for sid in sids if sid in shop_names)
+        m["entry_name"] = ENTRY_NAMES.get(m["entry"], m["entry"])
+    return rows
+
+
+def save_pack_mapping(entry: str, shop_ids: str = "", freight_account: str = "") -> dict:
+    """保存/更新打单入口映射。"""
+    with closing(_conn()) as c:
+        c.execute(
+            "INSERT INTO pack_entry_mapping(entry, shop_ids, freight_account) VALUES(?,?,?) "
+            "ON CONFLICT(entry) DO UPDATE SET shop_ids=excluded.shop_ids, freight_account=excluded.freight_account",
+            (entry, shop_ids or "", freight_account or ""),
+        )
+        c.commit()
+        row = c.execute("SELECT * FROM pack_entry_mapping WHERE entry=?", (entry,)).fetchone()
+        return dict(row) if row else {}
+
+
+def freight_three_way(month: str = None) -> dict:
+    """三方比对：按月 × 入口，对齐 订单数 / 打单数 / 运费票数+总额。"""
+    with closing(_conn()) as c:
+        mappings = [dict(r) for r in c.execute("SELECT * FROM pack_entry_mapping ORDER BY id")]
+        shop_names = {r["id"]: r["name"] for r in c.execute("SELECT id, name FROM shops")}
+
+        all_months = set()
+        entries = []
+        for m in mappings:
+            entry = m["entry"]
+            shop_ids = [int(x) for x in (m["shop_ids"] or "").split(",") if x.strip().isdigit()]
+            account = (m["freight_account"] or "").strip()
+
+            order_by_ym, pack_by_ym, freight_by_ym = {}, {}, {}
+            if shop_ids:
+                ph = ",".join("?" * len(shop_ids))
+                for r in c.execute(
+                    f"SELECT substr(pay_time,1,7) ym, COUNT(*) n FROM orders "
+                    f"WHERE shop_id IN ({ph}) AND pay_time LIKE '____-__%' GROUP BY ym",
+                    shop_ids,
+                ):
+                    order_by_ym[r["ym"]] = r["n"]
+            for r in c.execute(
+                "SELECT substr(record_date,1,7) ym, SUM(count) n FROM pack_records WHERE entry=? GROUP BY ym",
+                (entry,),
+            ):
+                pack_by_ym[r["ym"]] = r["n"]
+            if account:
+                for r in c.execute(
+                    "SELECT substr(ship_date,1,7) ym, COUNT(*) n, COALESCE(SUM(freight_cost),0) fee "
+                    "FROM freight WHERE account_name=? AND ship_date LIKE '____-__%' GROUP BY ym",
+                    (account,),
+                ):
+                    freight_by_ym[r["ym"]] = (r["n"], r["fee"])
+
+            ym_set = set(order_by_ym) | set(pack_by_ym) | set(freight_by_ym)
+            all_months |= ym_set
+            rows = []
+            for ym in sorted(ym_set, reverse=True):
+                if month and ym != month:
+                    continue
+                fc, ff = freight_by_ym.get(ym, (0, 0.0))
+                avg = round(ff / fc, 2) if fc else None
+                rows.append({
+                    "ym": ym,
+                    "order_count": order_by_ym.get(ym, 0),
+                    "pack_count": pack_by_ym.get(ym, 0),
+                    "freight_count": fc,
+                    "freight_fee": round(ff, 2),
+                    "avg_fee": avg,
+                })
+
+            sids = [int(x) for x in (m["shop_ids"] or "").split(",") if x.strip().isdigit()]
+            entries.append({
+                "entry": entry,
+                "name": ENTRY_NAMES.get(entry, entry),
+                "shop_ids": m["shop_ids"],
+                "shop_names": "、".join(shop_names[sid] for sid in sids if sid in shop_names),
+                "freight_account": account,
+                "months": rows,
+            })
+
+    return {
+        "mappings": mappings,
+        "months": sorted(all_months, reverse=True),
+        "entries": entries,
+    }
+
+
+# ----------------------------- 竞品监控 -----------------------------
+
+def save_competitors(shop_id: int, platform_product_id: str, keyword: str, items: list[dict]) -> int:
+    """保存一批竞品（先清掉该商品+关键词的旧记录，再插入）。"""
+    with closing(_conn()) as c:
+        c.execute(
+            "DELETE FROM competitors WHERE platform_product_id=? AND keyword=?",
+            (platform_product_id, keyword),
+        )
+        for it in items:
+            c.execute(
+                "INSERT INTO competitors(shop_id, platform_product_id, keyword, comp_title, comp_price, comp_sales, comp_img) "
+                "VALUES(?,?,?,?,?,?,?)",
+                (shop_id, platform_product_id, keyword,
+                 it.get("title") or "", it.get("price"), it.get("sales") or "", it.get("img") or ""),
+            )
+        c.commit()
+    return len(items)
+
+
+def list_competitors(platform_product_id: str = None, keyword: str = None) -> list[dict]:
+    """查询竞品列表。"""
+    with closing(_conn()) as c:
+        sql = "SELECT * FROM competitors"
+        where, args = [], []
+        if platform_product_id:
+            where.append("platform_product_id=?"); args.append(platform_product_id)
+        if keyword:
+            where.append("keyword=?"); args.append(keyword)
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY comp_price IS NULL, comp_price ASC, id ASC"
+        return [dict(r) for r in c.execute(sql, args).fetchall()]
+
+
+def confirm_competitor(cid: int, status: str) -> bool:
+    """人工确认竞品：status = ok（是竞品）/ no（排除）。"""
+    with closing(_conn()) as c:
+        c.execute("UPDATE competitors SET status=? WHERE id=?", (status, cid))
+        c.commit()
+        return c.total_changes > 0
+
+
+def save_buyer_review(data: dict, source: str = "brief") -> int:
+    """保存买家端提取的评论（独立表 buyer_reviews，不混 reviews）。
+    同 goods_id + source 先删旧再插，保持每个商品每类采集只保留最新一次。"""
+    goods_id = str(data.get("goods_id") or "").strip()
+    if not goods_id:
+        return 0
+    with closing(_conn()) as c:
+        c.execute("DELETE FROM buyer_reviews WHERE goods_id=? AND source=?", (goods_id, source))
+        c.execute(
+            "INSERT INTO buyer_reviews(goods_id, goods_name, total_count, tags, comments, source) "
+            "VALUES(?,?,?,?,?,?)",
+            (
+                goods_id,
+                data.get("goods_name") or "",
+                int(data.get("total") or 0),
+                json.dumps(data.get("tags") or [], ensure_ascii=False),
+                json.dumps(data.get("comments") or [], ensure_ascii=False),
+                source,
+            ),
+        )
+        c.commit()
+    return 1
+
+
+def _parse_total(s) -> int:
+    """'4.4万+' -> 44000, '554万' -> 5540000, '5000' -> 5000"""
+    import re
+    if s is None:
+        return 0
+    s = str(s).strip().replace("+", "").replace(",", "")
+    m = re.match(r"^([\d.]+)(万)?", s)
+    if not m:
+        return 0
+    n = float(m.group(1))
+    if m.group(2):
+        n *= 10000
+    return int(n)
+
+
+def save_buyer_review_full(data: dict) -> int:
+    """保存评论列表页翻页采集的全文评论（source='full'）。"""
+    goods_id = str(data.get("goods_id") or "").strip()
+    if not goods_id:
+        return 0
+    with closing(_conn()) as c:
+        c.execute("DELETE FROM buyer_reviews WHERE goods_id=? AND source='full'", (goods_id,))
+        c.execute(
+            "INSERT INTO buyer_reviews(goods_id, goods_name, total_count, tags, comments, source) "
+            "VALUES(?,?,?,?,?,?)",
+            (
+                goods_id,
+                "",
+                _parse_total(data.get("total")),
+                "[]",
+                json.dumps(data.get("comments") or [], ensure_ascii=False),
+                "full",
+            ),
+        )
+        c.commit()
+    return 1
+
+
+def list_buyer_reviews(goods_id: str = None) -> list[dict]:
+    """查询买家端评论提取记录，tags/comments 反序列化为 list。"""
+    with closing(_conn()) as c:
+        if goods_id:
+            rows = c.execute(
+                "SELECT * FROM buyer_reviews WHERE goods_id=? ORDER BY id DESC", (goods_id,)
+            ).fetchall()
+        else:
+            rows = c.execute("SELECT * FROM buyer_reviews ORDER BY id DESC").fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            for k in ("tags", "comments"):
+                try:
+                    d[k] = json.loads(d.get(k) or "[]")
+                except Exception:
+                    d[k] = []
+            out.append(d)
+        return out
+

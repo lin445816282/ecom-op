@@ -8,6 +8,7 @@ const todayCN = () => new Intl.DateTimeFormat('zh-CN', {dateStyle:'full'}).forma
 
 const VIEWS = {
   dashboard: {title:'运营总览', sub:'把资料里的经验，变成每天可执行的运营动作。'},
+  guidehub: {title:'运营指南', sub:'运营方法论、平台操作、选品规划，一站查阅。'},
   guide: {title:'操作手册', sub:'从第一次打开，到每天跑完一套运营动作。'},
   products: {title:'商品投产', sub:'记录售价、毛利与广告数据，自动计算保本/目标 ROI。'},
   catalog: {title:'商品库', sub:'平台 + 电商层级真实商品数据（平台 → 店铺 → 商品 → SKU）。'},
@@ -17,9 +18,22 @@ const VIEWS = {
   calendar: {title:'选品日历', sub:'按月提前布局应季商品，建议提前 2-4 周预热。'},
   keywords: {title:'关键词库', sub:'储备核心词、属性词、场景词、规格词，用于标题优化与选品拓词。'},
   tasks: {title:'SOP 任务', sub:'按模块创建每日任务，落地执行并跟踪完成度。'},
+  scheduler: {title:'任务调度中心', sub:'统一管理全部定时采集任务（订单/推广/商品/竞品/评价）。'},
+  reviews: {title:'评价监控', sub:'全量采集商品评价（含图片/视频），差评预警与关键词复盘。'},
   douyin: {title:'抖店运营', sub:'上架 ≠ 入池。先查流量，再优化标题、核对新品标。'},
   logs: {title:'运营日志', sub:'每天一条：日期+商品+数据+结论+动作，按天集中追溯。'},
+  packing: {title:'打单登记', sub:'打单人员每日登记各入口打单数量，区分平台/代发/散单。'},
+  freight: {title:'运费结算', sub:'快递账单 + 订单匹配对账，三方比对（打单/订单/运费）预警。'},
+  competitors: {title:'竞品监控', sub:'搜索同类商品，对比价格/销量/主图，人工确认竞品。'},
 };
+
+// 运营指南分组（单一数据源：新增子模块只需在这里加一条，侧边栏子菜单 + 目录页自动生成）
+const GUIDE_ITEMS = [
+  { view:'guide', icon:'?', title:'操作手册', desc:'从第一次打开，到每天跑完一套运营动作。' },
+  { view:'douyin', icon:'▶', title:'抖店运营', desc:'上架 ≠ 入池。先查流量，再优化标题、核对新品标。' },
+  { view:'knowledge', icon:'◎', title:'知识库', desc:'只保留合规、可持续的起店与推广方法论。' },
+  { view:'calendar', icon:'▤', title:'选品日历', desc:'按月提前布局应季商品，建议提前 2-4 周预热。' },
+];
 
 const state = { view:'dashboard', shop:'拼多多', products:[], knowledge:[], calendar:[], templates:[], tasks:[], keywords:[], promotionHistory:[], logs:[] };
 
@@ -39,16 +53,57 @@ function toast(msg) {
 
 const BASE = location.pathname.startsWith('/ecom-op') ? '/ecom-op' : '';
 
+function getToken() { return localStorage.getItem('ecom_op_token') || ''; }
+
 async function api(path, method='GET', body) {
   const opt = {method, headers:{'Content-Type':'application/json'}};
+  const token = getToken();
+  if (token) opt.headers['Authorization'] = 'Bearer ' + token;
   if (body !== undefined) opt.body = JSON.stringify(body);
   const res = await fetch(BASE + path, opt);
+  if (res.status === 401 && !path.includes('/auth/login')) {
+    localStorage.removeItem('ecom_op_token');
+    showLogin();
+    throw new Error('未授权，请先登录');
+  }
   if (!res.ok) {
     let msg = `请求失败 ${res.status}`;
     try { const j = await res.json(); if (j.error) msg = j.error; } catch(e) {}
     throw new Error(msg);
   }
   return res.json();
+}
+
+function showLogin() {
+  if (document.getElementById('login-overlay')) return;
+  const overlay = document.createElement('div');
+  overlay.id = 'login-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:#0f172a;z-index:9999;display:flex;align-items:center;justify-content:center;padding:24px';
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:16px;padding:28px;width:100%;max-width:340px;box-shadow:0 20px 60px rgba(0,0,0,.4)">
+      <div style="font-size:20px;font-weight:700;color:#17203a;text-align:center">🔐 电商运营工作台</div>
+      <div style="font-size:12px;color:#8899b0;text-align:center;margin-top:6px">请输入访问口令</div>
+      <input id="login-token" type="password" placeholder="访问口令" style="width:100%;margin-top:16px;padding:11px 14px;border:1px solid #e4e7f1;border-radius:10px;font-size:14px;box-sizing:border-box">
+      <button id="login-btn" style="width:100%;margin-top:12px;padding:11px;background:#2563eb;color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer">进入</button>
+      <div id="login-err" style="margin-top:10px;font-size:12px;color:#dc2626;text-align:center;min-height:16px"></div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const doLogin = async () => {
+    const t = ($('#login-token').value || '').trim();
+    if (!t) return;
+    try {
+      const r = await fetch(BASE + '/api/auth/login', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({token:t})});
+      if (r.ok) {
+        localStorage.setItem('ecom_op_token', t);
+        location.reload();
+      } else {
+        $('#login-err').textContent = '口令错误';
+      }
+    } catch (e) { $('#login-err').textContent = '网络错误'; }
+  };
+  $('#login-btn').onclick = doLogin;
+  $('#login-token').onkeydown = e => { if (e.key === 'Enter') doLogin(); };
+  $('#login-token').focus();
 }
 
 // 图片大图预览弹框（点击缩略图弹出，点遮罩/✕关闭）
@@ -451,6 +506,7 @@ function setView(view) {
   $('#page-title').textContent = VIEWS[view].title;
   $('#page-subtitle').textContent = VIEWS[view].sub;
   if (view === 'dashboard') renderDashboard();
+  if (view === 'guidehub') renderGuideHub();
   if (view === 'guide') renderGuide();
   if (view === 'products') renderProducts();
   if (view === 'catalog') renderCatalog();
@@ -460,8 +516,59 @@ function setView(view) {
   if (view === 'calendar') renderCalendar();
   if (view === 'keywords') renderKeywords();
   if (view === 'tasks') renderTasks();
+  if (view === 'scheduler') renderScheduler();
+  if (view === 'reviews') renderReviews();
   if (view === 'douyin') renderDouyin();
   if (view === 'logs') renderLogs();
+  if (view === 'packing') renderPacking();
+  if (view === 'freight') renderFreightView();
+  if (view === 'competitors') renderCompetitorsView();
+}
+
+function toggleNavGroup(name, ev) {
+  if (ev) ev.stopPropagation();
+  const sub = $('#nav-sub-' + name);
+  const group = $('#nav-group-' + name);
+  if (sub) {
+    sub.hidden = !sub.hidden;
+    if (group) group.classList.toggle('open', !sub.hidden);
+  }
+}
+
+// 从 GUIDE_ITEMS 动态生成「运营指南」侧边栏子菜单（首项为总览目录页）
+function renderGuideSubMenu() {
+  const sub = $('#nav-sub-guide');
+  if (!sub) return;
+  const items = [
+    { view:'guidehub', icon:'📚', title:'运营指南总览' },
+    ...GUIDE_ITEMS.map(it => ({ view:it.view, icon:it.icon, title:it.title }))
+  ];
+  sub.innerHTML = items.map(it =>
+    `<button class="nav-item sub" data-view="${it.view}"><span class="ico">${it.icon}</span><span class="nav-label">${it.title}</span></button>`
+  ).join('');
+}
+
+// 运营指南目录页：展示所有子模块的概要卡片，点击进入对应视图
+function renderGuideHub() {
+  const el = $('#view-guidehub');
+  el.innerHTML = `
+    <div style="background:linear-gradient(135deg,#7c3aed,#a855f7);border-radius:12px;padding:16px 18px;margin:12px;color:#fff">
+      <div style="font-size:16px;font-weight:700">📚 运营指南</div>
+      <div style="font-size:12px;opacity:.92;margin-top:6px;line-height:1.6">运营方法论、平台操作、选品规划，一站查阅。</div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;margin:12px">
+      ${GUIDE_ITEMS.map(it => `
+        <div onclick="setView('${it.view}')" style="background:#fff;border-radius:12px;padding:18px;box-shadow:0 1px 3px rgba(0,0,0,.06);cursor:pointer;transition:transform .15s,box-shadow .15s" onmouseover="this.style.transform='translateY(-2px)';this.style.boxShadow='0 6px 16px rgba(0,0,0,.1)'" onmouseout="this.style.transform='';this.style.boxShadow=''">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+            <span style="width:40px;height:40px;border-radius:10px;background:#f3e8ff;display:grid;place-items:center;font-size:20px">${it.icon}</span>
+            <span style="font-size:15px;font-weight:700;color:#1e3a5f">${it.title}</span>
+          </div>
+          <div style="font-size:13px;color:#64748b;line-height:1.6">${it.desc}</div>
+          <div style="font-size:12px;color:#7c3aed;margin-top:10px;font-weight:600">进入 →</div>
+        </div>
+      `).join('')}
+    </div>
+  `;
 }
 
 /* ---------------- 操作手册 ---------------- */
@@ -716,6 +823,19 @@ function trendSVG(history) {
   </svg>`;
 }
 
+function lastMonthRange() {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = now.getMonth();
+  const ly = m === 0 ? y - 1 : y;
+  const lm = m === 0 ? 11 : m - 1;
+  const lastDay = new Date(ly, lm + 1, 0).getDate();
+  const pad = n => String(n).padStart(2, '0');
+  const start = `${ly}-${pad(lm + 1)}-01`;
+  const end = `${ly}-${pad(lm + 1)}-${pad(lastDay)}`;
+  return { start, end, label: `${start} ~ ${end}` };
+}
+
 async function renderDashboard() {
   const p = shopProducts();
   const count = p.length;
@@ -725,22 +845,43 @@ async function renderDashboard() {
   const risky = p.filter(x => x.break_even_roi!==Infinity && x.break_even_roi > 3.5).length;
   const done = shopTasks().filter(t=>t.done).length;
 
-  // 拉真实经营数据（商品库 catalog），按当前店铺平台匹配
+  // 拉真实经营数据（商品库 catalog），按当前店铺平台匹配，默认上月日期段
+  const lm = lastMonthRange();
   let ov = null;
   try {
-    const resp = await api('/api/catalog/platform-overview');
+    const resp = await api(`/api/catalog/platform-overview?start=${lm.start}&end=${lm.end}`);
     ov = (resp.items || []).find(x => x.name === state.shop) || null;
   } catch (e) {}
 
   const realHTML = ov ? `
     <div class="panel" style="margin-bottom:16px">
-      <div class="panel-header"><h2>📊 真实经营数据（${esc(state.shop)}）</h2><span class="badge">商品库</span></div>
+      <div class="panel-header"><h2>📊 真实经营数据（${esc(state.shop)}）</h2><span class="badge">${lm.label}</span></div>
       <div class="stats-grid">
-        <div class="stat-card"><div class="label">真实商品数</div><div class="value">${ov.products}</div><div class="hint">catalog 商品库</div></div>
-        <div class="stat-card"><div class="label">SKU 数</div><div class="value">${ov.skus}</div><div class="hint">规格明细</div></div>
-        <div class="stat-card"><div class="label">订单数</div><div class="value">${ov.orders}</div><div class="hint">已导入订单</div></div>
-        <div class="stat-card"><div class="label">GMV（元）</div><div class="value">¥${fmt(ov.gmv)}</div><div class="hint">买家实付</div></div>
+        <div class="stat-card"><div class="label">真实商品数</div><div class="value">${ov.products}</div><div class="hint">catalog 商品库（全量）</div></div>
+        <div class="stat-card"><div class="label">SKU 数</div><div class="value">${ov.skus}</div><div class="hint">规格明细（全量）</div></div>
+        <div class="stat-card"><div class="label">订单数</div><div class="value">${ov.orders}</div><div class="hint">${lm.label} 有效成交</div></div>
+        <div class="stat-card"><div class="label">GMV（元）</div><div class="value">¥${fmt(ov.gmv)}</div><div class="hint">${lm.label} 买家实付</div></div>
       </div>
+    </div>
+  ` : '';
+
+  // 三方对账异常（打单 / 订单 / 运费）
+  let threeAlerts = [];
+  try {
+    const three = await api('/api/freight/three-way');
+    for (const en of (three.entries || [])) {
+      for (const r of (en.months || [])) {
+        const issues = threeWayFlags(r).map(f => f.text);
+        if (issues.length) threeAlerts.push({ entry: en.name, ym: r.ym, issues });
+      }
+    }
+  } catch (e) {}
+
+  const alertHTML = threeAlerts.length ? `
+    <div class="panel" style="margin-bottom:16px;border-left:4px solid #dc2626;cursor:pointer" onclick="setView('freight')">
+      <div class="panel-header"><h2>⚠️ 对账异常 ${threeAlerts.length} 条</h2><span class="badge">点击查看</span></div>
+      ${threeAlerts.slice(0, 5).map(a => `<div class="task-row"><div class="task-body"><div class="task-title">${esc(a.entry)} ${esc(fmtYm(a.ym))}</div><div class="task-meta" style="color:#dc2626">${esc(a.issues.join('、'))}</div></div></div>`).join('')}
+      ${threeAlerts.length > 5 ? `<div class="perf-hint" style="margin-top:6px">还有 ${threeAlerts.length - 5} 条，点进「运费结算」查看</div>` : ''}
     </div>
   ` : '';
 
@@ -752,6 +893,8 @@ async function renderDashboard() {
       </div>
       <button class="cta" data-nav="products">＋ 新增商品投产</button>
     </section>
+
+    ${alertHTML}
 
     ${realHTML}
 
@@ -931,7 +1074,7 @@ function renderProducts(editingProduct = null) {
 }
 
 /* ---------------- 商品库（平台 + 电商层级） ---------------- */
-const catalogCache = { tree: [], stats: {}, orders: [], analysis: null, filter: '', mods: [], modCounts: {}, goodsEffect: [], performance: null, perfAll: null, promoAnalysis: null, lowStock: [], selection: null, freight: null, freightMatch: null, freightRate: [], freightCompare: null, suppliers: [], supplierProducts: {}, freightMonth: '', freightShop: null, deleteMode: false, perfShop: null, perfRange: null, perfPreset: 'all', perfStatuses: [], orderStatuses: [], serverToday: '' };
+const catalogCache = { tree: [], stats: {}, orders: [], analysis: null, filter: '', mods: [], modCounts: {}, goodsEffect: [], performance: null, perfAll: null, promoAnalysis: null, realRoi: null, promoShop: 'all', promoPeriod: 'all', lowStock: [], selection: null, freight: null, freightMatch: null, freightRate: [], freightCompare: null, suppliers: [], supplierProducts: {}, freightMonth: '', freightShop: null, deleteMode: false, perfShop: null, perfRange: null, perfPreset: 'all', perfStatuses: [], orderStatuses: [], serverToday: '' };
 
 // 日期工具：'YYYY-MM-DD' -> 本地 Date / Date -> 'YYYY-MM-DD'
 const dToObj = (s) => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
@@ -992,7 +1135,7 @@ async function renderCatalog() {
   const el = $('#view-catalog');
   el.innerHTML = '<div class="empty"><div class="big">📦</div>加载中…</div>';
   try {
-    const [stats, treeResp, ordersResp, analysis, modsResp, countsResp, geResp, perfResp, perfAllResp, promoResp, lowResp, selResp, freightResp, freightMatchResp, freightRateResp, freightCompareResp, suppliersResp, statusesResp] = await Promise.all([
+    const [stats, treeResp, ordersResp, analysis, modsResp, countsResp, geResp, perfResp, perfAllResp, promoResp, realRoiResp, lowResp, selResp, freightResp, freightMatchResp, freightRateResp, freightCompareResp, suppliersResp, statusesResp] = await Promise.all([
       api('/api/catalog/stats'),
       api('/api/catalog/tree'),
       api('/api/catalog/orders?limit=5000'),
@@ -1003,6 +1146,7 @@ async function renderCatalog() {
       api('/api/catalog/performance' + perfQs()),
       api('/api/catalog/performance-all' + perfQs()),
       api('/api/catalog/promotions-analysis'),
+      api('/api/catalog/product-real-roi'),
       api('/api/catalog/low-stock'),
       api('/api/catalog/selection'),
       api('/api/catalog/freight'),
@@ -1023,6 +1167,7 @@ async function renderCatalog() {
     catalogCache.perfAll = perfAllResp || null;
     if (perfAllResp && perfAllResp.server_today) catalogCache.serverToday = perfAllResp.server_today;
     catalogCache.promoAnalysis = promoResp || null;
+    catalogCache.realRoi = realRoiResp || null;
     catalogCache.lowStock = lowResp.items || [];
     catalogCache.selection = selResp || null;
     catalogCache.freight = freightResp || null;
@@ -1185,7 +1330,7 @@ async function loadFreight(month, shop) {
     catalogCache.freight = fr;
     catalogCache.freightMatch = ma;
   } catch (e) { toast(e.message); return; }
-  const freightEl = $('#catalog-freight');
+  const freightEl = $('#freight-panel');
   if (freightEl) renderFreightPanel(freightEl);
 }
 
@@ -1311,6 +1456,318 @@ function renderFreightPanel(freightEl) {
   freightEl.querySelector('[data-freight-export]').onclick = () => {
     window.open(BASE + '/api/catalog/export?type=freight', '_blank');
   };
+}
+
+
+/* ---------------- 运费结算（独立视图） ---------------- */
+// 三方比对异常判定：返回 [{level,text}]，level ∈ 红/黄/橙
+function threeWayFlags(r) {
+  const flags = [];
+  if (r.pack_count > r.order_count) flags.push({ level: '红', text: '打单>订单' });
+  if (r.freight_count > 0 && r.pack_count === 0) flags.push({ level: '黄', text: '有运费无打单' });
+  else if (r.freight_count > 0 && r.pack_count > 0 && r.freight_count !== r.pack_count) flags.push({ level: '黄', text: '运费票数≠打单' });
+  if (r.avg_fee != null && (r.avg_fee < 2.2 || r.avg_fee > 4.2)) flags.push({ level: '橙', text: '单均运费偏离' });
+  return flags;
+}
+
+async function renderFreightView() {
+  const el = $('#view-freight');
+  el.innerHTML = '<div class="empty"><div class="big">🚚</div>加载中…</div>';
+  try {
+    const [freightResp, matchResp, rateResp, compareResp, threeResp, mappingResp, treeResp] = await Promise.all([
+      api('/api/catalog/freight'),
+      api('/api/catalog/freight/match-analysis'),
+      api('/api/catalog/freight-rate'),
+      api('/api/catalog/freight-compare'),
+      api('/api/freight/three-way'),
+      api('/api/freight/mapping'),
+      api('/api/catalog/tree'),
+    ]);
+    catalogCache.freight = freightResp || null;
+    catalogCache.freightMatch = matchResp || null;
+    catalogCache.freightRate = rateResp.items || [];
+    catalogCache.freightCompare = compareResp || null;
+    if (treeResp && treeResp.items) catalogCache.tree = treeResp.items;
+    paintFreightView(el, threeResp || {}, (mappingResp && mappingResp.items) || [], (treeResp && treeResp.items) || []);
+  } catch (err) {
+    el.innerHTML = `<div class="empty">❌ ${esc(err.message)}</div>`;
+  }
+}
+
+function paintFreightView(el, threeWay, mappings, tree) {
+  const shopList = [];
+  for (const pl of tree) for (const sh of (pl.shops || [])) shopList.push(sh);
+  const shopHint = shopList.map(sh => sh.id + '=' + sh.name).join('、');
+
+  // 三方比对
+  const entries = threeWay.entries || [];
+  let threeHTML = '';
+  if (!entries.length) {
+    threeHTML = '<div class="empty">暂无三方比对数据</div>';
+  } else {
+    threeHTML = entries.map(en => {
+      const rows = en.months || [];
+      const rowHTML = rows.length ? rows.map(r => {
+        const flags = threeWayFlags(r);
+        const colors = {红:'#dc2626', 黄:'#d97706', 橙:'#ea580c'};
+        const flag = flags.length
+          ? flags.map(f => `<span style="color:${colors[f.level]};font-size:11px;font-weight:700">⚠${f.text}</span>`).join(' ')
+          : '<span style="color:#16a34a;font-size:11px;font-weight:700">✓ 正常</span>';
+        return `<tr>
+          <td>${esc(fmtYm(r.ym))}</td>
+          <td>${r.order_count}</td>
+          <td>${r.pack_count}</td>
+          <td>${r.freight_count}</td>
+          <td>${r.freight_fee ? '¥' + fmt(r.freight_fee) : '—'}</td>
+          <td>${flag}</td>
+        </tr>`;
+      }).join('') : '<tr><td colspan="6" style="text-align:center;color:#9aa4bb">暂无数据（缺打单登记 / 订单 / 运费）</td></tr>';
+      return `<div class="orders-panel" style="margin-bottom:12px">
+        <div class="orders-panel-head"><span class="orders-panel-title">${esc(en.name)}</span><span class="orders-panel-hint">店铺：${esc(en.shop_names || '未配置')} ｜ 运费账号：${esc(en.freight_account || '未配置')}</span></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>月份</th><th>订单数</th><th>打单数</th><th>运费票数</th><th>运费金额</th><th>校验</th></tr></thead>
+          <tbody>${rowHTML}</tbody>
+        </table></div>
+      </div>`;
+    }).join('');
+  }
+
+  // 映射配置
+  let mappingHTML = mappings.map(m => `
+    <div style="display:flex;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid #f5f6fa">
+      <span style="width:108px;font-size:13px;font-weight:700;color:#17203a;flex:0 0 auto">${esc(m.entry_name || m.entry)}</span>
+      <input data-map-shop="${m.entry}" value="${esc(m.shop_ids || '')}" placeholder="店铺ID逗号分隔" style="flex:1;min-width:0;padding:6px 8px;border:1px solid #e4e7f1;border-radius:6px;font-size:12px">
+      <input data-map-account="${m.entry}" value="${esc(m.freight_account || '')}" placeholder="运费账号" style="flex:1;min-width:0;padding:6px 8px;border:1px solid #e4e7f1;border-radius:6px;font-size:12px">
+      <button class="btn xs" data-map-save="${m.entry}" style="background:#eff6ff;color:#1d4ed8;border-color:#bfdbfe;flex:0 0 auto">保存</button>
+    </div>`).join('');
+
+  el.innerHTML = `
+    <div style="background:linear-gradient(135deg,#0ea5e9,#0284c7);border-radius:12px;padding:14px 16px;margin:12px;color:#fff">
+      <div style="font-size:15px;font-weight:700">🚚 运费结算</div>
+      <div style="font-size:12px;opacity:.92;margin-top:6px">打单数 · 订单数 · 运费，三方对账预警</div>
+    </div>
+    <div class="orders-panel" style="margin:12px">
+      <div class="orders-panel-head"><span class="orders-panel-title">🔗 入口映射</span><span class="orders-panel-hint">打单入口 → 店铺ID → 运费账号（保存后三方比对自动对齐）</span></div>
+      <div style="padding:12px">
+        ${mappingHTML}
+        <div class="perf-hint" style="margin-top:8px">店铺ID：${esc(shopHint)}</div>
+      </div>
+    </div>
+    <div style="margin:12px">
+      <div style="font-size:14px;font-weight:700;color:#1e3a5f;margin-bottom:8px">🔍 三方比对（按月）</div>
+      ${threeHTML}
+    </div>
+    <div style="margin:12px">
+      <div style="font-size:14px;font-weight:700;color:#1e3a5f;margin-bottom:8px">📦 运费账单</div>
+      <div id="freight-panel"></div>
+    </div>`;
+
+  renderFreightPanel($('#freight-panel'));
+
+  el.querySelectorAll('[data-map-save]').forEach(btn => {
+    btn.onclick = async () => {
+      const entry = btn.dataset.mapSave;
+      const shopInput = el.querySelector('[data-map-shop="' + entry + '"]');
+      const accountInput = el.querySelector('[data-map-account="' + entry + '"]');
+      try {
+        await api('/api/freight/mapping', 'POST', { entry: entry, shop_ids: shopInput.value.trim(), freight_account: accountInput.value.trim() });
+        toast('映射已保存');
+        renderFreightView();
+      } catch (e) { toast(e.message); }
+    };
+  });
+}
+
+
+/* ---------------- 竞品监控 ---------------- */
+const competitorState = { shopId: 5, ppid: '63360840', keyword: '门后挂钩', loading: false, items: [] };
+const COMPETITOR_SHOPS = { 5: '嘉裕工艺品', 3: '如若月下', 1: '闲时来工艺', 6: 'OSHIYI欧世艺旗舰店' };
+const buyerReviewState = { goodsId: '444093761930', loading: false, brief: null, full: null };
+
+async function renderCompetitorsView() {
+  const el = $('#view-competitors');
+  paintCompetitors(el);
+  if (competitorState.ppid && competitorState.keyword) await loadCompetitors();
+}
+
+function paintCompetitors(el) {
+  el.innerHTML = `
+    <div style="background:linear-gradient(135deg,#7c3aed,#a855f7);border-radius:12px;padding:14px 16px;margin:12px;color:#fff">
+      <div style="font-size:15px;font-weight:700">🔍 竞品监控</div>
+      <div style="font-size:12px;opacity:.92;margin-top:6px">搜同类商品，看价格/销量/主图，人工确认竞品</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:14px;margin:12px;box-shadow:0 1px 3px rgba(0,0,0,.05)">
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <select id="comp-shop" style="flex:1;padding:8px;border:1px solid #e4e7f1;border-radius:8px;font-size:13px">
+          ${Object.entries(COMPETITOR_SHOPS).map(([k,v]) => `<option value="${k}" ${competitorState.shopId==k?'selected':''}>${v}</option>`).join('')}
+        </select>
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <input id="comp-ppid" value="${esc(competitorState.ppid)}" placeholder="商品ID（如 63360840）" style="flex:1;min-width:0;padding:8px;border:1px solid #e4e7f1;border-radius:8px;font-size:13px">
+        <input id="comp-keyword" value="${esc(competitorState.keyword)}" placeholder="搜索词（如 门后挂钩）" style="flex:1;min-width:0;padding:8px;border:1px solid #e4e7f1;border-radius:8px;font-size:13px">
+      </div>
+      <button class="btn primary" style="width:100%" onclick="collectCompetitors()">🔍 搜竞品</button>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:14px;margin:12px;box-shadow:0 1px 3px rgba(0,0,0,.05)">
+      <div style="font-size:13px;font-weight:700;margin-bottom:4px">💬 买家端评论提取</div>
+      <div style="font-size:11px;color:#8899b0;margin-bottom:8px">走买家端详情页 · 提取评价标签+评论样本 · 独立存储不混后台评价</div>
+      <div style="display:flex;gap:8px">
+        <input id="br-goods-id" value="${esc(buyerReviewState.goodsId)}" placeholder="商品 goods_id（如 444093761930）" style="flex:1;min-width:0;padding:8px;border:1px solid #e4e7f1;border-radius:8px;font-size:13px">
+        <button class="btn primary" style="flex:0 0 auto" onclick="collectBuyerReview()">标签</button>
+        <button class="btn" style="flex:0 0 auto;background:#0ea5e9;color:#fff" onclick="collectBuyerReviewFull()">采全文</button>
+      </div>
+      <div id="br-result" style="margin-top:10px"></div>
+    </div>
+    <div id="comp-list" style="margin:12px"><div class="empty">输入商品ID和搜索词，点「搜竞品」</div></div>`;
+
+  $('#comp-shop').onchange = e => { competitorState.shopId = parseInt(e.target.value, 10); };
+  $('#comp-ppid').oninput = e => { competitorState.ppid = e.target.value.trim(); };
+  $('#comp-keyword').oninput = e => { competitorState.keyword = e.target.value.trim(); };
+  $('#br-goods-id').oninput = e => { buyerReviewState.goodsId = e.target.value.trim(); };
+  if (buyerReviewState.goodsId) loadBuyerReview();
+}
+
+async function collectCompetitors() {
+  const ppid = competitorState.ppid, keyword = competitorState.keyword;
+  if (!ppid || !keyword) return toast('请填商品ID和搜索词');
+  competitorState.loading = true;
+  $('#comp-list').innerHTML = '<div class="empty"><div class="big">🔍</div>搜索中…（约15秒，买家端抓取）</div>';
+  try {
+    await api('/api/competitors/collect', 'POST', { shop_id: competitorState.shopId, platform_product_id: ppid, keyword });
+    for (let i = 0; i < 20; i++) {
+      await new Promise(r => setTimeout(r, 3000));
+      const d = await api('/api/competitors?platform_product_id=' + encodeURIComponent(ppid) + '&keyword=' + encodeURIComponent(keyword));
+      if (d.items && d.items.length) { competitorState.items = d.items; renderCompList(); return; }
+    }
+    $('#comp-list').innerHTML = '<div class="empty">❌ 采集超时，请确认买家端登录态（9236）</div>';
+  } catch (e) {
+    $('#comp-list').innerHTML = `<div class="empty">❌ ${esc(e.message)}</div>`;
+  }
+  competitorState.loading = false;
+}
+
+async function loadCompetitors() {
+  try {
+    const d = await api('/api/competitors?platform_product_id=' + encodeURIComponent(competitorState.ppid) + '&keyword=' + encodeURIComponent(competitorState.keyword));
+    competitorState.items = d.items || [];
+    renderCompList();
+  } catch (e) {
+    $('#comp-list').innerHTML = `<div class="empty">❌ ${esc(e.message)}</div>`;
+  }
+}
+
+function renderCompList() {
+  const items = competitorState.items;
+  if (!items.length) { $('#comp-list').innerHTML = '<div class="empty">暂无竞品数据</div>'; return; }
+  const okCount = items.filter(x => x.status === 'ok').length;
+  const noCount = items.filter(x => x.status === 'no').length;
+  let h = `<div style="font-size:12px;color:#4b5677;margin:0 0 8px">共 ${items.length} 个 · 已确认 ${okCount} 个 · 已排除 ${noCount} 个</div>`;
+  h += items.map(c => {
+    const st = c.status;
+    const border = st === 'ok' ? '2px solid #16a34a' : st === 'no' ? '2px solid #e4e7f1' : '1px solid #e4e7f1';
+    const opacity = st === 'no' ? '0.45' : '1';
+    return `<div style="display:flex;gap:10px;background:#fff;border-radius:12px;padding:10px;margin-bottom:10px;box-shadow:0 1px 3px rgba(0,0,0,.05);border:${border};opacity:${opacity}">
+      ${c.comp_img ? `<img src="${esc(c.comp_img)}" style="width:72px;height:72px;object-fit:cover;border-radius:8px;flex:0 0 auto;background:#f0f2f7" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'">` : '<div style="width:72px;height:72px;background:#f0f2f7;border-radius:8px;flex:0 0 auto"></div>'}
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;color:#17203a;line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc(c.comp_title)}</div>
+        <div style="margin-top:4px;font-size:15px;font-weight:700;color:#dc2626">${c.comp_price != null ? '¥' + fmt(c.comp_price) : '—'} <span style="font-size:11px;color:#8899b0;font-weight:400">${esc(c.comp_sales || '')}</span></div>
+        <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
+          ${st !== 'ok' ? `<button class="btn xs" style="background:#f0fdf4;color:#16a34a;border-color:#bbf7d0" onclick="confirmCompetitor(${c.id},'ok')">✓ 是竞品</button>` : ''}
+          ${st !== 'no' ? `<button class="btn xs" style="background:#fee2e2;color:#dc2626;border-color:#fca5a5" onclick="confirmCompetitor(${c.id},'no')">✗ 排除</button>` : ''}
+          ${(st === 'ok' || st === 'no') ? `<button class="btn xs" onclick="confirmCompetitor(${c.id},'pending')">撤销</button>` : ''}
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+  $('#comp-list').innerHTML = h;
+}
+
+async function confirmCompetitor(id, status) {
+  try {
+    await api('/api/competitors/confirm', 'POST', { id, status });
+    const it = competitorState.items.find(x => x.id === id);
+    if (it) it.status = status;
+    renderCompList();
+  } catch (e) { toast(e.message); }
+}
+
+/* ---------------- 买家端评论提取 ---------------- */
+
+async function collectBuyerReview() {
+  const gid = buyerReviewState.goodsId;
+  if (!gid) return toast('请填 goods_id');
+  $('#br-result').innerHTML = '<div class="empty"><div class="big">💬</div>提取标签中…（约30秒，买家端抓取）</div>';
+  try {
+    await api('/api/buyer-reviews/collect', 'POST', { goods_id: gid });
+    for (let i = 0; i < 20; i++) {
+      await new Promise(r => setTimeout(r, 3000));
+      const d = await api('/api/buyer-reviews?goods_id=' + encodeURIComponent(gid));
+      const brief = (d.items || []).find(x => x.source === 'brief');
+      if (brief) { buyerReviewState.brief = brief; renderBuyerReview(); return; }
+    }
+    $('#br-result').innerHTML = '<div class="empty">❌ 提取超时，请确认买家端登录态（9236）</div>';
+  } catch (e) {
+    $('#br-result').innerHTML = `<div class="empty">❌ ${esc(e.message)}</div>`;
+  }
+}
+
+async function collectBuyerReviewFull() {
+  const gid = buyerReviewState.goodsId;
+  if (!gid) return toast('请填 goods_id');
+  $('#br-result').innerHTML = '<div class="empty"><div class="big">💬</div>全文采集中…（约2分钟，翻页抓取）</div>';
+  try {
+    await api('/api/buyer-reviews/collect-full', 'POST', { goods_id: gid, target: 200 });
+    for (let i = 0; i < 45; i++) {
+      await new Promise(r => setTimeout(r, 4000));
+      const d = await api('/api/buyer-reviews?goods_id=' + encodeURIComponent(gid));
+      const full = (d.items || []).find(x => x.source === 'full');
+      if (full) { buyerReviewState.full = full; renderBuyerReview(); return; }
+    }
+    $('#br-result').innerHTML = '<div class="empty">❌ 全文采集超时，请确认买家端登录态（9236）</div>';
+  } catch (e) {
+    $('#br-result').innerHTML = `<div class="empty">❌ ${esc(e.message)}</div>`;
+  }
+}
+
+async function loadBuyerReview() {
+  try {
+    const d = await api('/api/buyer-reviews?goods_id=' + encodeURIComponent(buyerReviewState.goodsId));
+    const items = d.items || [];
+    const brief = items.find(x => x.source === 'brief');
+    const full = items.find(x => x.source === 'full');
+    if (brief) buyerReviewState.brief = brief;
+    if (full) buyerReviewState.full = full;
+    if (brief || full) renderBuyerReview();
+  } catch (e) { /* 静默 */ }
+}
+
+function renderBuyerReview() {
+  const brief = buyerReviewState.brief;
+  const full = buyerReviewState.full;
+  if (!brief && !full) return;
+  let h = '';
+  if (brief) {
+    h += `<div style="font-size:12px;color:#4b5677;margin-bottom:6px">${esc(brief.goods_name || brief.goods_id)} · 评论总数 <b style="color:#dc2626;font-size:14px">${(brief.total_count || 0).toLocaleString()}</b></div>`;
+    if (brief.tags && brief.tags.length) {
+      h += '<div style="display:flex;flex-wrap:wrap;gap:6px">';
+      h += brief.tags.map(t => `<span style="font-size:12px;padding:4px 9px;border-radius:7px;background:#f5f3ff;color:#6d28d9">${esc(t.tag)} <b>${t.count}</b></span>`).join('');
+      h += '</div>';
+    }
+    if (brief.comments && brief.comments.length) {
+      h += '<div style="margin-top:10px;font-size:12px;color:#4b5677;font-weight:600">评论样本：</div>';
+      h += brief.comments.map(c => `<div style="margin-top:6px;padding:8px;background:#f8fafc;border-radius:8px;font-size:12px;line-height:1.55;color:#17203a"><b>${esc(c.user || '匿名')}</b>：${esc(c.content || '')}</div>`).join('');
+    }
+  }
+  if (full) {
+    h += `<div style="margin-top:${brief ? '12px' : '0'};padding-top:${brief ? '10px' : '0'};${brief ? 'border-top:1px dashed #e4e7f1;' : ''}font-size:12px;color:#4b5677">📋 全文评论：已采 <b style="color:#0ea5e9">${(full.comments || []).length}</b> 条 / 总计 ${(full.total_count || 0).toLocaleString()}</div>`;
+    h += '<div style="max-height:420px;overflow-y:auto;margin-top:6px">';
+    h += (full.comments || []).map(c => `<div style="margin-bottom:6px;padding:8px;background:#f8fafc;border-radius:8px;font-size:12px;line-height:1.5">
+      <div style="color:#17203a"><b>${esc(c.user || '匿名')}</b> <span style="color:#8899b0;font-size:11px">${esc(c.spec || '')}</span></div>
+      <div style="color:#4b5677;margin-top:2px">${esc(c.content || '')}</div>
+    </div>`).join('');
+    h += '</div>';
+  }
+  $('#br-result').innerHTML = h;
 }
 
 
@@ -1593,15 +2050,7 @@ function paintCatalog() {
       </div>
       <div class="orders-panel-body" id="catalog-selection" hidden></div>
     </div>
-    <div class="orders-panel">
-      <div class="orders-panel-head" data-toggle-freight>
-        <span class="orders-fold-icon">▸</span>
-        <span class="orders-panel-title">🚚 运费分析</span>
-        <span class="orders-panel-count">${(catalogCache.freight && catalogCache.freight.total) || 0}</span>
-        <span class="orders-panel-hint">快递账单 + 订单匹配</span>
-      </div>
-      <div class="orders-panel-body" id="catalog-freight" hidden></div>
-    </div>`;
+`;
 
   el.innerHTML = html;
   const s = $('#catalog-search');
@@ -1767,46 +2216,98 @@ function paintCatalog() {
       promoEl.hidden = !willOpen;
       promoToggle.querySelector('.orders-fold-icon').textContent = willOpen ? '▾' : '▸';
     };
-    const pa = catalogCache.promoAnalysis;
-    if (pa && pa.summary && pa.summary.count > 0) {
-      const sm = pa.summary;
-      const top = pa.top_roi || [];
-      const promoByPlatform = groupByPlatform(top, r => r.shop_id || 0);
+    const renderPromo = () => {
+      const realRoiData = (catalogCache.realRoi && catalogCache.realRoi.items) || [];
+      if (!realRoiData.length) {
+        promoEl.innerHTML = '<div class="empty">暂无推广数据，点「⬆ 导入」导入推广 CSV</div>';
+        return;
+      }
+      // 店铺 + 周期选项
+      const shopMap = {};
+      realRoiData.forEach(r => { if (!shopMap[r.shop_id]) shopMap[r.shop_id] = r.shop_name || ('店铺' + r.shop_id); });
+      const shopOpts = Object.entries(shopMap).map(([id, name]) => ({ id: Number(id), name }));
+      const periodSet = new Set();
+      realRoiData.forEach(r => (r.periods || '').split(',').forEach(p => p && periodSet.add(p)));
+      const periodOpts = [...periodSet].sort();
+      // 筛选状态（跨渲染保持）
+      const shopFilter = catalogCache.promoShop || 'all';
+      const periodFilter = catalogCache.promoPeriod || 'all';
+      // 过滤
+      let filtered = realRoiData;
+      if (shopFilter !== 'all') filtered = filtered.filter(r => r.shop_id === Number(shopFilter));
+      if (periodFilter !== 'all') filtered = filtered.filter(r => (r.periods || '').includes(periodFilter));
+      // 汇总
+      const sum = (key) => filtered.reduce((s, r) => s + (r[key] || 0), 0);
+      const totalSpend = sum('total_spend');
+      const dealAmount = sum('deal_amount');
+      const realAmount = sum('real_amount');
+      const imp = sum('impressions');
+      const clk = sum('clicks');
+      const promoRoi = totalSpend ? (dealAmount / totalSpend).toFixed(2) : '—';
+      const realRoiSum = totalSpend ? (realAmount / totalSpend).toFixed(2) : '—';
+      // 按店铺分组
+      const byShop = {};
+      filtered.forEach(r => { (byShop[r.shop_id] = byShop[r.shop_id] || []).push(r); });
       promoEl.innerHTML = `
-        <div class="perf-summary" style="margin-bottom:14px">
-          <div class="perf-card"><div class="p-label">推广计划</div><div class="p-value">${sm.count}</div></div>
-          <div class="perf-card"><div class="p-label">总花费</div><div class="p-value">¥${fmt(sm.total_spend)}</div></div>
-          <div class="perf-card"><div class="p-label">成交额</div><div class="p-value">¥${fmt(sm.amt)}</div></div>
-          <div class="perf-card"><div class="p-label">平均ROI</div><div class="p-value">${sm.avg_roi != null ? sm.avg_roi : '—'}</div></div>
-          <div class="perf-card"><div class="p-label">曝光/点击</div><div class="p-value">${sm.impressions}/${sm.clicks}</div></div>
+        <div class="promo-filter" style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
+          <select id="promo-shop-filter" style="padding:7px 10px;border:1px solid #cdd7e5;border-radius:8px;font-size:12px;background:#fff">
+            <option value="all">🏪 全部店铺</option>
+            ${shopOpts.map(s => `<option value="${s.id}" ${shopFilter === String(s.id) ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}
+          </select>
+          <select id="promo-period-filter" style="padding:7px 10px;border:1px solid #cdd7e5;border-radius:8px;font-size:12px;background:#fff">
+            <option value="all">📅 全部周期</option>
+            ${periodOpts.map(p => `<option value="${esc(p)}" ${periodFilter === p ? 'selected' : ''}>${esc(p)}</option>`).join('')}
+          </select>
         </div>
-        ${Object.entries(promoByPlatform).map(([pname, shops]) => `
-        <div class="orders-platform">
-          <div class="orders-platform-head"><h4>🛒 ${esc(pname)}</h4></div>
-          ${shops.map(sg => `
+        <div class="perf-summary" style="margin-bottom:14px">
+          <div class="perf-card"><div class="p-label">推广计划</div><div class="p-value">${filtered.length}</div></div>
+          <div class="perf-card"><div class="p-label">总花费</div><div class="p-value">¥${fmt(totalSpend)}</div></div>
+          <div class="perf-card"><div class="p-label">平台成交额</div><div class="p-value">¥${fmt(dealAmount)}</div></div>
+          <div class="perf-card"><div class="p-label">平均ROI(平台)</div><div class="p-value">${promoRoi}</div></div>
+          <div class="perf-card"><div class="p-label">真实成交额</div><div class="p-value">¥${fmt(realAmount)}</div></div>
+          <div class="perf-card"><div class="p-label">真实ROI</div><div class="p-value" style="${realRoiSum !== '—' && Number(realRoiSum) < 1 ? 'color:#dc2626' : ''}">${realRoiSum}</div></div>
+          <div class="perf-card"><div class="p-label">曝光/点击</div><div class="p-value">${imp}/${clk}</div></div>
+        </div>
+        ${Object.entries(byShop).map(([sid, rows]) => {
+          const sname = shopMap[Number(sid)] || ('店铺' + sid);
+          return `
+          <div class="orders-platform">
+            <div class="orders-platform-head"><h4>🏪 ${esc(sname)}</h4></div>
             <div class="orders-shop">
               <div class="orders-shop-head" data-toggle-order-shop>
                 <span class="orders-shop-fold">▸</span>
-                <h5>🏪 ${esc(sg.shop)} <span class="badge">${sg.rows.length} 条</span></h5>
+                <h5>📢 推广明细 <span class="badge">${rows.length} 条</span></h5>
               </div>
               <div class="orders-shop-body" hidden>
                 <div class="table-wrap"><table>
-                  <thead><tr><th>商品</th><th>花费</th><th>成交额</th><th>ROI</th><th>成交笔数</th><th>曝光</th><th>点击</th></tr></thead>
-                  <tbody>${sg.rows.map(r => `
-                    <tr>
-                      <td title="${esc(r.product_name)}">${esc((r.product_name || '').slice(0, 16))}${(r.product_name || '').length > 16 ? '…' : ''}</td>
-                      <td>¥${fmt(r.total_spend)}</td>
-                      <td>¥${fmt(r.amt)}</td>
-                      <td>${r.roi != null ? r.roi : '—'}</td>
-                      <td>${r.deals}</td>
-                      <td>${r.imp}</td>
-                      <td>${r.clk}</td>
-                    </tr>`).join('')}
+                  <thead><tr><th>商品</th><th>花费</th><th>平台成交</th><th>平台ROI</th><th>真实成交</th><th>真实ROI</th><th>真实单数</th><th>曝光</th><th>点击</th></tr></thead>
+                  <tbody>${rows.map(r => `<tr>
+                    <td title="${esc(r.product_name)}">${esc((r.product_name || '').slice(0, 14))}${(r.product_name || '').length > 14 ? '…' : ''}</td>
+                    <td>¥${fmt(r.total_spend)}</td>
+                    <td>¥${fmt(r.deal_amount)}</td>
+                    <td>${r.promo_roi != null ? r.promo_roi : '—'}</td>
+                    <td>${r.real_amount != null ? '¥' + fmt(r.real_amount) : '—'}</td>
+                    <td style="${r.real_roi != null && r.real_roi < 1 ? 'color:#dc2626;font-weight:700' : ''}">${r.real_roi != null ? r.real_roi : '—'}</td>
+                    <td>${r.real_count != null ? r.real_count : '—'}</td>
+                    <td>${r.impressions}</td>
+                    <td>${r.clicks}</td>
+                  </tr>`).join('')}
                   </tbody></table></div>
               </div>
-            </div>`).join('')}
-        </div>`).join('')}`;
-      // 推广明细内店铺折叠切换
+            </div>
+          </div>`;
+        }).join('')}
+      `;
+      // 绑定筛选事件
+      promoEl.querySelector('#promo-shop-filter').onchange = (e) => {
+        catalogCache.promoShop = e.target.value;
+        renderPromo();
+      };
+      promoEl.querySelector('#promo-period-filter').onchange = (e) => {
+        catalogCache.promoPeriod = e.target.value;
+        renderPromo();
+      };
+      // 店铺折叠切换
       promoEl.querySelectorAll('[data-toggle-order-shop]').forEach(t => {
         t.onclick = () => {
           const shop = t.closest('.orders-shop');
@@ -1817,9 +2318,8 @@ function paintCatalog() {
           icon.textContent = willOpen ? '▾' : '▸';
         };
       });
-    } else {
-      promoEl.innerHTML = '<div class="empty">暂无推广数据，点「⬆ 导入」导入推广 CSV</div>';
-    }
+    };
+    renderPromo();
   }
 
   // 库存预警折叠切换 + 渲染
@@ -1938,18 +2438,6 @@ function paintCatalog() {
         };
       });
     }
-  }
-
-  // 运费分析折叠切换 + 渲染
-  const freightToggle = el.querySelector('[data-toggle-freight]');
-  const freightEl = $('#catalog-freight');
-  if (freightToggle && freightEl) {
-    freightToggle.onclick = () => {
-      const willOpen = freightEl.hidden;
-      freightEl.hidden = !willOpen;
-      freightToggle.querySelector('.orders-fold-icon').textContent = willOpen ? '▾' : '▸';
-    };
-    renderFreightPanel(freightEl);
   }
 
   const body = $('#catalog-body');
@@ -3310,6 +3798,591 @@ function renderKeywords() {
   };
 }
 
+/* ---------------- 任务调度中心 ---------------- */
+async function renderScheduler() {
+  const el = $('#view-scheduler');
+  el.innerHTML = '<div class="empty"><div class="big">⏰</div>加载中…</div>';
+  let items;
+  try {
+    const resp = await api('/api/catalog/scheduled-tasks');
+    items = resp.items || [];
+  } catch (e) {
+    el.innerHTML = `<div class="empty">❌ ${esc(e.message)}</div>`;
+    return;
+  }
+  const cats = ['订单', '推广', '商品', '竞品', '评价'];
+  const catIcons = { '订单': '📦', '推广': '📢', '商品': '🛒', '竞品': '🎯', '评价': '⭐' };
+  const catColor = { '订单': '#2563eb', '推广': '#d97706', '商品': '#16a34a', '竞品': '#7c3aed', '评价': '#db2777' };
+  const statusBadge = (t) => {
+    if (!t.enabled) return '<span style="font-size:11px;font-weight:700;color:#6b7280;background:#f3f4f6;padding:2px 8px;border-radius:6px">⏸ 停用</span>';
+    if (!t.last_status) return '<span style="font-size:11px;font-weight:700;color:#64748b;background:#f1f5f9;padding:2px 8px;border-radius:6px">未运行</span>';
+    const map = {
+      success: { label: '✅ 成功', color: '#16a34a', bg: '#dcfce7' },
+      fail: { label: '❌ 失败', color: '#dc2626', bg: '#fee2e2' },
+      error: { label: '❌ 失败', color: '#dc2626', bg: '#fee2e2' },
+      skip: { label: '⏭ 跳过', color: '#d97706', bg: '#fef3c7' },
+      running: { label: '⏳ 运行中', color: '#2563eb', bg: '#dbeafe' },
+    };
+    const s = map[t.last_status] || { label: t.last_status, color: '#6b7280', bg: '#f3f4f6' };
+    return `<span style="font-size:11px;font-weight:700;color:${s.color};background:${s.bg};padding:2px 8px;border-radius:6px">${s.label}</span>`;
+  };
+
+  const enabledCount = items.filter(t => t.enabled).length;
+  let h = '';
+  h += '<div style="background:linear-gradient(135deg,#1e3a5f,#3b82f6);border-radius:12px;padding:14px 16px;margin:12px;color:#fff">';
+  h += '<div style="font-size:15px;font-weight:700">⏰ 任务调度中心</div>';
+  h += `<div style="font-size:11px;opacity:.88;margin-top:6px;line-height:1.7">统一管理全部定时采集任务 · 共 ${items.length} 个任务（启用 ${enabledCount} 个）· 执行由 Hermes cron 调度，此处登记配置与运行状态</div>`;
+  h += '</div>';
+
+  cats.forEach(cat => {
+    const rows = items.filter(t => t.category === cat);
+    const color = catColor[cat];
+    const icon = catIcons[cat];
+    h += `<div style="margin:14px 12px 6px;font-size:13px;font-weight:700;color:${color}">${icon} ${cat}（${rows.length}）</div>`;
+    if (!rows.length) {
+      h += '<div class="empty" style="margin:0 12px">该类型暂无任务</div>';
+      return;
+    }
+    rows.forEach(t => {
+      const hasJob = !!t.cron_job_id;
+      h += '<div style="background:#fff;border-radius:12px;padding:12px;margin:8px 12px;box-shadow:0 1px 3px rgba(0,0,0,.05)">';
+      h += '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">';
+      h += `<div style="font-weight:700;color:#1e3a5f;font-size:13px;flex:1;min-width:0">${esc(t.name)}</div>`;
+      h += statusBadge(t);
+      if (t.shop_name) h += `<span style="font-size:11px;font-weight:700;color:#3b82f6;background:#e0f2fe;padding:2px 8px;border-radius:6px">${esc(t.shop_name)}</span>`;
+      h += '</div>';
+      h += '<div style="font-size:11px;color:#8899b0;margin-top:6px;line-height:1.7">';
+      h += `<span style="font-weight:700;color:#5a6b85">${esc(t.schedule_desc || '—')}</span>`;
+      if (t.cron_expr) h += ` · <code style="background:#f3f4f6;padding:1px 6px;border-radius:4px">${esc(t.cron_expr)}</code>`;
+      if (t.script) h += ` · ${esc(t.script)}`;
+      h += '</div>';
+      if (hasJob) {
+        h += '<div style="font-size:11px;color:#8899b0;margin-top:4px">';
+        h += `运行 ${t.run_count || 0} 次`;
+        if (t.last_run_at) h += ` · 最近 ${esc(String(t.last_run_at).slice(5, 16))}`;
+        if (t.last_result) h += ` · ${esc(String(t.last_result).slice(0, 60))}`;
+        h += '</div>';
+      } else {
+        h += '<div style="font-size:11px;color:#d97706;margin-top:4px">🕐 待建设（尚未接入采集）</div>';
+      }
+      if (hasJob) {
+        h += `<button class="btn xs" style="margin-top:8px;margin-right:6px" onclick="showTaskRuns('${esc(t.task_key)}', '${esc(t.name)}')">📜 日志</button>`;
+      }
+      if (t.enabled && hasJob) {
+        h += `<button class="btn xs" style="margin-top:8px" onclick="schedulerToggle('${esc(t.task_key)}', 0)">⏸ 停用</button>`;
+      } else if (!t.enabled && hasJob) {
+        h += `<button class="btn xs primary" style="margin-top:8px" onclick="schedulerToggle('${esc(t.task_key)}', 1)">▶ 启用</button>`;
+      }
+      h += '</div>';
+    });
+  });
+
+  el.innerHTML = h;
+}
+
+async function schedulerToggle(taskKey, enabled) {
+  try {
+    await api('/api/catalog/scheduled-tasks/toggle', 'POST', { task_key: taskKey, enabled: enabled });
+    toast(enabled ? '✅ 已启用' : '⏸ 已停用');
+    renderScheduler();
+  } catch (e) { toast('❌ ' + e.message); }
+}
+
+// 运行日志历史弹窗
+async function showTaskRuns(taskKey, taskName) {
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:999;display:flex;align-items:center;justify-content:center;padding:24px';
+  const box = document.createElement('div');
+  box.style.cssText = 'background:#fff;border-radius:16px;padding:20px;max-width:480px;width:100%;max-height:82vh;overflow:auto;box-shadow:0 20px 60px rgba(0,0,0,.22)';
+  box.innerHTML = `<div style="font-size:15px;font-weight:700;color:#17203a;margin-bottom:4px">📜 ${esc(taskName)} · 运行日志</div>
+    <div style="font-size:11px;color:#8899b0;margin-bottom:12px">${esc(taskKey)}</div>
+    <div style="color:#8899b0;font-size:12px;text-align:center;padding:20px">加载中…</div>`;
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.onclick = e => { if (e.target === overlay) close(); };
+
+  const stMap = {
+    success: { label: '✅ 成功', color: '#16a34a', bg: '#dcfce7' },
+    fail: { label: '❌ 失败', color: '#dc2626', bg: '#fee2e2' },
+    error: { label: '❌ 失败', color: '#dc2626', bg: '#fee2e2' },
+    skip: { label: '⏭ 跳过', color: '#d97706', bg: '#fef3c7' },
+    running: { label: '⏳ 运行中', color: '#2563eb', bg: '#dbeafe' },
+  };
+  const badge = s => { const m = stMap[s] || { label: s || '—', color: '#6b7280', bg: '#f3f4f6' }; return `<span style="font-size:11px;font-weight:700;color:${m.color};background:${m.bg};padding:2px 8px;border-radius:6px">${m.label}</span>`; };
+
+  let items = [];
+  try {
+    const resp = await api('/api/catalog/task-runs?task_key=' + encodeURIComponent(taskKey) + '&limit=50');
+    items = resp.items || [];
+  } catch (e) {
+    box.innerHTML = `<div style="font-size:15px;font-weight:700;color:#17203a;margin-bottom:12px">📜 运行日志</div><div style="color:#dc2626;font-size:13px;padding:20px;text-align:center">❌ ${esc(e.message)}</div>`;
+    return;
+  }
+  if (!items.length) {
+    box.innerHTML = `<div style="font-size:15px;font-weight:700;color:#17203a;margin-bottom:4px">📜 ${esc(taskName)} · 运行日志</div>
+      <div style="font-size:11px;color:#8899b0;margin-bottom:12px">${esc(taskKey)}</div>
+      <div class="empty" style="padding:24px">暂无运行记录<br><span style="font-size:11px;color:#9aa4bb">任务首次执行后会自动记录</span></div>`;
+    return;
+  }
+  let h = `<div style="font-size:15px;font-weight:700;color:#17203a;margin-bottom:4px">📜 ${esc(taskName)} · 运行日志</div>
+    <div style="font-size:11px;color:#8899b0;margin-bottom:12px">共 ${items.length} 次（最近 50 次）</div>`;
+  items.forEach(r => {
+    const time = (r.finished_at || r.created_at || '').slice(5, 16);
+    h += `<div style="border-bottom:1px solid #f0f2f8;padding:10px 0">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">${badge(r.status)}<span style="font-size:11px;color:#8899b0">${esc(time)}</span></div>
+      ${r.result ? `<div style="font-size:12px;color:#4b5677;margin-top:5px;word-break:break-all;line-height:1.5">${esc(String(r.result).slice(0, 120))}${String(r.result).length > 120 ? '…' : ''}</div>` : ''}
+    </div>`;
+  });
+  box.innerHTML = h;
+}
+
+/* ---------------- 评价监控 ---------------- */
+const reviewState = { shop: '', star: '', hasPic: false, hasVideo: false, kw: '', goods: '' };
+
+function starRow(n) {
+  n = n || 0;
+  let s = '';
+  for (let i = 1; i <= 5; i++) s += `<span style="color:${i <= n ? '#f59e0b' : '#e5e7eb'}">★</span>`;
+  return s;
+}
+
+function reviewSet(k, v) {
+  reviewState[k] = v;
+  renderReviews();
+}
+
+async function reviewCollect() {
+  const shop = reviewState.shop || '5';
+  try {
+    await api('/api/catalog/reviews/collect', 'POST', { shop_id: parseInt(shop) });
+    toast('🔄 评价采集已启动（后台执行，约1-2分钟）');
+    setTimeout(renderReviews, 60000);
+  } catch (e) { toast('❌ ' + e.message); }
+}
+
+function reviewAnalysisHtml(a) {
+  if (!a || !a.total) return '';
+  const total = a.total;
+  let h = '';
+  h += '<div style="background:#fff;border-radius:12px;padding:14px;margin:12px;box-shadow:0 1px 3px rgba(0,0,0,.05)">';
+  h += '<div style="font-weight:700;color:#1e3a5f;font-size:14px;margin-bottom:10px">📊 评论分析</div>';
+  // 星级分布
+  h += `<div style="font-size:12px;font-weight:700;color:#5a6b85;margin-bottom:6px">星级分布 · 好评率 ${a.good_rate}%</div>`;
+  [5, 4, 3, 2, 1].forEach(st => {
+    const n = (a.star_dist || {})[st] || 0;
+    const pct = total ? (n / total * 100) : 0;
+    h += `<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+      <span style="width:34px;font-size:11px;color:#8899b0">${st}星</span>
+      <div style="flex:1;height:14px;background:#f3f4f6;border-radius:7px;overflow:hidden">
+        <div style="height:100%;width:${pct}%;background:${st >= 4 ? '#f59e0b' : '#e5e7eb'}"></div>
+      </div>
+      <span style="width:48px;font-size:11px;color:#8899b0;text-align:right">${n} ${pct.toFixed(1)}%</span>
+    </div>`;
+  });
+  // 好评关键词
+  if (a.pos_keywords && a.pos_keywords.length) {
+    const max = a.pos_keywords[0].count;
+    h += '<div style="font-size:12px;font-weight:700;color:#5a6b85;margin:12px 0 6px">好评关键词（买家最认可）</div>';
+    a.pos_keywords.forEach(p => {
+      const pct = max ? (p.count / max * 100) : 0;
+      h += `<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+        <span style="width:62px;font-size:11px;color:#4b5677">${esc(p.dim)}</span>
+        <div style="flex:1;height:12px;background:#f0fdf4;border-radius:6px;overflow:hidden">
+          <div style="height:100%;width:${pct}%;background:#16a34a"></div>
+        </div>
+        <span style="width:36px;font-size:11px;color:#8899b0;text-align:right">${p.count}</span>
+      </div>`;
+    });
+  }
+  // 差评归类
+  if (a.neg && a.neg.total > 0) {
+    h += `<div style="font-size:12px;font-weight:700;color:#5a6b85;margin:12px 0 6px">差评 ${a.neg.total} 条（有文字 ${a.neg.with_text} 条）</div>`;
+    if (a.neg.cats && a.neg.cats.length) {
+      h += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">';
+      a.neg.cats.forEach(c => {
+        h += `<span style="font-size:11px;font-weight:700;color:#dc2626;background:#fee2e2;padding:3px 10px;border-radius:6px">${esc(c.type)} ${c.count}</span>`;
+      });
+      h += '</div>';
+    }
+    if (a.neg.contradict > 0) {
+      h += `<div style="font-size:11px;color:#8899b0;margin-bottom:4px">⚠️ ${a.neg.contradict} 条「矛盾评分」（文字好评但打低分，买家误点星）</div>`;
+    }
+    if (a.neg.no_text > 0) {
+      h += `<div style="font-size:11px;color:#8899b0;margin-bottom:4px">📭 ${a.neg.no_text} 条未填写文字评价（无法归类）</div>`;
+    }
+  }
+  // 差评集中商品（可点击筛选）
+  if (a.neg_goods && a.neg_goods.length) {
+    h += '<div style="font-size:12px;font-weight:700;color:#5a6b85;margin:12px 0 6px">差评集中商品（点击查看该商品评价）</div>';
+    h += '<div style="display:flex;gap:6px;flex-wrap:wrap">';
+    a.neg_goods.forEach(g => {
+      const active = String(reviewState.goods) === String(g.goods_id);
+      const nm = (g.goods_name || '').slice(0, 12);
+      h += `<button class="btn xs" title="${esc(g.goods_name)}" style="margin:0;padding:5px 10px;font-size:11px;${active ? 'border-color:#dc2626;color:#dc2626;background:#fee2e2' : ''}" onclick="reviewSet('goods', '${esc(g.goods_id)}')">${esc(nm)}${g.goods_name && g.goods_name.length > 12 ? '…' : ''} <b>${g.count}差评</b></button>`;
+    });
+    h += '</div>';
+  }
+  // 可操作建议
+  if (a.suggestions && a.suggestions.length) {
+    h += '<div style="font-size:12px;font-weight:700;color:#5a6b85;margin:12px 0 6px">💡 可操作建议</div>';
+    a.suggestions.forEach((sg, i) => {
+      h += `<div style="font-size:12px;color:#4b5677;line-height:1.6;margin-bottom:6px;padding:8px 10px;background:#fffbeb;border-radius:8px">${i + 1}. ${esc(sg)}</div>`;
+    });
+  }
+  h += '</div>';
+  return h;
+}
+
+async function renderReviews() {
+  const el = $('#view-reviews');
+  el.innerHTML = '<div class="empty"><div class="big">⭐</div>加载中…</div>';
+  let stats, items, analysis;
+  try {
+    const qs = new URLSearchParams();
+    if (reviewState.shop) qs.set('shop_id', reviewState.shop);
+    if (reviewState.star) qs.set('star', reviewState.star);
+    if (reviewState.hasPic) qs.set('has_picture', '1');
+    if (reviewState.hasVideo) qs.set('has_video', '1');
+    if (reviewState.kw) qs.set('keyword', reviewState.kw);
+    if (reviewState.goods) qs.set('goods_id', reviewState.goods);
+    qs.set('limit', '300');
+    const [s, r, a] = await Promise.all([
+      api('/api/catalog/review-stats'),
+      api('/api/catalog/reviews?' + qs.toString()),
+      api('/api/catalog/review-analysis'),
+    ]);
+    stats = s; items = r.items || []; analysis = a;
+  } catch (e) {
+    el.innerHTML = `<div class="empty">❌ ${esc(e.message)}</div>`;
+    return;
+  }
+
+  let h = '';
+  h += '<div style="background:linear-gradient(135deg,#7c3aed,#a855f7);border-radius:12px;padding:14px 16px;margin:12px;color:#fff">';
+  h += '<div style="font-size:15px;font-weight:700">⭐ 评价监控</div>';
+  h += `<div style="font-size:12px;opacity:.92;margin-top:6px;line-height:1.7">已采集 <b>${stats.total}</b> 条评价 · 差评 <b>${stats.neg_total}</b> 条 · 近7天新增 <b>${stats.week_new}</b> 条</div>`;
+  h += '</div>';
+  h += reviewAnalysisHtml(analysis);
+
+  if (stats.shops && stats.shops.length) {
+    h += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin:0 12px 4px">';
+    stats.shops.forEach(s => {
+      h += `<div style="background:#fff;border-radius:10px;padding:10px 12px;box-shadow:0 1px 3px rgba(0,0,0,.05);font-size:12px;flex:1;min-width:120px">
+        <div style="font-weight:700;color:#1e3a5f">${esc(s.shop_name || ('店铺' + s.shop_id))}</div>
+        <div style="color:#8899b0;margin-top:4px;line-height:1.6">${s.total}条 · 图${s.with_pic} · 视频${s.with_video} · <span style="font-weight:700;color:${s.neg > 0 ? '#dc2626' : '#16a34a'}">差评${s.neg}</span></div>
+      </div>`;
+    });
+    h += '</div>';
+  }
+
+  // 筛选栏
+  h += '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:8px 12px">';
+  h += `<select onchange="reviewSet('shop', this.value)" style="padding:7px 10px;border:1px solid #e4e7f1;border-radius:8px;font-size:13px;background:#fff">
+    <option value="">全部店铺</option>
+    ${(stats.shops || []).map(s => `<option value="${s.shop_id}" ${String(reviewState.shop) === String(s.shop_id) ? 'selected' : ''}>${esc(s.shop_name || ('店铺' + s.shop_id))}</option>`).join('')}
+  </select>`;
+  h += `<select onchange="reviewSet('star', this.value)" style="padding:7px 10px;border:1px solid #e4e7f1;border-radius:8px;font-size:13px;background:#fff">
+    <option value="">全部星级</option>
+    <option value="5" ${reviewState.star === '5' ? 'selected' : ''}>5星</option>
+    <option value="4" ${reviewState.star === '4' ? 'selected' : ''}>4星</option>
+    <option value="3" ${reviewState.star === '3' ? 'selected' : ''}>3星</option>
+    <option value="2" ${reviewState.star === '2' ? 'selected' : ''}>2星</option>
+    <option value="1" ${reviewState.star === '1' ? 'selected' : ''}>1星</option>
+  </select>`;
+  h += `<label style="font-size:12px;color:#4b5677;display:flex;align-items:center;gap:4px;padding:7px 8px;border:1px solid ${reviewState.hasPic ? '#7c3aed' : '#e4e7f1'};border-radius:8px;background:${reviewState.hasPic ? '#f5f3ff' : '#fff'};cursor:pointer">
+    <input type="checkbox" ${reviewState.hasPic ? 'checked' : ''} onchange="reviewSet('hasPic', this.checked)" style="display:none">🖼 有图</label>`;
+  h += `<label style="font-size:12px;color:#4b5677;display:flex;align-items:center;gap:4px;padding:7px 8px;border:1px solid ${reviewState.hasVideo ? '#7c3aed' : '#e4e7f1'};border-radius:8px;background:${reviewState.hasVideo ? '#f5f3ff' : '#fff'};cursor:pointer">
+    <input type="checkbox" ${reviewState.hasVideo ? 'checked' : ''} onchange="reviewSet('hasVideo', this.checked)" style="display:none">🎬 有视频</label>`;
+  h += `<input placeholder="搜关键词/商品/订单号" value="${esc(reviewState.kw)}" onchange="reviewSet('kw', this.value)" style="flex:1;min-width:140px;padding:7px 10px;border:1px solid #e4e7f1;border-radius:8px;font-size:13px">`;
+  h += `<button class="btn xs primary" onclick="reviewCollect()">🔄 采集</button>`;
+  if (reviewState.goods) {
+    h += `<button class="btn xs" style="background:#fee2e2;color:#dc2626;border-color:#fca5a5" onclick="reviewSet('goods', '')">✕ 清除商品筛选</button>`;
+  }
+  h += '</div>';
+  if (reviewState.goods) {
+    const cnt = items.length >= 300 ? `前 300 条` : `${items.length} 条`;
+    h += `<div style="margin:0 12px 4px;font-size:11px;color:#dc2626;background:#fef2f2;padding:6px 10px;border-radius:8px">当前仅显示商品 ID ${esc(reviewState.goods)} 的评价（${cnt}）</div>`;
+  }
+
+  // 评价列表
+  if (!items.length) {
+    h += '<div class="empty" style="margin:12px">暂无评价数据<br><span style="font-size:11px;color:#9aa4bb">点「🔄 采集」拉取拼多多评价</span></div>';
+  } else {
+    items.forEach(r => {
+      const pics = (() => { try { return JSON.parse(r.pictures || '[]'); } catch (e) { return []; } })();
+      const vid = (() => {
+        if (!r.video) return null;
+        try { const v = JSON.parse(r.video); return typeof v === 'object' ? (v.url || v.playUrl || v.videoUrl || '') : v; }
+        catch (e) { return r.video; }
+      })();
+      const neg = (r.desc_score || 0) <= 3;
+      const dt = r.create_time ? new Date(r.create_time * 1000).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+      h += `<div style="background:#fff;border-radius:12px;padding:12px;margin:8px 12px;box-shadow:0 1px 3px rgba(0,0,0,.05);${neg ? 'border-left:3px solid #dc2626' : ''}">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          ${starRow(r.desc_score)}
+          ${neg ? '<span style="font-size:11px;font-weight:700;color:#dc2626;background:#fee2e2;padding:2px 8px;border-radius:6px">差评</span>' : ''}
+          ${r.shop_name ? `<span style="font-size:11px;font-weight:700;color:#7c3aed;background:#f3e8ff;padding:2px 8px;border-radius:6px">${esc(r.shop_name)}</span>` : ''}
+          <span style="font-size:11px;color:#8899b0">${esc(dt)}</span>
+        </div>
+        <div style="font-size:13px;color:#17203a;margin-top:8px;line-height:1.6;word-break:break-word">${esc(r.comment || '(无文字评价)')}</div>
+        ${pics.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">${pics.map(u => `<img src="${esc(u)}" style="width:64px;height:64px;object-fit:cover;border-radius:6px;cursor:pointer" onclick="showImageLightbox('${esc(u)}')">`).join('')}</div>` : ''}
+        ${vid ? `<div style="margin-top:8px"><video src="${esc(vid)}" controls style="width:180px;max-height:140px;border-radius:6px;background:#000"></video></div>` : ''}
+        <div style="font-size:11px;color:#8899b0;margin-top:8px;line-height:1.6">
+          <div style="color:#4b5677">${esc(r.goods_name || '')} <span style="color:#8899b0">ID ${esc(r.goods_id)}</span></div>
+          ${r.specs ? (() => { try { return JSON.parse(r.specs).map(s => `${s.spec_key}:${s.spec_value}`).join(' · '); } catch (e) { return esc(r.specs); } })() : ''}
+          ${r.order_sn ? `<div>订单 ${esc(r.order_sn)}</div>` : ''}
+        </div>
+        ${r.reply ? `<div style="font-size:12px;color:#2563eb;background:#eff6ff;border-radius:8px;padding:8px;margin-top:8px">商家回复：${esc(r.reply)}</div>` : ''}
+      </div>`;
+    });
+    h += `<div style="text-align:center;font-size:11px;color:#9aa4bb;padding:10px">共 ${items.length} 条（最多显示 300 条，可筛选）</div>`;
+  }
+
+  el.innerHTML = h;
+}
+
+/* ---------------- 打单登记 ---------------- */
+const packState = { date: '', entry: 'pdd_jiayu', source: 'platform', scatter_shop: '', monthly_entry: '', monthly_month: '' };
+const PACK_ENTRIES = { pdd_jiayu: '拼多多·嘉裕', pdd_xianshi: '拼多多·闲时来', taobao_jiayu: '淘宝·嘉裕', doudian: '抖店' };
+const PACK_SOURCES = { platform: '平台订单', alijiayu: '阿里.嘉裕工艺品有限公司', sandan: '散单' };
+// 打单入口 → 对应店铺（显示在「平台订单」按钮的括号标注里，不独立可选）
+const PACK_ENTRY_SHOPS = {
+  pdd_jiayu: ['嘉裕工艺品', 'OSHIYI欧世艺旗舰店', '如若月下'],
+  pdd_xianshi: [],
+  taobao_jiayu: ['阿里.嘉裕工艺品有限公司'],
+  doudian: [],
+};
+
+function todayStr() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+if (!packState.date) packState.date = todayStr();
+
+function packSet(k, v) { packState[k] = v; renderPacking(); }
+
+// 散单下拉框选中店铺：source=sandan，scatter_shop=店铺名
+function packSetScatter(name) {
+  packState.scatter_shop = name || '';
+  if (name) packState.source = 'sandan';
+  renderPacking();
+}
+
+// 手动添加散单店铺
+async function packAddScatterShop() {
+  const r = await promptDialog([
+    { key: 'name', label: '散单店铺名', value: '', placeholder: '输入店铺名，如：XX店' },
+  ], { title: '添加散单店铺', confirmText: '添加' });
+  if (!r || !r.name.trim()) return;
+  try {
+    await api('/api/scatter-shops', 'POST', { name: r.name.trim() });
+    packState.scatter_shop = r.name.trim();
+    packState.source = 'sandan';
+    toast('已添加');
+    renderPacking();
+  } catch (e) { toast(e.message); }
+}
+
+async function packSubmit() {
+  const count = parseInt($('#pack-count').value, 10);
+  if (!count || count <= 0) return toast('请填写数量');
+  try {
+    await api('/api/pack-records', 'POST', { entry: packState.entry, source: packState.source, count, remark: $('#pack-remark').value.trim(), record_date: packState.date, scatter_shop: packState.scatter_shop });
+    toast('已登记');
+    renderPacking();
+  } catch (e) { toast(e.message); }
+}
+
+async function packDelete(id) {
+  if (!confirm('删除这条打单记录？')) return;
+  try {
+    await api('/api/pack-records/' + id, 'DELETE');
+    toast('已删除');
+    renderPacking();
+  } catch (e) { toast(e.message); }
+}
+
+async function packEdit(id) {
+  const cur = (packState.items || []).find(r => r.id === id);
+  if (!cur) return toast('记录不存在');
+  const r = await promptDialog([
+    { key: 'entry', label: '打单入口', type: 'select', value: cur.entry, options: Object.entries(PACK_ENTRIES).map(([v, l]) => ({ value: v, label: l })) },
+    { key: 'source', label: '订单来源', type: 'select', value: cur.source, options: Object.entries(PACK_SOURCES).map(([v, l]) => ({ value: v, label: l })) },
+    { key: 'count', label: '数量', value: String(cur.count || ''), placeholder: '打了几单' },
+    { key: 'remark', label: '备注', value: cur.remark || '', placeholder: '备注（可选）' },
+  ], { title: '修改打单记录', confirmText: '保存修改' });
+  if (!r) return;
+  const count = parseInt(r.count, 10);
+  if (!count || count <= 0) return toast('数量无效');
+  try {
+    await api('/api/pack-records/' + id, 'PUT', { entry: r.entry, source: r.source, count, remark: r.remark });
+    toast('已修改');
+    renderPacking();
+  } catch (e) { toast(e.message); }
+}
+
+async function renderPacking() {
+  const el = $('#view-packing');
+  el.innerHTML = '<div class="empty"><div class="big">🖨</div>加载中…</div>';
+  let summary, items, scatterShops;
+  try {
+    const [s, r, ss] = await Promise.all([
+      api('/api/pack-summary?date=' + packState.date),
+      api('/api/pack-records?date=' + packState.date),
+      api('/api/scatter-shops'),
+    ]);
+    summary = s; items = r.items || [];
+    scatterShops = (ss.items || []).map(x => x.name);
+    packState.items = items;
+  } catch (e) {
+    el.innerHTML = `<div class="empty">❌ ${esc(e.message)}</div>`;
+    return;
+  }
+
+  let h = '';
+  h += `<div style="background:linear-gradient(135deg,#1d4ed8,#3b82f6);border-radius:12px;padding:14px 16px;margin:12px;color:#fff">
+    <div style="font-size:15px;font-weight:700">🖨 打单登记</div>
+    <div style="font-size:12px;opacity:.92;margin-top:6px">${packState.date} 已打 <b>${summary.grand}</b> 单</div>
+  </div>`;
+  h += `<div style="display:flex;gap:8px;align-items:center;margin:0 12px">
+    <input type="date" value="${packState.date}" onchange="packSet('date', this.value)" style="padding:7px 10px;border:1px solid #e4e7f1;border-radius:8px;font-size:13px;background:#fff">
+    <button class="btn xs" onclick="packSet('date', todayStr())">今天</button>
+  </div>`;
+
+  h += `<div style="background:#fff;border-radius:12px;padding:14px;margin:12px;box-shadow:0 1px 3px rgba(0,0,0,.05)">`;
+  h += `<div style="font-size:12px;color:#4b5677;margin-bottom:6px">打单入口</div>`;
+  h += `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">`;
+  for (const [k, name] of Object.entries(PACK_ENTRIES)) {
+    const a = packState.entry === k;
+    h += `<button onclick="packSet('entry','${k}')" style="flex:1;min-width:100px;padding:8px;border-radius:8px;font-size:12px;cursor:pointer;border:1px solid ${a?'#1d4ed8':'#e4e7f1'};background:${a?'#eff6ff':'#fff'};color:${a?'#1d4ed8':'#4b5677'};font-weight:${a?'700':'400'}">${name}</button>`;
+  }
+  h += `</div>`;
+  h += `<div style="font-size:12px;color:#4b5677;margin-bottom:6px">订单来源</div>`;
+  h += `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">`;
+  const srcBtn = (k, name) => {
+    const a = packState.source === k;
+    return `<button onclick="packSet('source','${k}')" style="flex:1;min-width:80px;padding:8px;border-radius:8px;font-size:12px;cursor:pointer;border:1px solid ${a?'#16a34a':'#e4e7f1'};background:${a?'#f0fdf4':'#fff'};color:${a?'#16a34a':'#4b5677'};font-weight:${a?'700':'400'}">${name}</button>`;
+  };
+  // 平台订单（括号标注当前入口的店铺；淘宝嘉裕单独拆按钮）
+  const shopNames = PACK_ENTRY_SHOPS[packState.entry] || [];
+  let platformLabel = '平台订单';
+  if (packState.entry !== 'taobao_jiayu' && shopNames.length) {
+    platformLabel = '平台订单（' + shopNames.join('、') + '）';
+  }
+  h += srcBtn('platform', platformLabel);
+  // 淘宝嘉裕：独立「阿里.嘉裕工艺品有限公司」按钮，与平台订单分别记
+  if (packState.entry === 'taobao_jiayu') {
+    h += srcBtn('alijiayu', '阿里.嘉裕工艺品有限公司');
+  }
+  // 散单（下拉框选店铺）
+  h += `<select onchange="packSetScatter(this.value)" style="flex:1;min-width:130px;padding:8px;border-radius:8px;font-size:12px;cursor:pointer;border:1px solid ${packState.source==='sandan'?'#16a34a':'#e4e7f1'};background:${packState.source==='sandan'?'#f0fdf4':'#fff'};color:${packState.source==='sandan'?'#16a34a':'#4b5677'};font-weight:${packState.source==='sandan'?'700':'400'}">
+    <option value="">散单（选店铺）</option>
+    ${scatterShops.map(n => `<option value="${esc(n)}" ${packState.scatter_shop===n?'selected':''}>${esc(n)}</option>`).join('')}
+    <option value="其他" ${packState.scatter_shop==='其他'?'selected':''}>其他</option>
+  </select>`;
+  // 手动添加散单店铺
+  h += `<button onclick="packAddScatterShop()" style="flex:0 0 auto;min-width:36px;padding:8px 10px;border-radius:8px;font-size:14px;cursor:pointer;border:1px solid #e4e7f1;background:#fff;color:#4b5677;font-weight:700">＋</button>`;
+  h += `</div>`;
+  h += `<div style="display:flex;gap:8px;margin-bottom:12px">
+    <input type="number" id="pack-count" min="1" placeholder="打了几单" style="flex:1;padding:9px;border:1px solid #e4e7f1;border-radius:8px;font-size:14px">
+    <input type="text" id="pack-remark" placeholder="备注（可选）" style="flex:1.5;padding:9px;border:1px solid #e4e7f1;border-radius:8px;font-size:14px">
+  </div>`;
+  h += `<button class="btn primary" style="width:100%" onclick="packSubmit()">提交登记</button>`;
+  h += `</div>`;
+
+  h += `<div style="background:#fff;border-radius:12px;padding:14px;margin:12px;box-shadow:0 1px 3px rgba(0,0,0,.05)">`;
+  h += `<div style="font-size:14px;font-weight:700;color:#1e3a5f;margin-bottom:10px">📊 当日汇总</div>`;
+  h += `<table style="width:100%;border-collapse:collapse;font-size:12px">`;
+  h += `<tr style="color:#8899b0"><td style="padding:6px 4px">入口</td>`;
+  for (const s of Object.values(PACK_SOURCES)) h += `<td style="padding:6px 4px;text-align:center">${s}</td>`;
+  h += `<td style="padding:6px 4px;text-align:center;font-weight:700">合计</td></tr>`;
+  for (const [ek, ename] of Object.entries(PACK_ENTRIES)) {
+    const row = summary.matrix[ek] || {};
+    h += `<tr style="border-top:1px solid #f0f2f7"><td style="padding:6px 4px;color:#4b5677">${ename}</td>`;
+    for (const sk of Object.keys(PACK_SOURCES)) {
+      const v = row[sk] || 0;
+      h += `<td style="padding:6px 4px;text-align:center;color:${v?'#17203a':'#c6cddb'}">${v}</td>`;
+    }
+    h += `<td style="padding:6px 4px;text-align:center;font-weight:700;color:#1d4ed8">${row.total||0}</td></tr>`;
+  }
+  h += `<tr style="border-top:2px solid #e4e7f1;font-weight:700"><td style="padding:6px 4px;color:#1e3a5f">总计</td>`;
+  for (const sk of Object.keys(PACK_SOURCES)) h += `<td style="padding:6px 4px;text-align:center;color:#1e3a5f">${summary.source_totals[sk]||0}</td>`;
+  h += `<td style="padding:6px 4px;text-align:center;color:#dc2626">${summary.grand}</td></tr>`;
+  h += `</table>`;
+  h += `</div>`;
+
+  h += `<div style="background:#fff;border-radius:12px;padding:14px;margin:12px;box-shadow:0 1px 3px rgba(0,0,0,.05)">`;
+  h += `<div style="font-size:14px;font-weight:700;color:#1e3a5f;margin-bottom:10px">📋 当日明细</div>`;
+  if (!items.length) {
+    h += `<div class="empty" style="margin:8px">今天还没登记，打完单来记一笔</div>`;
+  } else {
+    for (const r of items) {
+      const ename = PACK_ENTRIES[r.entry] || r.entry;
+      let sname = PACK_SOURCES[r.source] || r.source;
+      if (r.source === 'sandan' && r.scatter_shop) sname = '散单-' + r.scatter_shop;
+      const dt = (r.created_at || '').slice(11, 16);
+      h += `<div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #f5f6fa">
+        <span style="font-size:11px;color:#8899b0;width:40px">${esc(dt)}</span>
+        <span style="flex:1;font-size:13px;color:#17203a">${esc(ename)} · ${esc(sname)}${r.remark ? ' · ' + esc(r.remark) : ''}</span>
+        <span style="font-size:15px;font-weight:700;color:#1d4ed8">${r.count}</span>
+        <button class="btn xs" style="background:#eff6ff;color:#1d4ed8;border-color:#bfdbfe" onclick="packEdit(${r.id})">改</button>
+        <button class="btn xs" style="background:#fee2e2;color:#dc2626;border-color:#fca5a5" onclick="packDelete(${r.id})">删</button>
+      </div>`;
+    }
+  }
+  h += `</div>`;
+
+  h += `<div style="background:#fff;border-radius:12px;padding:14px;margin:12px;box-shadow:0 1px 3px rgba(0,0,0,.05)">
+    <div style="font-size:14px;font-weight:700;color:#1e3a5f;margin-bottom:10px">📅 按月汇总</div>
+    <div id="pack-monthly" style="font-size:12px;color:#9aa4bb">加载中…</div>
+  </div>`;
+
+  el.innerHTML = h;
+  renderPackMonthly();
+}
+
+function fmtYm(ym) { if (!ym) return ym; const a = ym.split('-'); return a[0] + '年' + parseInt(a[1], 10) + '月'; }
+
+async function renderPackMonthly() {
+  const box = $('#pack-monthly');
+  if (!box) return;
+  try {
+    const q = new URLSearchParams();
+    if (packState.monthly_entry) q.set('entry', packState.monthly_entry);
+    if (packState.monthly_month) q.set('month', packState.monthly_month);
+    const qs = q.toString();
+    const d = await api('/api/pack-monthly' + (qs ? '?' + qs : ''));
+    const months = d.months || [];
+    const rows = d.rows || [];
+    const sel = "flex:1;padding:7px 8px;border:1px solid #e4e7f1;border-radius:8px;font-size:12px;background:#fff;color:#4b5677";
+    let h = `<div style="display:flex;gap:8px;margin-bottom:10px">`;
+    h += `<select onchange="packMonthlySet('entry', this.value)" style="${sel}"><option value="">全部平台</option>`;
+    for (const [k, name] of Object.entries(PACK_ENTRIES)) h += `<option value="${k}" ${packState.monthly_entry===k?'selected':''}>${name}</option>`;
+    h += `</select>`;
+    h += `<select onchange="packMonthlySet('month', this.value)" style="${sel}"><option value="">全部月份</option>`;
+    for (const m of months) h += `<option value="${m}" ${packState.monthly_month===m?'selected':''}>${fmtYm(m)}</option>`;
+    h += `</select>`;
+    h += `</div>`;
+    if (!rows.length) {
+      h += `<div class="empty" style="margin:8px">暂无打单记录</div>`;
+    } else {
+      h += `<table style="width:100%;border-collapse:collapse;font-size:12px">`;
+      h += `<tr style="color:#8899b0"><td style="padding:6px 4px">月份</td><td style="padding:6px 4px">平台</td><td style="padding:6px 4px;text-align:center">打单数</td></tr>`;
+      for (const r of rows) {
+        h += `<tr style="border-top:1px solid #f0f2f7"><td style="padding:6px 4px;color:#4b5677">${esc(fmtYm(r.ym))}</td><td style="padding:6px 4px;color:#17203a">${esc(PACK_ENTRIES[r.entry]||r.entry)}</td><td style="padding:6px 4px;text-align:center;font-weight:700;color:#1d4ed8">${r.total}</td></tr>`;
+      }
+      h += `<tr style="border-top:2px solid #e4e7f1;font-weight:700"><td colspan="2" style="padding:6px 4px;color:#1e3a5f">合计</td><td style="padding:6px 4px;text-align:center;color:#dc2626">${d.total}</td></tr>`;
+      h += `</table>`;
+    }
+    box.innerHTML = h;
+  } catch (e) {
+    box.innerHTML = `<div class="empty">❌ ${esc(e.message)}</div>`;
+  }
+}
+
+function packMonthlySet(k, v) { packState[k] = v; renderPackMonthly(); }
+
 /* ---------------- 任务 ---------------- */
 function renderTasks() {
   const mods = [...new Set(state.templates.map(t=>t.module))];
@@ -3414,8 +4487,16 @@ function bindShopButtons() {
 }
 
 async function init() {
+  if (!getToken()) { showLogin(); return; }
   $('#date-pill').textContent = todayCN();
-  $$('.nav-item').forEach(b => b.onclick = () => setView(b.dataset.view));
+  renderGuideSubMenu();
+  $$('.nav-item').forEach(b => {
+    if (b.classList.contains('nav-parent')) {
+      b.onclick = () => toggleNavGroup(b.dataset.group || 'guide');
+      return;
+    }
+    b.onclick = () => setView(b.dataset.view);
+  });
   $$('[data-nav]').forEach(b => b.onclick = () => setView(b.dataset.nav));
   // 动态生成店铺切换按钮（从商品库平台列表），覆盖 index.html 默认按钮
   try {
@@ -3458,14 +4539,16 @@ function titleOptShopOptions() {
 async function loadTitleOptData() {
   const sid = titleOptCache.shopId;
   const q = titleOptCache.filter ? '&q=' + encodeURIComponent(titleOptCache.filter) : '';
-  const [cand, opt, log] = await Promise.all([
+  const [cand, opt, log, allOpt] = await Promise.all([
     api('/api/catalog/title-opt/candidates?shop_id=' + sid + q),
     api('/api/catalog/title-opt?shop_id=' + sid),
-    api('/api/catalog/title-opt/log?shop_id=' + sid + '&limit=50')
+    api('/api/catalog/title-opt/log?shop_id=' + sid + '&limit=50'),
+    api('/api/catalog/title-opt')
   ]);
   titleOptCache.candidates = cand.items || [];
   titleOptCache.opts = opt.items || [];
   titleOptCache.logs = log.items || [];
+  titleOptCache.allOpts = allOpt.items || [];
 }
 
 async function renderTitleOptView() {
@@ -3475,13 +4558,12 @@ async function renderTitleOptView() {
   if (!(catalogCache.tree || []).length) {
     try {
       const resp = await api('/api/catalog/tree');
-      catalogCache.tree = resp.tree || [];
+      catalogCache.tree = resp.items || [];
     } catch (e) {}
   }
 
   const shopOptions = titleOptShopOptions();
   const def = shopOptions.find(s => s.id === 5) || shopOptions[0];
-  if (def) titleOptCache.shopId = def.id;
   if (!shopOptions.find(s => s.id === titleOptCache.shopId)) titleOptCache.shopId = def ? def.id : 5;
 
   try {
@@ -3518,6 +4600,7 @@ function paintTitleOpt(el) {
   const shopOptions = titleOptShopOptions();
   const opts = titleOptCache.opts;
   const cands = titleOptCache.candidates;
+  const shopName = (shopOptions.find(s => s.id === titleOptCache.shopId) || {}).name || '';
 
   const statusMap = {
     selected: { label: '待优化', color: '#d97706', bg: '#fef3c7' },
@@ -3527,9 +4610,29 @@ function paintTitleOpt(el) {
 
   let h = '';
   h += '<div style="background:linear-gradient(135deg,#1e3a5f,#3b82f6);border-radius:12px;padding:14px 16px;margin:12px;color:#fff">';
-  h += '<div style="font-size:15px;font-weight:700">✏️ 标题优化 · 跟踪近7天访问效果</div>';
+  h += '<div style="font-size:15px;font-weight:700;display:flex;align-items:center;gap:8px;flex-wrap:wrap">✏️ 标题优化 · 跟踪近7天访问效果';
+  if (shopName) h += '<span style="font-size:11px;font-weight:600;background:rgba(255,255,255,.22);padding:2px 10px;border-radius:10px">' + esc(shopName) + '</span>';
+  h += '</div>';
   h += '<div style="font-size:11px;opacity:.88;margin-top:6px;line-height:1.7">规则：已有订单的商品标题不动；挑选 5 个无订单商品优化标题；优化后通过平台「近7天访问数据」对比 UV / PV / 成交变化。</div>';
   h += '</div>';
+
+  // ⚠️ 失败清单（最上面，跨店铺展示待处理失败记录）
+  const allOpts = titleOptCache.allOpts || opts;
+  const failOpts = allOpts.filter(o => o.note && o.note !== '执行中…' && o.note !== '已出单，跳过' && o.status !== 'done' && !o.fixed);
+  if (failOpts.length) {
+    h += '<div style="background:#fff7ed;border:1px solid #fdba74;border-radius:12px;margin:12px;padding:12px">';
+    h += '<div style="font-size:13px;font-weight:700;color:#c2410c">⚠️ 失败清单（' + failOpts.length + ' 个待处理）</div>';
+    h += '<div style="font-size:11px;color:#9a3412;margin-top:3px;line-height:1.6">多为价格校验拦截（单买价 > 拼单价 ×2），修价后可重新执行更新</div>';
+    failOpts.forEach(o => {
+      h += '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 0;border-bottom:1px dashed #fed7aa">';
+      if (o.shop_name) h += '<span style="font-size:11px;font-weight:700;color:#3b82f6;background:#e0f2fe;padding:1px 8px;border-radius:5px;flex-shrink:0">' + esc(o.shop_name) + '</span>';
+      h += '<span style="font-size:11px;color:#5a6b85;flex-shrink:0">ID <b>' + esc(o.platform_product_id) + '</b></span>';
+      h += '<span style="font-size:11px;color:#dc2626;background:#fee2e2;padding:1px 8px;border-radius:5px;flex-shrink:0">' + esc(o.note) + '</span>';
+      h += '<button class="btn xs" style="margin-left:auto;background:#16a34a;color:#fff;border:none;flex-shrink:0" onclick="titleOptFix(' + o.id + ')">✅ 确认修复</button>';
+      h += '</div>';
+    });
+    h += '</div>';
+  }
 
   h += '<div style="margin:0 12px 8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">';
   h += '<select id="to-shop" style="padding:8px 10px;border:1px solid #cdd7e5;border-radius:8px;font-size:13px;background:#fff;max-width:200px">';
@@ -3568,7 +4671,9 @@ function paintTitleOpt(el) {
       else h += '<span style="font-size:11px;font-weight:700;color:' + st.color + ';background:' + st.bg + ';padding:2px 8px;border-radius:6px;flex-shrink:0">' + st.label + '</span>';
       h += '</div>';
       if (hasErr) h += '<div style="font-size:11px;color:#dc2626;margin-bottom:4px">⚠️ ' + esc(o.note) + '</div>';
-      h += '<div style="font-size:11px;color:#8899b0;margin-bottom:6px">货号 ' + esc(o.product_code || '—') + ' · ID ' + esc(o.platform_product_id) + '</div>';
+      h += '<div style="font-size:11px;color:#8899b0;margin-bottom:6px">';
+      if (o.shop_name) h += '<span style="font-weight:700;color:#3b82f6;background:#e0f2fe;padding:1px 8px;border-radius:5px;margin-right:6px">' + esc(o.shop_name) + '</span>';
+      h += '货号 ' + esc(o.product_code || '—') + ' · ID ' + esc(o.platform_product_id) + '</div>';
       h += '<div style="font-size:12px;line-height:1.7;margin-bottom:4px">';
       h += '<div style="color:#8899b0">旧：<span style="color:#5a6b85">' + esc(o.old_title || '') + '</span></div>';
       if (o.new_title) h += '<div style="color:#8899b0">新：<span style="color:#16a34a;font-weight:600">' + esc(o.new_title) + '</span></div>';
@@ -3594,7 +4699,9 @@ function paintTitleOpt(el) {
       h += '<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-bottom:1px solid #f3f4f6">';
       h += '<div style="flex:1;min-width:0">';
       h += '<div style="font-size:12px;font-weight:600;color:#1e3a5f;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="' + esc(c.name) + '">' + esc(c.name) + '</div>';
-      h += '<div style="font-size:11px;color:#8899b0">' + esc(c.code || '—') + ' · ' + c.sku_count + ' SKU · ID ' + esc(c.platform_product_id) + '</div>';
+      h += '<div style="font-size:11px;color:#8899b0">';
+      if (c.shop_name) h += '<span style="font-weight:700;color:#3b82f6;background:#e0f2fe;padding:0 7px;border-radius:4px;margin-right:6px">' + esc(c.shop_name) + '</span>';
+      h += esc(c.code || '—') + ' · ' + c.sku_count + ' SKU · ID ' + esc(c.platform_product_id) + '</div>';
       h += '</div>';
       h += '<button class="btn xs primary" onclick="titleOptPick(\'' + esc(c.platform_product_id) + '\')" style="flex-shrink:0;margin-left:8px">＋挑选</button>';
       h += '</div>';
@@ -3708,14 +4815,32 @@ async function titleOptPick(platformProductId) {
   } catch (e) { toast('❌ ' + e.message); }
 }
 
+async function titleOptFix(optId) {
+  try {
+    await api('/api/catalog/title-opt/fix', 'POST', { id: optId });
+    toast('✅ 已确认修复');
+    await loadTitleOptData();
+    paintTitleOpt($('#view-titleopt'));
+  } catch (e) { toast('❌ ' + e.message); }
+}
+
+function titleCharLen(s) {
+  // 按 GBK 字符数算：1 汉字=2 字符，1 英文/数字/符号=1 字符
+  let n = 0;
+  for (const ch of s) n += ch.charCodeAt(0) > 0xff ? 2 : 1;
+  return n;
+}
+
 async function titleOptEdit(optId) {
   const o = titleOptCache.opts.find(x => x.id === optId);
   if (!o) return;
   const res = await promptDialog([
-    { key: 'new_title', label: '新标题', value: o.new_title || '', placeholder: '输入优化后的商品标题' }
+    { key: 'new_title', label: '新标题（最多 60 字符 = 30 汉字）', value: o.new_title || '', placeholder: '输入优化后的商品标题，最多 60 字符（30 汉字）' }
   ], { title: '优化标题' });
   if (!res) return;
   if (!res.new_title || !res.new_title.trim()) { toast('⚠️ 标题不能为空'); return; }
+  const tl = titleCharLen(res.new_title.trim());
+  if (tl > 60) { toast('⚠️ 标题最多 60 字符（30 汉字），当前 ' + tl + ' 字符'); return; }
   try {
     await api('/api/catalog/title-opt/update', 'POST', { id: optId, new_title: res.new_title.trim(), status: 'optimized' });
     toast('✅ 已保存新标题');

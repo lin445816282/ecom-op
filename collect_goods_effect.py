@@ -22,7 +22,9 @@ OUT = "/mnt/c/tmp/ge_fetch.json"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/153.0.0.0 Safari/537.36"
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "catalog.db")
 
-SHOP_ID = 1  # 闲时来工艺
+SHOP_ID = 1  # 闲时来工艺（默认）
+
+SHOP_CDP_PORT = {5: 9232, 3: 9230, 1: 9234, 6: 9228}  # 嘉裕=9232 / 如若月下=9230 / 闲时来=9234 / 欧世艺=9228
 
 FIELD_MAP = {
     "goodsId": "platform_product_id",
@@ -117,14 +119,18 @@ def to_num(s):
         return None
 
 
-def run_node():
-    r = subprocess.run([NODE, FETCH_JS], capture_output=True, text=True, timeout=60)
+def run_node(port=9228):
+    r = subprocess.run([NODE, FETCH_JS, str(port)], capture_output=True, text=True, timeout=60)
     if r.returncode != 0:
         raise RuntimeError("node 采集失败: " + (r.stderr or r.stdout)[:300])
 
 
 def main():
-    run_node()
+    global SHOP_ID
+    shop_id = int(sys.argv[1]) if len(sys.argv) > 1 else SHOP_ID
+    SHOP_ID = shop_id
+    port = SHOP_CDP_PORT.get(shop_id, 9228)
+    run_node(port)
     with open(OUT, encoding="utf-8") as f:
         d = json.load(f)
     if "err" in d or not d.get("apiBody") or not d.get("fontUrl"):
@@ -174,5 +180,12 @@ def main():
 
 
 if __name__ == "__main__":
-    result = main()
-    print(json.dumps(result, ensure_ascii=False))
+    import sys
+    sys.path.insert(0, "/home/xiaolin/.hermes/scripts")
+    import notify_task_run as _ntr
+
+    def _run():
+        result = main()
+        print(json.dumps(result, ensure_ascii=False))
+
+    _ntr.run_and_log("goods_effect", _run)

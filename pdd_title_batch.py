@@ -29,6 +29,29 @@ def load_api_key():
     return key or os.environ.get("DEEPSEEK_API_KEY", "")
 
 
+def gbk_len(s):
+    """按 GBK 字符数计算标题长度（1 汉字=2 字符，1 英文/数字/符号=1 字符）。"""
+    try:
+        return len(s.encode("gbk"))
+    except Exception:
+        return len(s)
+
+
+def cut_title(s, limit=60):
+    """按 GBK 字符数截断到 limit 字符（60 字符 = 30 汉字），避免截断半个汉字。"""
+    try:
+        b = s.encode("gbk")
+    except Exception:
+        return s[:limit]
+    if len(b) <= limit:
+        return s
+    cut = b[:limit]
+    try:
+        return cut.decode("gbk")
+    except UnicodeDecodeError:
+        return cut[:-1].decode("gbk", "ignore")
+
+
 def gen_titles(products, api_key):
     """调 DeepSeek 批量生成优化标题，返回 [新标题] 列表（按输入顺序）。分批 15 个/次，避免输出超限。"""
     titles = []
@@ -45,7 +68,7 @@ def _gen_titles_chunk(products, api_key):
         "规则：\n"
         "1. 核心品词前置，删无意义前缀（品牌名/新款/买X送X/【】等营销词）\n"
         "2. 补长尾搜索词（场景词、人群词、规格词、材质词），用空格分隔 3-4 段核心词\n"
-        "3. 总长度不超过 30 个汉字（60 字符）\n"
+        "3. 总长度不超过 60 个字符（即 30 个汉字；英文/数字/空格算 1 字符，汉字算 2 字符）\n"
         "4. 不夸大、不违规、保留商品真实属性\n"
         "5. 只输出 JSON 数组，每项是优化后的标题字符串，严格按输入顺序\n\n"
         f"商品列表：\n{json.dumps(names, ensure_ascii=False)}\n\n"
@@ -72,7 +95,7 @@ def _gen_titles_chunk(products, api_key):
     if start < 0 or end < 0:
         raise RuntimeError(f"AI 返回非 JSON: {content[:200]}")
     arr = json.loads(content[start:end + 1])
-    return [str(x).strip()[:60] for x in arr]  # 截断到 60 字符（30 汉字）
+    return [cut_title(str(x).strip()) for x in arr]  # 按 GBK 60 字符（30 汉字）截断
 
 
 def apply_ids(ids):
@@ -136,6 +159,7 @@ def main():
     for p, t in zip(picked, titles):
         rid = catalog.add_title_opt(shop_id, p["platform_product_id"])
         if rid and rid > 0:
+            catalog.save_title_opt_baseline(rid)  # 自动基线：改标题前快照近7天流量
             catalog.update_title_opt(rid, new_title=t, status="optimized")
             ids.append(rid)
 
@@ -147,4 +171,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    sys.path.insert(0, "/home/xiaolin/.hermes/scripts")
+    import notify_task_run as _ntr
+    _ntr.run_and_log(_ntr.shop_task_key("title_opt_shop"), main)

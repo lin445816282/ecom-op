@@ -5,6 +5,8 @@ from __future__ import annotations
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
+import sys
+import threading
 from urllib.parse import urlparse, parse_qs, quote
 
 import data
@@ -15,9 +17,18 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROMOTION_HISTORY_PATH = os.path.expanduser("~/.hermes/pdd_promotion_history.json")
 
 # 店铺 → 拼多多 CDP 端口（Edge 独立 profile，详见 pdd-promotion-cdp skill）
-SHOP_CDP_PORT = {5: 9232, 3: 9230, 1: 9228}
+SHOP_CDP_PORT = {5: 9232, 3: 9230, 1: 9234, 6: 9228}
 NODE_EXE = "/mnt/d/Program Files/nodejs/node.exe"
 PDD_SET_TITLE_JS = r"C:\tmp\pdd_set_titles.js"
+# 竞品监控：买家端搜索实例 + 采集脚本
+CLIENT_CDP_PORT = 9236
+PDD_SEARCH_COMP_JS = r"C:\tmp\fetch_competitors.js"
+PDD_BUYER_REVIEW_JS = r"C:\tmp\fetch_buyer_reviews.js"
+PDD_COMMENTS_FULL_JS = r"C:\tmp\fetch_comments_full.js"
+
+# 访问口令：环境变量 ECOM_OP_TOKEN 可覆盖，默认见下。静态资源公开，/api/* 需带口令。
+ACCESS_TOKEN = os.environ.get("ECOM_OP_TOKEN", "Alcz8283103")
+AUTH_WHITELIST = {"/", "/index.html", "/app.js", "/style.css", "/favicon.ico", "/api/auth/login"}
 
 
 def _json(handler, obj, status=200):
@@ -44,6 +55,19 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             return {}
 
+    def _authed(self, path, qs):
+        """鉴权：静态资源 + 登录接口放行，其余 /api/* 校验访问口令。"""
+        if path in AUTH_WHITELIST:
+            return True
+        if path.startswith("/static/"):
+            return True
+        if not path.startswith("/api/"):
+            return True  # 非 API 路径（如未知静态）不做鉴权，交给后续 404
+        token = self.headers.get("Authorization", "").replace("Bearer ", "").strip()
+        if not token:
+            token = (qs.get("token") or [""])[0]
+        return token == ACCESS_TOKEN
+
     def _route(self):
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/") or "/"
@@ -57,6 +81,18 @@ class Handler(BaseHTTPRequestHandler):
 
         if self.command == "OPTIONS":
             return _json(self, {"ok": True})
+
+        # 鉴权：静态资源 + 登录接口放行，其余 /api/* 校验访问口令
+        if not self._authed(path, qs):
+            return _json(self, {"error": "未授权，请先登录"}, 401)
+
+        # 登录接口
+        if path == "/api/auth/login" and self.command == "POST":
+            item = self._read_body()
+            token = str(item.get("token") or "").strip()
+            if token == ACCESS_TOKEN:
+                return _json(self, {"ok": True})
+            return _json(self, {"error": "口令错误"}, 401)
 
         # 产品
         if path == "/api/products" and self.command == "GET":
@@ -530,7 +566,9 @@ class Handler(BaseHTTPRequestHandler):
             return _json(self, {"items": catalog.order_statuses()})
 
         if path == "/api/catalog/platform-overview" and self.command == "GET":
-            return _json(self, catalog.platform_overview())
+            start = qs.get("start", [None])[0]
+            end = qs.get("end", [None])[0]
+            return _json(self, catalog.platform_overview(start, end))
 
         if path == "/api/catalog/product/cost" and self.command == "POST":
             item = self._read_body()
@@ -560,6 +598,211 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/catalog/promotions-analysis" and self.command == "GET":
             return _json(self, catalog.promotions_analysis())
+
+        if path == "/api/catalog/product-real-roi" and self.command == "GET":
+            period = qs.get("period", [None])[0]
+            return _json(self, catalog.product_real_roi(period))
+
+        if path == "/api/catalog/scheduled-tasks" and self.command == "GET":
+            return _json(self, {"items": catalog.list_scheduled_tasks()})
+
+        if path == "/api/catalog/scheduled-tasks/toggle" and self.command == "POST":
+            item = self._read_body()
+            task_key = item.get("task_key")
+            enabled = item.get("enabled")
+            if not task_key:
+                return _json(self, {"error": "task_key required"}, 400)
+            ok = catalog.toggle_scheduled_task(task_key, 1 if enabled else 0)
+            return _json(self, {"ok": ok})
+
+        if path == "/api/catalog/task-runs" and self.command == "GET":
+            task_key = qs.get("task_key", [None])[0]
+            limit = int(qs.get("limit", ["100"])[0] or 100)
+            return _json(self, {"items": catalog.list_task_runs(task_key, limit)})
+
+        if path == "/api/catalog/reviews" and self.command == "GET":
+            shop_id = qs.get("shop_id", [None])[0]
+            goods_id = qs.get("goods_id", [None])[0]
+            star = qs.get("star", [None])[0]
+            has_picture = qs.get("has_picture", ["0"])[0] in ("1", "true", "True")
+            has_video = qs.get("has_video", ["0"])[0] in ("1", "true", "True")
+            keyword = qs.get("keyword", [""])[0]
+            limit = int(qs.get("limit", ["200"])[0] or 200)
+            offset = int(qs.get("offset", ["0"])[0] or 0)
+            items = catalog.list_reviews(
+                int(shop_id) if shop_id else None,
+                goods_id,
+                int(star) if star else None,
+                has_picture,
+                has_video,
+                keyword,
+                limit,
+                offset,
+            )
+            return _json(self, {"items": items})
+
+        if path == "/api/catalog/review-stats" and self.command == "GET":
+            return _json(self, catalog.review_stats())
+
+        if path == "/api/catalog/review-analysis" and self.command == "GET":
+            return _json(self, catalog.review_analysis())
+
+        if path == "/api/catalog/reviews/collect" and self.command == "POST":
+            item = self._read_body()
+            shop_id = item.get("shop_id")
+            if not shop_id:
+                return _json(self, {"error": "shop_id required"}, 400)
+            import subprocess
+            script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "collect_reviews.py")
+
+            def _run_collect():
+                try:
+                    subprocess.run([sys.executable, script, str(shop_id)], capture_output=True, text=True, timeout=900)
+                except Exception:
+                    pass
+
+            threading.Thread(target=_run_collect, daemon=True).start()
+            return _json(self, {"ok": True, "msg": "评价采集已启动（后台执行）"})
+
+        # 打单登记
+        if path == "/api/pack-records" and self.command == "POST":
+            item = self._read_body()
+            entry = item.get("entry")
+            source = item.get("source")
+            try:
+                count = int(item.get("count") or 0)
+            except Exception:
+                count = 0
+            if not entry or not source or count <= 0:
+                return _json(self, {"error": "入口/来源/数量不能为空"}, 400)
+            rec = catalog.save_pack_record(entry, source, count, item.get("remark") or "", item.get("record_date"), item.get("scatter_shop") or "")
+            return _json(self, {"item": rec})
+
+        if path == "/api/pack-records" and self.command == "GET":
+            date = qs.get("date", [None])[0]
+            return _json(self, {"items": catalog.list_pack_records(date)})
+
+        if path == "/api/pack-summary" and self.command == "GET":
+            date = qs.get("date", [None])[0]
+            return _json(self, catalog.pack_summary(date))
+
+        if path == "/api/pack-monthly" and self.command == "GET":
+            entry = qs.get("entry", [""])[0] or None
+            ym = qs.get("month", [""])[0] or None
+            return _json(self, catalog.pack_monthly_summary(entry=entry, ym=ym))
+
+        if path == "/api/freight/three-way" and self.command == "GET":
+            ym = qs.get("month", [""])[0] or None
+            return _json(self, catalog.freight_three_way(month=ym))
+
+        if path == "/api/freight/mapping" and self.command == "GET":
+            return _json(self, {"items": catalog.list_pack_mapping()})
+
+        if path == "/api/freight/mapping" and self.command == "POST":
+            item = self._read_body()
+            entry = item.get("entry")
+            if not entry:
+                return _json(self, {"error": "入口不能为空"}, 400)
+            return _json(self, {"item": catalog.save_pack_mapping(
+                entry,
+                item.get("shop_ids") or "",
+                item.get("freight_account") or "",
+            )})
+
+        if path.startswith("/api/pack-records/") and self.command == "DELETE":
+            rid = path.split("/")[-1]
+            ok = catalog.delete_pack_record(int(rid) if rid.isdigit() else 0)
+            return _json(self, {"ok": ok}, 200 if ok else 404)
+
+        if path.startswith("/api/pack-records/") and self.command == "PUT":
+            rid = path.split("/")[-1]
+            item = self._read_body()
+            ok = catalog.update_pack_record(
+                int(rid) if rid.isdigit() else 0,
+                entry=item.get("entry"),
+                source=item.get("source"),
+                count=item.get("count"),
+                remark=item.get("remark"),
+                record_date=item.get("record_date"),
+            )
+            return _json(self, {"ok": ok}, 200 if ok else 404)
+
+        # 散单店铺（下拉框选项）
+        if path == "/api/scatter-shops" and self.command == "GET":
+            return _json(self, {"items": catalog.list_scatter_shops()})
+
+        if path == "/api/scatter-shops" and self.command == "POST":
+            item = self._read_body()
+            name = (item.get("name") or "").strip()
+            if not name:
+                return _json(self, {"error": "店铺名不能为空"}, 400)
+            return _json(self, {"item": catalog.add_scatter_shop(name)})
+
+        if path.startswith("/api/scatter-shops/") and self.command == "DELETE":
+            sid = path.split("/")[-1]
+            ok = catalog.delete_scatter_shop(int(sid) if sid.isdigit() else 0)
+            return _json(self, {"ok": ok}, 200 if ok else 404)
+
+        # 竞品监控
+        if path == "/api/competitors" and self.command == "GET":
+            platform_product_id = qs.get("platform_product_id", [""])[0] or None
+            keyword = qs.get("keyword", [""])[0] or None
+            return _json(self, {"items": catalog.list_competitors(platform_product_id, keyword)})
+
+        if path == "/api/competitors/collect" and self.command == "POST":
+            item = self._read_body()
+            shop_id = int(item.get("shop_id") or 0)
+            platform_product_id = str(item.get("platform_product_id") or "").strip()
+            keyword = (item.get("keyword") or "").strip()
+            if not platform_product_id or not keyword:
+                return _json(self, {"error": "商品ID和搜索词不能为空"}, 400)
+            import threading
+            threading.Thread(
+                target=_collect_competitors_bg,
+                args=(shop_id, platform_product_id, keyword),
+                daemon=True,
+            ).start()
+            return _json(self, {"ok": True, "msg": "竞品采集已启动"})
+
+        if path == "/api/competitors/confirm" and self.command == "POST":
+            item = self._read_body()
+            cid = int(item.get("id") or 0)
+            status = item.get("status")
+            if status not in ("ok", "no", "pending"):
+                return _json(self, {"error": "status 无效"}, 400)
+            ok = catalog.confirm_competitor(cid, status)
+            return _json(self, {"ok": ok}, 200 if ok else 404)
+
+        if path == "/api/buyer-reviews" and self.command == "GET":
+            goods_id = qs.get("goods_id", [""])[0] or None
+            return _json(self, {"items": catalog.list_buyer_reviews(goods_id)})
+
+        if path == "/api/buyer-reviews/collect" and self.command == "POST":
+            item = self._read_body()
+            goods_id = str(item.get("goods_id") or "").strip()
+            if not goods_id:
+                return _json(self, {"error": "商品ID不能为空"}, 400)
+            import threading
+            threading.Thread(
+                target=_collect_buyer_review_bg,
+                args=(goods_id,),
+                daemon=True,
+            ).start()
+            return _json(self, {"ok": True, "msg": "买家端评论提取已启动"})
+
+        if path == "/api/buyer-reviews/collect-full" and self.command == "POST":
+            item = self._read_body()
+            goods_id = str(item.get("goods_id") or "").strip()
+            target = int(item.get("target") or 200)
+            if not goods_id:
+                return _json(self, {"error": "商品ID不能为空"}, 400)
+            import threading
+            threading.Thread(
+                target=_collect_comments_full_bg,
+                args=(goods_id, target),
+                daemon=True,
+            ).start()
+            return _json(self, {"ok": True, "msg": "评论全文采集已启动"})
 
         if path == "/api/catalog/low-stock" and self.command == "GET":
             threshold = int(qs.get("threshold", ["10"])[0] or 10)
@@ -711,7 +954,13 @@ class Handler(BaseHTTPRequestHandler):
             script = os.path.join(BASE_DIR, "collect_goods_effect.py")
             py = "/home/xiaolin/projects/aa-books/backend/.venv/bin/python"
             try:
-                r = subprocess.run([py, script], capture_output=True, text=True, timeout=180)
+                _body = self._read_body()
+            except Exception:
+                _body = {}
+            shop_id = _body.get("shop_id") if isinstance(_body, dict) else None
+            cmd = [py, script] + ([str(shop_id)] if shop_id else [])
+            try:
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
                 lines = [ln for ln in (r.stdout or "").strip().splitlines() if ln.strip().startswith("{")]
                 if lines:
                     return _json(self, json.loads(lines[-1]))
@@ -764,6 +1013,14 @@ class Handler(BaseHTTPRequestHandler):
                 return _json(self, {"error": "id required"}, 400)
             bl = catalog.save_title_opt_baseline(opt_id)
             return _json(self, {"ok": True, "baseline": bl})
+
+        if path == "/api/catalog/title-opt/fix" and self.command == "POST":
+            item = self._read_body()
+            opt_id = int(item.get("id") or 0)
+            if not opt_id:
+                return _json(self, {"error": "id required"}, 400)
+            ok = catalog.mark_title_opt_fixed(opt_id)
+            return _json(self, {"ok": ok})
 
         if path == "/api/catalog/title-opt/apply" and self.command == "POST":
             import threading
@@ -920,30 +1177,46 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
 
+_APPLY_LOCK = __import__("threading").Lock()  # 全局锁：串行化 node 执行，避免并发 apply 争抢 CDP 导致 node 连接失败（2026-09-25 实测：两店并发时闲时来全"无结果"）
+
+
 def _apply_titles_bg(todo, port):
-    """后台线程：调 node 脚本批量改标题，回写 title_opt 状态。"""
-    import subprocess
-    import time
+    """后台线程：分批（每批10个）调 node 脚本改标题，回写 title_opt 状态。"""
     # 执行前二次核对：有出单的跳过（弥补挑选→执行之间的异步时间差）
     todo = [r for r in todo if not catalog.has_order(r["shop_id"], r["platform_product_id"])]
     if not todo:
         return
+    with _APPLY_LOCK:
+        _apply_titles_bg_locked(todo, port)
+
+
+def _apply_titles_bg_locked(todo, port):
+    BATCH = 10
+    for i in range(0, len(todo), BATCH):
+        _apply_batch(todo[i:i + BATCH], port)
+
+
+def _apply_batch(batch, port):
+    """执行一批（≤10个）商品：写清单→跑 node→解析结果→回写状态。"""
+    import subprocess
+    import time
     ts = int(time.time())
     base = f"pdd_apply_{ts}.json"
     wsl_path = f"/mnt/c/tmp/{base}"
     win_path = f"C:\\tmp\\{base}"
-    items = [{"gid": r["platform_product_id"], "title": r["new_title"]} for r in todo]
+    items = [{"gid": r["platform_product_id"], "title": r["new_title"]} for r in batch]
     try:
         with open(wsl_path, "w", encoding="utf-8") as f:
             json.dump(items, f, ensure_ascii=False)
     except Exception as e:
-        for r in todo:
+        for r in batch:
             catalog.update_title_opt(r["id"], note=f"清单写入失败:{e}")
+            catalog.log_title_opt(r["shop_id"], r["platform_product_id"], r["product_name"], r["old_title"], r["new_title"], "apply", "fail", f"清单写入失败:{e}")
         return
     try:
         r = subprocess.run(
             [NODE_EXE, PDD_SET_TITLE_JS, str(port), win_path],
-            capture_output=True, timeout=600,
+            capture_output=True, timeout=max(300, len(batch) * 50 + 60),
         )
         out = r.stdout.decode("utf-8", errors="replace").strip()
         results = []
@@ -955,7 +1228,7 @@ def _apply_titles_bg(todo, port):
                 except Exception:
                     pass
         by_gid = {str(x.get("gid")): x for x in results}
-        for rec in todo:
+        for rec in batch:
             gid = str(rec["platform_product_id"])
             res = by_gid.get(gid)
             if not res:
@@ -970,13 +1243,84 @@ def _apply_titles_bg(todo, port):
                 catalog.update_title_opt(rec["id"], note=st)
                 catalog.log_title_opt(rec["shop_id"], gid, rec["product_name"], rec["old_title"], rec["new_title"], "apply", "fail", st)
     except subprocess.TimeoutExpired:
-        for rec in todo:
+        for rec in batch:
             catalog.update_title_opt(rec["id"], note="执行超时")
             catalog.log_title_opt(rec["shop_id"], rec["platform_product_id"], rec["product_name"], rec["old_title"], rec["new_title"], "apply", "fail", "执行超时")
     except Exception as e:
-        for rec in todo:
+        for rec in batch:
             catalog.update_title_opt(rec["id"], note=f"执行异常:{e}")
             catalog.log_title_opt(rec["shop_id"], rec["platform_product_id"], rec["product_name"], rec["old_title"], rec["new_title"], "apply", "fail", f"执行异常:{e}")
+
+
+def _collect_competitors_bg(shop_id, platform_product_id, keyword):
+    """后台线程：调买家端 node 脚本搜关键词抓竞品，写库。"""
+    import subprocess
+    try:
+        r = subprocess.run(
+            [NODE_EXE, PDD_SEARCH_COMP_JS, str(CLIENT_CDP_PORT), keyword, "20"],
+            capture_output=True, timeout=90,
+        )
+        out = r.stdout.decode("utf-8", errors="replace").strip()
+        items = []
+        for line in out.splitlines():
+            line = line.strip()
+            if line.startswith("["):
+                try:
+                    items = json.loads(line)
+                except Exception:
+                    pass
+        if items:
+            catalog.save_competitors(shop_id, platform_product_id, keyword, items)
+    except Exception:
+        pass  # 静默失败，前端轮询无数据会提示
+
+
+def _collect_buyer_review_bg(goods_id):
+    """后台线程：调买家端 node 脚本提取商品评论（独立表 buyer_reviews）。"""
+    import subprocess
+    try:
+        r = subprocess.run(
+            [NODE_EXE, PDD_BUYER_REVIEW_JS, goods_id],
+            capture_output=True, timeout=120,
+        )
+        out = r.stdout.decode("utf-8", errors="replace").strip()
+        data = None
+        for line in out.splitlines():
+            line = line.strip()
+            if line.startswith("{"):
+                try:
+                    data = json.loads(line)
+                    break
+                except Exception:
+                    continue
+        if data and data.get("total"):
+            catalog.save_buyer_review(data)
+    except Exception:
+        pass  # 静默失败，前端轮询无数据会提示
+
+
+def _collect_comments_full_bg(goods_id, target):
+    """后台线程：调买家端 node 脚本翻页采集评论全文（source='full'）。"""
+    import subprocess
+    try:
+        r = subprocess.run(
+            [NODE_EXE, PDD_COMMENTS_FULL_JS, goods_id, str(target)],
+            capture_output=True, timeout=300,
+        )
+        out = r.stdout.decode("utf-8", errors="replace").strip()
+        data = None
+        for line in out.splitlines():
+            line = line.strip()
+            if line.startswith("{"):
+                try:
+                    data = json.loads(line)
+                    break
+                except Exception:
+                    continue
+        if data and data.get("comments"):
+            catalog.save_buyer_review_full(data)
+    except Exception:
+        pass  # 静默失败，前端轮询无数据会提示
 
 
 def main():
