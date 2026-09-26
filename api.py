@@ -632,6 +632,14 @@ class Handler(BaseHTTPRequestHandler):
                 int(days) if days else None,
             ))
 
+        if path == "/api/weekday-time-vote" and self.command == "GET":
+            shop_id = qs.get("shop_id", [None])[0]
+            days = qs.get("days", [None])[0]
+            return _json(self, catalog.weekday_time_vote(
+                int(shop_id) if shop_id else None,
+                int(days) if days else None,
+            ))
+
         if path == "/api/catalog/scheduled-tasks" and self.command == "GET":
             return _json(self, {"items": catalog.list_scheduled_tasks()})
 

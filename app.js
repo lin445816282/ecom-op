@@ -2349,7 +2349,10 @@ function paintCatalog() {
       const tel = $('#catalog-time');
       if (!tel) return;
       try {
-        const d = await api('/api/order-time-analysis');
+        const [d, vote] = await Promise.all([
+          api('/api/order-time-analysis'),
+          api('/api/weekday-time-vote'),
+        ]);
         const tierColor = { gold:'#16a34a', good:'#22c55e', normal:'#f59e0b', low:'#fb923c', freeze:'#dc2626' };
         const tierBg = { gold:'#dcfce7', good:'#f0fdf4', normal:'#fef9c3', low:'#ffedd5', freeze:'#fee2e2' };
         const cells = d.hours.map(h => `
@@ -2369,6 +2372,15 @@ function paintCatalog() {
             <div style="flex:1;background:#eef2f7;border-radius:4px;height:16px"><div style="height:100%;background:#3b82f6;border-radius:4px;width:${Math.round(w.count/maxW*100)}%"></div></div>
             <span style="font-size:12px;color:#8894ab;width:48px;text-align:right">${w.count}单</span>
           </div>`).join('');
+        const voteRows = (vote.items || []).map(it => `
+          <div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #f1f5f9">
+            <span style="font-size:12px;font-weight:700;color:#475569;width:36px">${it.weekday_name}</span>
+            ${(it.top3 || []).map((t, i) => `
+              <span style="flex:1;background:${i===0?'#dcfce7':i===1?'#f0fdf4':'#f8fafc'};border:1px solid ${i===0?'#16a34a':'#e2e8f0'};border-radius:6px;padding:6px;text-align:center">
+                <span style="font-size:13px;font-weight:700;color:#16a34a">${t.hour}时</span>
+                <span style="font-size:10px;color:#8894ab;display:block">${t.count}单·¥${Math.round(t.gmv)}</span>
+              </span>`).join('')}
+          </div>`).join('');
         tel.innerHTML = `
           <div style="display:flex;gap:10px;flex-wrap:wrap;margin:12px 0">
             <div style="flex:1;min-width:110px;background:#f8fafc;border-radius:8px;padding:10px"><div style="font-size:11px;color:#8894ab">总有效订单</div><div style="font-size:18px;font-weight:700">${s.total_orders}</div></div>
@@ -2379,6 +2391,9 @@ function paintCatalog() {
           <div style="font-size:11px;color:#8894ab;margin:4px 0 12px">🟢黄金150% 🟩较好120% 🟡常规100% 🟠低谷60% 🔴冰点30% — 相对均值自动分档，导入新订单后刷新即动态更新</div>
           <h4 style="margin:14px 0 8px">📅 星期分布</h4>
           <div style="max-width:420px">${weekBars}</div>
+          <h4 style="margin:16px 0 4px">🏆 每天最佳投放 Top3（多指标投票）</h4>
+          <div style="font-size:11px;color:#8894ab;margin:0 0 8px">订单数50% + GMV30% + 客单价20% 加权投票，导入新订单后自动更新</div>
+          <div>${voteRows}</div>
         `;
       } catch(e) { tel.innerHTML = '<div class="empty">分时分析加载失败</div>'; }
     };

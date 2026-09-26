@@ -2492,6 +2492,79 @@ def order_time_analysis(shop_id: int = None, days: int = None) -> dict:
         }
 
 
+def weekday_time_vote(shop_id: int = None, days: int = None) -> dict:
+    """按星期分组，多指标投票选出每天最佳投放 top3（动态演算）。
+
+    3 个投票维度（评委）：订单数(0.5) / GMV成交额(0.3) / 客单价(0.2)。
+    每个维度 min-max 归一化后加权求和，每个星期取 top3 时段。
+    新订单导入后重新调用即自动更新。
+    """
+    VALID = ("((status != '' AND status NOT LIKE '%退款%' AND status NOT LIKE '%取消%' "
+             "AND status NOT LIKE '%关闭%' AND status NOT IN ('待付款','待发货')) "
+             "OR (status = '' AND tracking_no != ''))")
+    WK_NAMES = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"]
+    WEIGHTS = {"count": 0.5, "gmv": 0.3, "atv": 0.2}
+    with closing(_conn()) as c:
+        cond = f"WHERE length(pay_time) >= 13 AND {VALID}"
+        args = []
+        if shop_id:
+            cond += " AND shop_id = ?"
+            args.append(shop_id)
+        if days:
+            cond += " AND date(pay_time) >= date('now', ?)"
+            args.append(f"-{days} days")
+
+        rows = c.execute(
+            f"SELECT CAST(strftime('%w', substr(pay_time,1,10)) AS INT) AS w, "
+            f"substr(pay_time,12,2) AS h, COUNT(*) AS n, "
+            f"COALESCE(SUM(seller_amount),0) AS gmv "
+            f"FROM orders {cond} GROUP BY w, h", args).fetchall()
+
+        by_week = {}
+        for r in rows:
+            w = r["w"] if r["w"] is not None else 0
+            by_week.setdefault(w, []).append(r)
+
+        def _norm(vals):
+            mx, mn = max(vals), min(vals)
+            if mx == mn:
+                return [0.5] * len(vals)
+            return [(v - mn) / (mx - mn) for v in vals]
+
+        items = []
+        for w in range(7):
+            hour_map = {int(r["h"]): r for r in by_week.get(w, [])}
+            data = []
+            for h in range(24):
+                r = hour_map.get(h)
+                n = r["n"] if r else 0
+                gmv = r["gmv"] if r else 0.0
+                atv = round(gmv / n, 2) if n else 0.0
+                data.append({"hour": h, "count": n, "gmv": round(gmv, 2), "atv": atv})
+
+            n_counts = _norm([d["count"] for d in data])
+            n_gmvs = _norm([d["gmv"] for d in data])
+            n_atvs = _norm([d["atv"] for d in data])
+            for i, d in enumerate(data):
+                d["score"] = round(
+                    WEIGHTS["count"] * n_counts[i]
+                    + WEIGHTS["gmv"] * n_gmvs[i]
+                    + WEIGHTS["atv"] * n_atvs[i], 4)
+
+            ranked = sorted(data, key=lambda x: -x["score"])
+            top3 = [{"hour": d["hour"], "count": d["count"], "gmv": d["gmv"],
+                     "atv": d["atv"], "score": d["score"], "rank": i + 1}
+                    for i, d in enumerate(ranked[:3])]
+            items.append({
+                "weekday": w,
+                "weekday_name": WK_NAMES[w],
+                "orders": sum(d["count"] for d in data),
+                "top3": top3,
+            })
+
+        return {"items": items, "weights": WEIGHTS}
+
+
 def low_stock(threshold: int = 10) -> list[dict]:
     """低库存 SKU 列表（stock <= threshold，关联商品名 + 店铺名）。"""
     with closing(_conn()) as c:
