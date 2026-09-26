@@ -70,5 +70,37 @@
     "commission_rate": 0.006,
     "freight_insurance": 0.0,
     "shop": "拼多多"
+  },
+  {
+    "id": "p1790428074",
+    "name": "门后挂钩·七钩2个装【如若月下主推】",
+    "shop": "拼多多",
+    "selling_price": 19.87,
+    "cost": 5.6000000000000005,
+    "shipping": 3.22,
+    "commission_rate": 0.006,
+    "freight_insurance": 0.0,
+    "gross_profit": 0.0,
+    "ad_cost": 8.07,
+    "refund_rate": 0.0515,
+    "ad_spend": 2986.52,
+    "orders": 370,
+    "impressions": 47767,
+    "clicks": 2906,
+    "sold": 370,
+    "notes": "444093761930 | 成本5.6=挂钩4.4+纸箱0.7+人工0.5 | 运费3.22 | 扣点0.6% | 售后5.15%"
+  },
+  {
+    "name": "七钩2个装·普通款【如若月下】",
+    "shop": "拼多多",
+    "selling_price": 7.82,
+    "cost": 5.3,
+    "shipping": 3.0,
+    "commission_rate": 0.006,
+    "freight_insurance": 0.0,
+    "gross_profit": 0.0,
+    "refund_rate": 0.05,
+    "notes": "446257663504 | light款 | 售后5.0%(剔除未发货退款)",
+    "id": "p1790431385"
   }
 ]

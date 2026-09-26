@@ -380,6 +380,14 @@ CREATE TABLE IF NOT EXISTS buyer_reviews (
     created_at TEXT DEFAULT (datetime('now','localtime'))
 );
 CREATE INDEX IF NOT EXISTS idx_buyer_reviews_gid ON buyer_reviews(goods_id);
+
+CREATE TABLE IF NOT EXISTS fixed_cost_params (
+    key TEXT PRIMARY KEY,
+    value REAL NOT NULL,
+    unit TEXT DEFAULT '',
+    note TEXT DEFAULT '',
+    updated_at TEXT DEFAULT (datetime('now','localtime'))
+);
 """
 
 
@@ -400,6 +408,7 @@ def init_db() -> None:
         _seed_freight_rate(c)
         _seed_scatter_shops(c)
         _seed_pack_mapping(c)
+        _seed_cost_params(c)
     seed_scheduled_tasks()  # 幂等 seed 定时任务清单
 
 
@@ -428,6 +437,68 @@ def _seed_pack_mapping(conn: sqlite3.Connection) -> None:
                 (entry, shop_ids, freight_account),
             )
         conn.commit()
+
+
+def _seed_cost_params(conn: sqlite3.Connection) -> None:
+    """固定成本参数（挂钩类商品），幂等 seed，INSERT OR IGNORE 不覆盖已有值。"""
+    rows = [
+        ("hook_cost", 2.2, "元/个", "挂钩进货成本（加厚加粗款）"),
+        ("hook_cost_light", 2.05, "元/个", "挂钩进货成本（加粗款/普通款，比加厚加粗少0.15）"),
+        ("box_cost", 0.7, "元/个", "纸箱成本（每包裹）"),
+        ("labor_cost", 0.5, "元/单", "打包人工（每包裹）"),
+        ("hook_weight", 0.25, "kg/个", "挂钩重量（反推修正）"),
+        ("box_weight", 0.08, "kg/个", "纸箱重量"),
+    ]
+    for key, value, unit, note in rows:
+        conn.execute(
+            "INSERT OR IGNORE INTO fixed_cost_params(key, value, unit, note) VALUES(?,?,?,?)",
+            (key, value, unit, note),
+        )
+    conn.commit()
+
+
+def get_cost_params() -> dict:
+    """读取固定成本参数（挂钩类）。"""
+    with closing(_conn()) as c:
+        rows = c.execute("SELECT key, value FROM fixed_cost_params").fetchall()
+        return {r["key"]: r["value"] for r in rows}
+
+
+def calc_hook_cost(n_hooks: int, grade: str = "heavy") -> dict:
+    """按固定参数计算挂钩类商品成本/重量/估算运费。
+
+    n_hooks: 单件商品含挂钩数量（如 2个装 = 2）。
+    grade: "heavy"=加厚加粗款(默认) / "light"=加粗款/普通款。
+    返回: 商品成本、重量、按重量档估算的主要地区运费。
+    """
+    p = get_cost_params()
+    if grade == "light":
+        hook_cost = p.get("hook_cost_light", p.get("hook_cost", 0.0))
+    else:
+        hook_cost = p.get("hook_cost", 0.0)
+    box_cost = p.get("box_cost", 0.0)
+    labor_cost = p.get("labor_cost", 0.0)
+    hook_weight = p.get("hook_weight", 0.0)
+    box_weight = p.get("box_weight", 0.0)
+    cost = hook_cost * n_hooks + box_cost + labor_cost
+    weight = hook_weight * n_hooks + box_weight
+    # 按重量档估算主要地区运费（福建/江浙沪粤等主发地区）
+    if weight <= 0.5:
+        freight = 2.5
+    elif weight <= 1.0:
+        freight = 3.0
+    elif weight <= 2.0:
+        freight = 4.2
+    elif weight <= 3.0:
+        freight = 5.4
+    else:
+        freight = None
+    return {
+        "n_hooks": n_hooks,
+        "cost": round(cost, 2),
+        "weight": round(weight, 3),
+        "freight_est": freight,
+    }
 
 
 def _migrate(conn: sqlite3.Connection) -> None:

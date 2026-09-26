@@ -603,6 +603,13 @@ class Handler(BaseHTTPRequestHandler):
             period = qs.get("period", [None])[0]
             return _json(self, catalog.product_real_roi(period))
 
+        if path == "/api/hook-cost" and self.command == "GET":
+            n = int(qs.get("n", ["1"])[0] or 1)
+            return _json(self, catalog.calc_hook_cost(n))
+
+        if path == "/api/cost-params" and self.command == "GET":
+            return _json(self, {"params": catalog.get_cost_params()})
+
         if path == "/api/catalog/scheduled-tasks" and self.command == "GET":
             return _json(self, {"items": catalog.list_scheduled_tasks()})
 
