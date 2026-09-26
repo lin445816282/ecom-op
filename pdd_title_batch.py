@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import catalog
 
 API_BASE = "http://127.0.0.1:8765"
+ACCESS_TOKEN = os.environ.get("ECOM_OP_TOKEN", "Alcz8283103")
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 
 
@@ -187,7 +188,7 @@ def apply_ids(ids):
     req = urllib.request.Request(
         f"{API_BASE}/api/catalog/title-opt/apply",
         data=json.dumps({"ids": ids}).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {ACCESS_TOKEN}"},
     )
     with urllib.request.urlopen(req, timeout=30) as r:
         return json.loads(r.read().decode("utf-8"))
