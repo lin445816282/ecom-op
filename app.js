@@ -2036,6 +2036,15 @@ function paintCatalog() {
       <div class="orders-panel-body" id="catalog-promo" hidden></div>
     </div>
     <div class="orders-panel">
+      <div class="orders-panel-head" data-toggle-time>
+        <span class="orders-fold-icon">▸</span>
+        <span class="orders-panel-title">⏰ 分时投放</span>
+        <span class="orders-panel-count">24时段</span>
+        <span class="orders-panel-hint">订单时段分布 → 分时折扣方案（动态演算）</span>
+      </div>
+      <div class="orders-panel-body" id="catalog-time" hidden></div>
+    </div>
+    <div class="orders-panel">
       <div class="orders-panel-head" data-toggle-lowstock>
         <span class="orders-fold-icon">▸</span>
         <span class="orders-panel-title">⚠️ 库存预警</span>
@@ -2334,6 +2343,57 @@ function paintCatalog() {
       });
     };
     renderPromo();
+
+    // 分时投放渲染（懒加载，展开时才拉数据）
+    const renderTime = async () => {
+      const tel = $('#catalog-time');
+      if (!tel) return;
+      try {
+        const d = await api('/api/order-time-analysis');
+        const tierColor = { gold:'#16a34a', good:'#22c55e', normal:'#f59e0b', low:'#fb923c', freeze:'#dc2626' };
+        const tierBg = { gold:'#dcfce7', good:'#f0fdf4', normal:'#fef9c3', low:'#ffedd5', freeze:'#fee2e2' };
+        const cells = d.hours.map(h => `
+          <div style="border:1px solid ${tierColor[h.tier]};border-radius:6px;padding:6px 4px;text-align:center;background:${tierBg[h.tier]}">
+            <div style="font-size:11px;color:#475569">${h.hour}时</div>
+            <div style="font-size:13px;font-weight:700;color:${tierColor[h.tier]}">${h.discount}%</div>
+            <div style="font-size:10px;color:#8894ab">${h.count}单</div>
+          </div>`).join('');
+        const s = d.summary;
+        const goldHours = d.hours.filter(h => h.tier === 'gold').map(h => h.hour + '时').join('、');
+        const freezeHours = d.hours.filter(h => h.tier === 'freeze').map(h => h.hour + '时').join('、');
+        const wk = ['日','一','二','三','四','五','六'];
+        const maxW = Math.max(...d.weeks.map(x => x.count), 1);
+        const weekBars = d.weeks.map(w => `
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+            <span style="font-size:12px;color:#475569;width:32px">周${wk[w.week]}</span>
+            <div style="flex:1;background:#eef2f7;border-radius:4px;height:16px"><div style="height:100%;background:#3b82f6;border-radius:4px;width:${Math.round(w.count/maxW*100)}%"></div></div>
+            <span style="font-size:12px;color:#8894ab;width:48px;text-align:right">${w.count}单</span>
+          </div>`).join('');
+        tel.innerHTML = `
+          <div style="display:flex;gap:10px;flex-wrap:wrap;margin:12px 0">
+            <div style="flex:1;min-width:110px;background:#f8fafc;border-radius:8px;padding:10px"><div style="font-size:11px;color:#8894ab">总有效订单</div><div style="font-size:18px;font-weight:700">${s.total_orders}</div></div>
+            <div style="flex:1;min-width:150px;background:#f8fafc;border-radius:8px;padding:10px"><div style="font-size:11px;color:#8894ab">黄金时段（加预算）</div><div style="font-size:13px;font-weight:700;color:#16a34a">${goldHours || '—'}</div></div>
+            <div style="flex:1;min-width:110px;background:#f8fafc;border-radius:8px;padding:10px"><div style="font-size:11px;color:#8894ab">冰点时段（暂停）</div><div style="font-size:13px;font-weight:700;color:#dc2626">${freezeHours || '—'}</div></div>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(8,1fr);gap:6px;margin:12px 0">${cells}</div>
+          <div style="font-size:11px;color:#8894ab;margin:4px 0 12px">🟢黄金150% 🟩较好120% 🟡常规100% 🟠低谷60% 🔴冰点30% — 相对均值自动分档，导入新订单后刷新即动态更新</div>
+          <h4 style="margin:14px 0 8px">📅 星期分布</h4>
+          <div style="max-width:420px">${weekBars}</div>
+        `;
+      } catch(e) { tel.innerHTML = '<div class="empty">分时分析加载失败</div>'; }
+    };
+
+    // 分时投放折叠切换
+    const timeToggle = el.querySelector('[data-toggle-time]');
+    const timeEl = $('#catalog-time');
+    if (timeToggle && timeEl) {
+      timeToggle.onclick = () => {
+        const willOpen = timeEl.hidden;
+        timeEl.hidden = !willOpen;
+        timeToggle.querySelector('.orders-fold-icon').textContent = willOpen ? '▾' : '▸';
+        if (willOpen && !timeEl.dataset.loaded) { timeEl.dataset.loaded = '1'; renderTime(); }
+      };
+    }
   }
 
   // 库存预警折叠切换 + 渲染

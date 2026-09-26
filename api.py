@@ -624,6 +624,14 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/cost-params" and self.command == "GET":
             return _json(self, {"params": catalog.get_cost_params()})
 
+        if path == "/api/order-time-analysis" and self.command == "GET":
+            shop_id = qs.get("shop_id", [None])[0]
+            days = qs.get("days", [None])[0]
+            return _json(self, catalog.order_time_analysis(
+                int(shop_id) if shop_id else None,
+                int(days) if days else None,
+            ))
+
         if path == "/api/catalog/scheduled-tasks" and self.command == "GET":
             return _json(self, {"items": catalog.list_scheduled_tasks()})
 

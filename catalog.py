@@ -2426,6 +2426,72 @@ def product_real_roi(period: str = None) -> dict:
         }
 
 
+def _time_tier(count: int, avg: float) -> dict:
+    """按小时订单数相对均值分档，给出分时折扣建议。"""
+    if avg <= 0:
+        return {"tier": "normal", "discount": 100, "label": "常规", "advice": "正常投放"}
+    ratio = count / avg
+    if ratio >= 1.4:
+        return {"tier": "gold", "discount": 150, "label": "黄金", "advice": "加预算抢量"}
+    if ratio >= 1.0:
+        return {"tier": "good", "discount": 120, "label": "较好", "advice": "略加预算"}
+    if ratio >= 0.6:
+        return {"tier": "normal", "discount": 100, "label": "常规", "advice": "正常投放"}
+    if ratio >= 0.3:
+        return {"tier": "low", "discount": 60, "label": "低谷", "advice": "降预算"}
+    return {"tier": "freeze", "discount": 30, "label": "冰点", "advice": "暂停投放"}
+
+
+def order_time_analysis(shop_id: int = None, days: int = None) -> dict:
+    """订单时间维度分析 + 分时投放建议（动态演算）。
+
+    基于订单 pay_time 的小时/星期分布，实时计算分时投放方案。
+    新订单导入后重新调用即自动更新（动态演算）。
+    仅统计有效成交（排除退款/取消/关闭/待付款/待发货）。
+    """
+    VALID = ("((status != '' AND status NOT LIKE '%退款%' AND status NOT LIKE '%取消%' "
+             "AND status NOT LIKE '%关闭%' AND status NOT IN ('待付款','待发货')) "
+             "OR (status = '' AND tracking_no != ''))")
+    with closing(_conn()) as c:
+        cond = f"WHERE length(pay_time) >= 13 AND {VALID}"
+        args = []
+        if shop_id:
+            cond += " AND shop_id = ?"
+            args.append(shop_id)
+        if days:
+            cond += " AND date(pay_time) >= date('now', ?)"
+            args.append(f"-{days} days")
+
+        hour_rows = c.execute(
+            f"SELECT substr(pay_time,12,2) AS h, COUNT(*) AS n, COALESCE(SUM(seller_amount),0) AS gmv "
+            f"FROM orders {cond} GROUP BY h", args).fetchall()
+        week_rows = c.execute(
+            f"SELECT CAST(strftime('%w', substr(pay_time,1,10)) AS INT) AS w, COUNT(*) AS n, COALESCE(SUM(seller_amount),0) AS gmv "
+            f"FROM orders {cond} GROUP BY w", args).fetchall()
+
+        hour_map = {int(r["h"]): r for r in hour_rows}
+        total = sum(r["n"] for r in hour_rows)
+        avg = total / 24.0 if total else 0.0
+        hours = []
+        for h in range(24):
+            r = hour_map.get(h)
+            n = r["n"] if r else 0
+            gmv = r["gmv"] if r else 0.0
+            tier = _time_tier(n, avg)
+            hours.append({"hour": h, "count": n, "gmv": round(gmv, 2), **tier})
+
+        return {
+            "hours": hours,
+            "weeks": [{"week": r["w"], "count": r["n"], "gmv": round(r["gmv"], 2)} for r in week_rows],
+            "summary": {
+                "total_orders": total,
+                "avg_per_hour": round(avg, 1),
+                "peak_hours": [h["hour"] for h in hours if h["tier"] in ("gold", "good")],
+                "freeze_hours": [h["hour"] for h in hours if h["tier"] == "freeze"],
+            },
+        }
+
+
 def low_stock(threshold: int = 10) -> list[dict]:
     """低库存 SKU 列表（stock <= threshold，关联商品名 + 店铺名）。"""
     with closing(_conn()) as c:
