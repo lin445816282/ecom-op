@@ -964,6 +964,9 @@ function productFormHTML(p={}) {
         </div>
         <div class="field-row">
           <div class="field"><label>售后率（0.15=15%）</label><input name="refund_rate" type="number" step="0.01" value="${val('refund_rate',0.15)}"></div>
+          <div class="field"><label>平台商品ID（关联真实ROI）</label><input name="platform_product_id" value="${esc(val('platform_product_id'))}" placeholder="如 444093761930"></div>
+        </div>
+        <div class="field-row">
           <div class="field"><label>备注</label><input name="notes" value="${esc(val('notes'))}" placeholder="类目/策略"></div>
         </div>
         <div class="field" style="margin-top:4px"><label>成本明细（填了自动算毛利，覆盖手填毛利）</label></div>
@@ -2245,6 +2248,13 @@ function paintCatalog() {
       const clk = sum('clicks');
       const promoRoi = totalSpend ? (dealAmount / totalSpend).toFixed(2) : '—';
       const realRoiSum = totalSpend ? (realAmount / totalSpend).toFixed(2) : '—';
+      const totalProfit = sum('profit');
+      const profitColor = (r) => {
+        if (r.profit == null) return '';
+        if (r.profit < 0) return 'color:#dc2626;font-weight:700';
+        if ((r.profit_margin ?? 0) < 0.1) return 'color:#d97706;font-weight:700';
+        return 'color:#16a34a;font-weight:700';
+      };
       // 按店铺分组
       const byShop = {};
       filtered.forEach(r => { (byShop[r.shop_id] = byShop[r.shop_id] || []).push(r); });
@@ -2266,6 +2276,7 @@ function paintCatalog() {
           <div class="perf-card"><div class="p-label">平均ROI(平台)</div><div class="p-value">${promoRoi}</div></div>
           <div class="perf-card"><div class="p-label">真实成交额</div><div class="p-value">¥${fmt(realAmount)}</div></div>
           <div class="perf-card"><div class="p-label">真实ROI</div><div class="p-value" style="${realRoiSum !== '—' && Number(realRoiSum) < 1 ? 'color:#dc2626' : ''}">${realRoiSum}</div></div>
+          <div class="perf-card"><div class="p-label">真实利润</div><div class="p-value" style="${totalProfit < 0 ? 'color:#dc2626' : 'color:#16a34a'}">¥${fmt(totalProfit)}</div></div>
           <div class="perf-card"><div class="p-label">曝光/点击</div><div class="p-value">${imp}/${clk}</div></div>
         </div>
         ${Object.entries(byShop).map(([sid, rows]) => {
@@ -2280,7 +2291,7 @@ function paintCatalog() {
               </div>
               <div class="orders-shop-body" hidden>
                 <div class="table-wrap"><table>
-                  <thead><tr><th>商品</th><th>花费</th><th>平台成交</th><th>平台ROI</th><th>真实成交</th><th>真实ROI</th><th>真实单数</th><th>曝光</th><th>点击</th></tr></thead>
+                  <thead><tr><th>商品</th><th>花费</th><th>平台成交</th><th>平台ROI</th><th>真实成交</th><th>真实ROI</th><th>真实单数</th><th>利润</th><th>利润率</th><th>曝光</th><th>点击</th></tr></thead>
                   <tbody>${rows.map(r => `<tr>
                     <td title="${esc(r.product_name)}">${esc((r.product_name || '').slice(0, 14))}${(r.product_name || '').length > 14 ? '…' : ''}</td>
                     <td>¥${fmt(r.total_spend)}</td>
@@ -2289,6 +2300,8 @@ function paintCatalog() {
                     <td>${r.real_amount != null ? '¥' + fmt(r.real_amount) : '—'}</td>
                     <td style="${r.real_roi != null && r.real_roi < 1 ? 'color:#dc2626;font-weight:700' : ''}">${r.real_roi != null ? r.real_roi : '—'}</td>
                     <td>${r.real_count != null ? r.real_count : '—'}</td>
+                    <td style="${profitColor(r)}">${r.profit != null ? '¥' + fmt(r.profit) : '—'}</td>
+                    <td style="${profitColor(r)}">${r.profit_margin != null ? (r.profit_margin * 100).toFixed(1) + '%' : '—'}</td>
                     <td>${r.impressions}</td>
                     <td>${r.clicks}</td>
                   </tr>`).join('')}

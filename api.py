@@ -104,7 +104,8 @@ class Handler(BaseHTTPRequestHandler):
             cleaned = {k: item.get(k) for k in [
                 "id", "name", "selling_price", "gross_profit", "ad_cost", "refund_rate",
                 "ad_spend", "orders", "impressions", "clicks", "sold", "notes",
-                "cost", "shipping", "commission_rate", "freight_insurance", "shop"]}
+                "cost", "shipping", "commission_rate", "freight_insurance", "shop",
+                "platform_product_id"]}
             cleaned["id"] = cleaned.get("id") or ""
             cleaned["name"] = cleaned.get("name") or "未命名商品"
             for k in ["selling_price", "gross_profit", "ad_cost", "refund_rate",

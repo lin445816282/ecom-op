@@ -88,7 +88,8 @@
     "impressions": 47767,
     "clicks": 2906,
     "sold": 370,
-    "notes": "444093761930 | 成本5.6=挂钩4.4+纸箱0.7+人工0.5 | 运费3.22 | 扣点0.6% | 售后5.15%"
+    "notes": "444093761930 | 成本5.6=挂钩4.4+纸箱0.7+人工0.5 | 运费3.22 | 扣点0.6% | 售后5.15%",
+    "platform_product_id": "444093761930"
   },
   {
     "name": "七钩2个装·普通款【如若月下】",
@@ -101,6 +102,35 @@
     "gross_profit": 0.0,
     "refund_rate": 0.05,
     "notes": "446257663504 | light款 | 售后5.0%(剔除未发货退款)",
-    "id": "p1790431385"
+    "id": "p1790431385",
+    "platform_product_id": "446257663504"
+  },
+  {
+    "id": "p_double_hook",
+    "name": "双层挂钩·总长41【如若月下】",
+    "shop": "拼多多",
+    "selling_price": 25.25,
+    "cost": 5.6,
+    "shipping": 3.0,
+    "commission_rate": 0.006,
+    "freight_insurance": 0.0,
+    "gross_profit": 0.0,
+    "refund_rate": 0.0,
+    "platform_product_id": "455666400497",
+    "notes": "heavy款 双层=2个装"
+  },
+  {
+    "id": "p_jiayu_basic",
+    "name": "七钩1件装·加粗款【嘉裕】",
+    "shop": "拼多多",
+    "selling_price": 7.09,
+    "cost": 3.25,
+    "shipping": 2.5,
+    "commission_rate": 0.006,
+    "freight_insurance": 0.0,
+    "gross_profit": 0.0,
+    "refund_rate": 0.037,
+    "platform_product_id": "63360840",
+    "notes": "light款 加粗1件装"
   }
 ]

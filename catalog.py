@@ -2309,6 +2309,18 @@ def product_real_roi(period: str = None) -> dict:
     对比「推广平台口径 ROI」与「真实订单口径 ROI」，识别纯烧钱商品。
     周期对齐：orders 按 pay_time 落在 promotions.period 对应区间内聚合（若 period 为空则全量）。
     """
+    cost_map = {}
+    try:
+        import data as _data
+        for p in _data.load_products():
+            pid = p.get("platform_product_id")
+            if pid:
+                cost_map[pid] = {
+                    "cost": p.get("cost") or 0.0,
+                    "shipping": p.get("shipping") or 0.0,
+                }
+    except Exception:
+        pass
     with closing(_conn()) as c:
         # 1. 聚合推广数据（按商品），带 period 范围
         where = ""
@@ -2338,30 +2350,46 @@ def product_real_roi(period: str = None) -> dict:
             periods = (r["periods"] or "").split(",")
             real_amount = 0.0
             real_count = 0
+            real_qty = 0
             for per in periods:
                 if "~" not in per:
                     continue
                 start, end = per.split("~", 1)
                 o = c.execute(
-                    "SELECT COALESCE(SUM(seller_amount),0) AS amt, COUNT(*) AS cnt FROM orders "
+                    "SELECT COALESCE(SUM(seller_amount),0) AS amt, COUNT(*) AS cnt, COALESCE(SUM(quantity),0) AS qty FROM orders "
                     "WHERE shop_id=? AND platform_product_id=? AND pay_time >= ? AND pay_time < ?",
                     (shop_id, pid, start + " 00:00:00", end + " 23:59:59"),
                 ).fetchone()
                 real_amount += o["amt"] or 0.0
                 real_count += o["cnt"] or 0
+                real_qty += o["qty"] or 0
             promo_roi = round(deal_amount / total_spend, 2) if total_spend else None
             real_roi = round(real_amount / total_spend, 2) if total_spend else None
+            # 关联成本算真实利润：利润 = 实收 - 商品成本×件数 - 运费×单数 - 推广费
+            cinfo = cost_map.get(pid)
+            profit = None
+            profit_margin = None
+            cost_unit = None
+            ship_unit = None
+            if cinfo:
+                cost_unit = cinfo["cost"]
+                ship_unit = cinfo["shipping"]
+                profit = round(real_amount - cost_unit * real_qty - ship_unit * real_count - total_spend, 2)
+                profit_margin = round(profit / real_amount, 4) if real_amount else None
             result.append({
                 "shop_id": shop_id, "shop_name": r["shop_name"], "platform_product_id": pid,
                 "product_name": r["product_name"] or "", "periods": r["periods"] or "",
                 "total_spend": total_spend, "deal_amount": deal_amount, "promo_roi": promo_roi,
                 "real_amount": round(real_amount, 2), "real_count": real_count, "real_roi": real_roi,
+                "real_qty": real_qty, "cost": cost_unit, "shipping": ship_unit,
+                "profit": profit, "profit_margin": profit_margin,
                 "promo_deals": r["promo_deals"] or 0, "impressions": r["impressions"] or 0,
                 "clicks": r["clicks"] or 0,
             })
         # 汇总
         total_spend = sum(x["total_spend"] for x in result)
         real_amount = sum(x["real_amount"] for x in result)
+        total_profit = sum(x["profit"] for x in result if x["profit"] is not None)
         return {
             "items": result,
             "summary": {
@@ -2369,6 +2397,7 @@ def product_real_roi(period: str = None) -> dict:
                 "total_spend": round(total_spend, 2),
                 "real_amount": round(real_amount, 2),
                 "real_roi": round(real_amount / total_spend, 2) if total_spend else None,
+                "total_profit": round(total_profit, 2),
             },
         }
 

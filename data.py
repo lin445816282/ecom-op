@@ -42,6 +42,7 @@ class Product:
     clicks: int = 0            # 最近周期点击
     sold: int = 0              # 最近周期成交件数
     notes: str = ""
+    platform_product_id: str = ""   # 平台商品ID（关联 catalog.products / 真实ROI）
     # 成本明细（任一非空则自动算毛利，覆盖手动 gross_profit）
     cost: float = 0.0              # 进货价
     shipping: float = 0.0          # 运费
@@ -69,6 +70,7 @@ class Product:
             "commission_rate": self.commission_rate,
             "freight_insurance": self.freight_insurance,
             "shop": self.shop,
+            "platform_product_id": self.platform_product_id,
         }
 
     @classmethod
@@ -573,7 +575,8 @@ def save_products(items: list[dict]) -> None:
 def add_product(item: dict) -> dict:
     items = load_products()
     if "id" not in item or not item["id"]:
-        item["id"] = "p" + str(int(__import__("time").time()))
+        import time, random
+        item["id"] = "p" + str(int(time.time() * 1000)) + str(random.randint(0, 999))
     # 覆盖式更新
     idx = next((i for i, p in enumerate(items) if p.get("id") == item["id"]), None)
     if idx is None:
