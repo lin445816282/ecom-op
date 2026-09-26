@@ -13,6 +13,12 @@ async function main(){
   await new Promise((res,rej)=>{const t=setTimeout(()=>rej(new Error('timeout')),8000);ws.addEventListener('open',()=>{clearTimeout(t);res()})});
   await send('Page.navigate',{url:'https://mobile.yangkeduo.com/search_result.html?search_key='+encodeURIComponent(WORD)});
   await sleep(5000);
+  // 深滚动加载更多标题
+  for(let i=0;i<8;i++){
+    await send('Runtime.evaluate',{expression:'window.scrollBy(0, 1500)',returnByValue:true});
+    await sleep(1200);
+  }
+  await sleep(1500);
   // 读所有叶子元素文本，找含维度名的连续文本
   const expr = `(() => {
     const leaves = [...document.querySelectorAll('div,span')].map(el=>(el.textContent||'').trim()).filter(t=>t.length>=3 && t.length<=80);
@@ -23,7 +29,7 @@ async function main(){
     const hits = out.filter(t => dims.some(d => t.startsWith(d) && t.length > d.length));
     // 商品标题（12-60字，含核心词）
     const titles = out.filter(t => t.length>=12 && t.length<=60 && t.includes('${WORD}'));
-    return JSON.stringify({filters: hits.slice(0,20), titles: titles.slice(0,30)});
+    return JSON.stringify({filters: hits.slice(0,20), titles: titles.slice(0,100)});
   })()`;
   const r = await send('Runtime.evaluate',{expression:expr,returnByValue:true});
   console.log(r.result.value);
