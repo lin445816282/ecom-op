@@ -4694,7 +4694,8 @@ function paintTitleOpt(el) {
   const statusMap = {
     selected: { label: '待优化', color: '#d97706', bg: '#fef3c7' },
     optimized: { label: '已优化', color: '#16a34a', bg: '#dcfce7' },
-    done: { label: '已生效', color: '#2563eb', bg: '#dbeafe' }
+    done: { label: '已生效', color: '#2563eb', bg: '#dbeafe' },
+    blocked: { label: '🛑 已拦截', color: '#64748b', bg: '#e2e8f0' }
   };
 
   let h = '';
@@ -4707,7 +4708,7 @@ function paintTitleOpt(el) {
 
   // ⚠️ 失败清单（最上面，跨店铺展示待处理失败记录）
   const allOpts = titleOptCache.allOpts || opts;
-  const failOpts = allOpts.filter(o => o.note && o.note !== '执行中…' && o.note !== '已出单，跳过' && o.status !== 'done' && !o.fixed);
+  const failOpts = allOpts.filter(o => o.note && o.note !== '执行中…' && o.note !== '已出单，跳过' && o.status !== 'done' && o.status !== 'blocked' && !o.fixed);
   if (failOpts.length) {
     h += '<div style="background:#fff7ed;border:1px solid #fdba74;border-radius:12px;margin:12px;padding:12px">';
     h += '<div style="font-size:13px;font-weight:700;color:#c2410c">⚠️ 失败清单（' + failOpts.length + ' 个待处理）</div>';
@@ -4718,6 +4719,21 @@ function paintTitleOpt(el) {
       h += '<span style="font-size:11px;color:#5a6b85;flex-shrink:0">ID <b>' + esc(o.platform_product_id) + '</b></span>';
       h += '<span style="font-size:11px;color:#dc2626;background:#fee2e2;padding:1px 8px;border-radius:5px;flex-shrink:0">' + esc(o.note) + '</span>';
       h += '<button class="btn xs" style="margin-left:auto;background:#16a34a;color:#fff;border:none;flex-shrink:0" onclick="titleOptFix(' + o.id + ')">✅ 确认修复</button>';
+      h += '</div>';
+    });
+    h += '</div>';
+  }
+
+  // 🛑 质量门拦截清单（AI 偷懒/负优化，未执行更新，只读）
+  const blockedOpts = allOpts.filter(o => o.status === 'blocked');
+  if (blockedOpts.length) {
+    h += '<div style="background:#f8fafc;border:1px solid #cbd5e1;border-radius:12px;margin:12px;padding:12px">';
+    h += '<div style="font-size:13px;font-weight:700;color:#475569">🛑 质量门拦截（' + blockedOpts.length + ' 个，AI 偷懒/负优化未执行）</div>';
+    blockedOpts.forEach(o => {
+      h += '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 0;border-bottom:1px dashed #e2e8f0">';
+      if (o.shop_name) h += '<span style="font-size:11px;font-weight:700;color:#3b82f6;background:#e0f2fe;padding:1px 8px;border-radius:5px;flex-shrink:0">' + esc(o.shop_name) + '</span>';
+      h += '<span style="font-size:11px;color:#5a6b85;flex-shrink:0">ID <b>' + esc(o.platform_product_id) + '</b></span>';
+      h += '<span style="font-size:11px;color:#64748b;background:#e2e8f0;padding:1px 8px;border-radius:5px;flex-shrink:0">' + esc(o.note || '质量门拦截') + '</span>';
       h += '</div>';
     });
     h += '</div>';

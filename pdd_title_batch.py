@@ -52,6 +52,62 @@ def cut_title(s, limit=60):
         return cut[:-1].decode("gbk", "ignore")
 
 
+# ===== 质量门：拦截 AI 偷懒/负优化标题 =====
+import re as _re
+
+# 营销噪音词（无搜索价值，删掉算优化）
+JUNK_SET = {
+    "新款", "特价", "包邮", "正品", "清仓", "促销", "爆款", "热卖", "秒杀",
+    "抢购", "限时", "优惠", "折扣", "批发", "厂家直销", "工厂直供",
+    "厂家", "直销", "直供", "大促", "包邮款", "特价款", "福利",
+}
+JUNK_PAT = _re.compile(r"买\d+送\d+|买一送一|买二送一|买一赠一")
+
+
+def _tokenize(title):
+    """切词，返回 (有效词set, 垃圾词set)。"""
+    t = JUNK_PAT.sub(" ", title or "")
+    parts = _re.split(r"[\s·,，、/|\\【】\[\]（）()]+", t)
+    valid, junk = set(), set()
+    for w in parts:
+        w = w.strip()
+        if len(w) < 2:
+            continue
+        if _re.fullmatch(r"[\d\W_]+", w):
+            continue
+        if w in JUNK_SET:
+            junk.add(w)
+        else:
+            valid.add(w)
+    return valid, junk
+
+
+def quality_gate(old, new):
+    """判断新标题是否真优化。返回 (passed: bool, reason: str)。
+
+    放行：补了有效长尾词，或删了营销噪音词。
+    拦截：只加空格/调序，或净减了核心词。
+    """
+    old, new = (old or "").strip(), (new or "").strip()
+    if not new or new == old:
+        return False, "标题未变"
+    # 去空格/标点后字符完全一致 = 仅加空格/标点（偷懒，拦截）
+    if _re.sub(r"[\s·,，、/|\\【】\[\]（）()]+", "", old) == _re.sub(r"[\s·,，、/|\\【】\[\]（）()]+", "", new):
+        return False, "仅加空格/标点"
+    ov, oj = _tokenize(old)
+    nv, nj = _tokenize(new)
+    added = nv - ov            # 新增有效词
+    removed_junk = oj - nj     # 删掉的垃圾词
+    lost_valid = ov - nv       # 删掉的有效词
+    if added:
+        return True, f"补长尾词{len(added)}个"
+    if removed_junk and not lost_valid:
+        return True, f"删营销词{len(removed_junk)}个"
+    if lost_valid:
+        return False, f"净减核心词{len(lost_valid)}个"
+    return False, "仅格式调整"
+
+
 def gen_titles(products, api_key):
     """调 DeepSeek 批量生成优化标题，返回 [新标题] 列表（按输入顺序）。分批 15 个/次，避免输出超限。"""
     titles = []
@@ -151,12 +207,25 @@ def main():
         return
 
     if dry_run:
-        preview = [{"name": p["name"], "old": p["name"], "new": t} for p, t in zip(picked, titles)]
+        preview = []
+        for p, t in zip(picked, titles):
+            passed, reason = quality_gate(p["name"], t)
+            preview.append({"name": p["name"], "old": p["name"], "new": t,
+                            "gate": ("PASS:" if passed else "BLOCK:") + reason})
         print(json.dumps({"ok": True, "dry_run": True, "shop_id": shop_id, "items": preview}, ensure_ascii=False))
         return
 
     ids = []
+    blocked = []
     for p, t in zip(picked, titles):
+        passed, reason = quality_gate(p["name"], t)
+        if not passed:
+            # 拦截：写入 title_opt 标记 blocked（避免反复挑中），不执行更新
+            rid = catalog.add_title_opt(shop_id, p["platform_product_id"])
+            if rid and rid > 0:
+                catalog.update_title_opt(rid, status="blocked", note=f"质量门拦截:{reason}")
+            blocked.append({"id": p["platform_product_id"], "reason": reason})
+            continue
         rid = catalog.add_title_opt(shop_id, p["platform_product_id"])
         if rid and rid > 0:
             catalog.save_title_opt_baseline(rid)  # 自动基线：改标题前快照近7天流量
@@ -165,9 +234,10 @@ def main():
 
     if ids:
         res = apply_ids(ids)
-        print(json.dumps({"ok": True, "shop_id": shop_id, "picked": len(ids), "apply": res}, ensure_ascii=False))
+        print(json.dumps({"ok": True, "shop_id": shop_id, "picked": len(ids),
+                          "blocked": len(blocked), "blocked_detail": blocked, "apply": res}, ensure_ascii=False))
     else:
-        print(json.dumps({"ok": False, "error": "无可写入的商品"}, ensure_ascii=False))
+        print(json.dumps({"ok": False, "error": "全部被质量门拦截，无可写入商品", "blocked": blocked}, ensure_ascii=False))
 
 
 if __name__ == "__main__":
