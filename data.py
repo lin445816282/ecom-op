@@ -110,7 +110,7 @@ class Product:
     @property
     def break_even_roi(self) -> float:
         denom = self.margin * self.effective_rate
-        if denom <= 1e-9:
+        if abs(denom) <= 1e-9:
             return float("inf")
         roi = 1.0 / denom
         return round(roi, 4)

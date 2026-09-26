@@ -31,8 +31,21 @@ ACCESS_TOKEN = os.environ.get("ECOM_OP_TOKEN", "Alcz8283103")
 AUTH_WHITELIST = {"/", "/index.html", "/app.js", "/style.css", "/favicon.ico", "/api/auth/login"}
 
 
+def _sanitize(obj):
+    """递归把 JSON 非法的 Infinity/NaN 转成 None，防止前端 JSON.parse 崩溃。"""
+    if isinstance(obj, float):
+        if obj != obj or obj in (float("inf"), float("-inf")):
+            return None
+        return obj
+    if isinstance(obj, dict):
+        return {k: _sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_sanitize(v) for v in obj]
+    return obj
+
+
 def _json(handler, obj, status=200):
-    body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+    body = json.dumps(_sanitize(obj), ensure_ascii=False).encode("utf-8")
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json; charset=utf-8")
     handler.send_header("Cache-Control", "no-store")
