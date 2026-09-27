@@ -555,6 +555,39 @@ function setView(view) {
 }
 
 // 推广财务：各店余额 + 每日花费快照 + 余额告警
+// 把合并的账单月份（如「2026年02/03/04/05/06/07/08月」）展开成逐月行
+function expandMonthlyBills(bills) {
+  const rows = [];
+  for (const b of bills) {
+    const shopName = b.shop_name || '';
+    const subject = b.bill_subject || '';
+    const segs = String(b.bill_period || '').split(/[、，,]/);
+    const months = [];
+    for (const seg of segs) {
+      const m = seg.match(/(\d{4})年([\d\/]+)月/);
+      if (!m) continue;
+      const y = parseInt(m[1]);
+      for (const mm of m[2].split('/')) { const n = parseInt(mm); if (!isNaN(n)) months.push({ y, m: n }); }
+    }
+    const multiYear = /[、，,]/.test(b.bill_period || '');
+    const isAdj = Number(b.bill_amount) < 0 || multiYear; // 负数/跨年调整：单行原样，不展开
+    if (!months.length || (isAdj && months.length > 1)) {
+      rows.push({ shopName, label: b.bill_period || '—', subject, amount: b.bill_amount, sortKey: 'zzz', merged: false, mergedCount: 0 });
+      continue;
+    }
+    if (months.length === 1) {
+      const mo = months[0];
+      rows.push({ shopName, label: mo.y + '年' + String(mo.m).padStart(2, '0') + '月', subject, amount: b.bill_amount, sortKey: mo.y + '-' + String(mo.m).padStart(2, '0'), merged: false, mergedCount: 0 });
+    } else {
+      months.forEach((mo, i) => {
+        rows.push({ shopName, label: mo.y + '年' + String(mo.m).padStart(2, '0') + '月', subject, amount: i === 0 ? b.bill_amount : null, sortKey: mo.y + '-' + String(mo.m).padStart(2, '0'), merged: true, mergedCount: months.length });
+      });
+    }
+  }
+  rows.sort((a, b) => a.sortKey.localeCompare(b.sortKey));
+  return rows;
+}
+
 async function renderPromoFinance() {
   const el = $('#view-promofinance');
   const ym = (v) => (v == null || Number.isNaN(v)) ? '—' : '¥' + Number(v).toFixed(2);
@@ -629,26 +662,36 @@ async function renderPromoFinance() {
         </table>
       </div>`;
   }).join('');
-  // 月结账单区块（跨店铺）
+  // 月结账单区块（跨店铺，按月逐一展开）
   let billHtml = '';
   if (bills.length) {
-    const billRows = bills.map(b => `
-      <tr style="border-top:1px solid #f1f5f9">
-        <td style="padding:6px 4px">${b.shop_name || ''}</td>
-        <td style="padding:6px 4px;color:#475569">${b.bill_period}</td>
-        <td style="padding:6px 4px;color:#64748b">${b.bill_subject || ''}</td>
-        <td style="padding:6px 4px;font-weight:600;${Number(b.bill_amount) < 0 ? 'color:#dc2626' : ''}">${ym(b.bill_amount)}</td>
-      </tr>`).join('');
+    const billRows = expandMonthlyBills(bills).map(r => {
+      let amtHtml;
+      if (r.merged && r.amount == null) {
+        amtHtml = '<span style="color:#cbd5e1">↳ 同上</span>';
+      } else if (r.merged) {
+        amtHtml = `${ym(r.amount)} <span style="color:#94a3b8;font-size:11px;font-weight:400">（${r.mergedCount}个月合计）</span>`;
+      } else {
+        amtHtml = `<span style="font-weight:600;${Number(r.amount) < 0 ? 'color:#dc2626' : ''}">${ym(r.amount)}</span>`;
+      }
+      return `
+        <tr style="border-top:1px solid #f1f5f9">
+          <td style="padding:6px 4px">${r.shopName}</td>
+          <td style="padding:6px 4px;color:#475569">${r.label}</td>
+          <td style="padding:6px 4px;color:#64748b">${r.subject}</td>
+          <td style="padding:6px 4px;text-align:right">${amtHtml}</td>
+        </tr>`;
+    }).join('');
     billHtml = `
       <div class="panel" style="margin:12px;padding:16px 18px">
         <b style="font-size:16px">📅 月结账单（待开票金额）</b>
-        <div style="color:#94a3b8;font-size:12px;margin-top:4px">每月 10 号生成上月账单；负数会与后续月份合并开票</div>
+        <div style="color:#94a3b8;font-size:12px;margin-top:4px">按月逐一展示；合并账单已展开，金额为整单合计；负数会与后续月份合并开票</div>
         <table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:8px">
           <tr style="color:#94a3b8;text-align:left">
             <th style="padding:6px 4px;font-weight:500">店铺</th>
-            <th style="padding:6px 4px;font-weight:500">账单月份</th>
+            <th style="padding:6px 4px;font-weight:500">月份</th>
             <th style="padding:6px 4px;font-weight:500">开票主体</th>
-            <th style="padding:6px 4px;font-weight:500">金额</th>
+            <th style="padding:6px 4px;font-weight:500;text-align:right">金额</th>
           </tr>
           ${billRows}
         </table>
