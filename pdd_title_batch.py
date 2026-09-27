@@ -13,6 +13,7 @@ import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import catalog
+import data
 
 API_BASE = "http://127.0.0.1:8765"
 ACCESS_TOKEN = os.environ.get("ECOM_OP_TOKEN", "Alcz8283103")
@@ -140,6 +141,12 @@ def quality_gate(old, new):
 def gen_titles(products, api_key):
     """调 DeepSeek 批量生成优化标题，返回 [新标题] 列表（按输入顺序）。分批 15 个/次，避免输出超限。"""
     titles = []
+    # 为每个商品筛黄金候选词（从关键词库，喂给 AI 优先选用）
+    for p in products:
+        try:
+            p["golden_words"] = [g["word"] for g in data.pick_golden_words(p.get("name", ""))]
+        except Exception:
+            p["golden_words"] = []
     for i in range(0, len(products), 15):
         chunk = products[i:i + 15]
         titles.extend(_gen_titles_chunk(chunk, api_key))
@@ -147,16 +154,25 @@ def gen_titles(products, api_key):
 
 
 def _gen_titles_chunk(products, api_key):
-    names = [p["name"] for p in products]
+    # 组装商品列表（含候选黄金词）
+    lines = []
+    for idx, p in enumerate(products, 1):
+        gw = p.get("golden_words") or []
+        line = f"{idx}. 当前标题：{p['name']}"
+        if gw:
+            line += f"\n   候选黄金词（优先选用）：{'、'.join(gw)}"
+        lines.append(line)
+    item_block = "\n".join(lines)
     prompt = (
         "你是拼多多电商标题优化专家。以下是 N 个商品的当前标题，请为每个生成优化后的标题。\n"
+        "每个商品附了「候选黄金词」（从关键词库按高热度+高相关筛出的词），请优先从候选词里选词组合标题。\n"
         "规则：\n"
         "1. 核心品词前置，删无意义前缀（品牌名/新款/买X送X/【】等营销词）\n"
-        "2. 补长尾搜索词（场景词、人群词、规格词、材质词），用空格分隔 3-4 段核心词\n"
+        "2. 优先用候选黄金词补长尾（场景词、属性词、卖点词、规格词），用空格分隔 3-4 段核心词\n"
         "3. 总长度不超过 60 个字符（即 30 个汉字；英文/数字/空格算 1 字符，汉字算 2 字符）\n"
         "4. 不夸大、不违规、保留商品真实属性\n"
         "5. 只输出 JSON 数组，每项是优化后的标题字符串，严格按输入顺序\n\n"
-        f"商品列表：\n{json.dumps(names, ensure_ascii=False)}\n\n"
+        f"商品列表：\n{item_block}\n\n"
         '输出格式（仅 JSON 数组，不要任何其他文字）：["标题1","标题2",...]'
     )
     body = {
@@ -260,6 +276,11 @@ def main():
             catalog.save_title_opt_baseline(rid)  # 自动基线：改标题前快照近7天流量
             catalog.update_title_opt(rid, new_title=t, status="optimized")
             ids.append(rid)
+            # 落地闭环：回填标题用到的词（记录时间/商品，便于按时间调整）
+            try:
+                data.mark_keywords_used(t, p["platform_product_id"])
+            except Exception as e:
+                print(json.dumps({"warning": f"关键词回填失败:{e}"}, ensure_ascii=False), file=sys.stderr)
 
     if ids:
         res = apply_ids(ids)

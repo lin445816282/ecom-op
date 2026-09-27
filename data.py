@@ -753,6 +753,10 @@ KEYWORD_DEFAULTS = {
     "ctr": 0.0,                # 真实点击率（0-1，线上数据）
     "cvr": 0.0,                # 真实转化率（0-1，线上数据）
     "roi": 0.0,                # 投产比（成交金额/广告花费）
+    # ---- 使用回填（标题优化落地闭环：记录词被哪些商品/何时使用）----
+    "used_at": None,           # 最近被标题使用时间（YYYY-MM-DD HH:MM:SS）
+    "used_count": 0,           # 被标题使用累计次数
+    "used_by": [],             # 使用过该词的商品 platform_product_id 列表
 }
 
 
@@ -780,6 +784,82 @@ def load_keywords() -> list[dict]:
 def save_keywords(items: list[dict]) -> None:
     with open(KEYWORDS_PATH, "w", encoding="utf-8") as f:
         json.dump(items, f, ensure_ascii=False, indent=2)
+
+
+def pick_golden_words(name: str, limit: int = 40) -> list[dict]:
+    """从词库筛出喂给标题 AI 的黄金候选词。
+
+    匹配逻辑：商品名命中的词库词的 product 品类众数 → 筛该品类下
+    main 池 + hot=热 + relevance 高/中 + 有搜索量 的词 → 按 category 分层取 top N。
+    返回 [{word, category, product, search_volume, ...}]。
+    """
+    from collections import Counter
+    name = name or ""
+    items = load_keywords()
+    # 1. 品类判断：商品名里命中的词库词的 product 众数
+    hit_products = Counter()
+    for k in items:
+        w = (k.get("word") or "").strip()
+        if len(w) >= 2 and w in name:
+            hit_products[k.get("product", "其他")] += 1
+    target_product = hit_products.most_common(1)[0][0] if hit_products else None
+
+    # 2. 黄金词池：main 池 + 热度热 + 相关高/中 + 有搜索量
+    pool = [k for k in items
+            if k.get("pool_type", "main") == "main"
+            and k.get("hot") == "热"
+            and k.get("relevance") in ("高", "中")
+            and int(k.get("search_volume", 0) or 0) > 0]
+    # 品类优先：命中的品类词足够多则只看该品类，否则回退全品类
+    if target_product:
+        same = [k for k in pool if k.get("product") == target_product]
+        if len(same) >= 5:
+            pool = same
+
+    # 3. 按 category 分层取 top N（搜索量降序）
+    per_cat = {"核心词": 3, "属性词": 8, "场景词": 5, "卖点词": 5, "规格词": 3, "风格词": 3}
+    result = []
+    for cat, n in per_cat.items():
+        cat_pool = sorted([k for k in pool if k.get("category") == cat],
+                          key=lambda x: -(int(x.get("search_volume", 0) or 0)))
+        result.extend(cat_pool[:n])
+    # 兜底：若分层筛出太少（如冷门品类），补搜索量最高的词
+    if len(result) < 8:
+        extra = sorted(pool, key=lambda x: -(int(x.get("search_volume", 0) or 0)))[:limit]
+        result.extend(extra)
+    return result[:limit]
+
+
+def mark_keywords_used(title: str, product_id: str) -> dict:
+    """标题生成后回填：把标题里用到的词库词标记为「已用」，记录时间/商品。
+
+    返回 {matched, updated}。matched=标题命中的词库词数，updated=实际回填变化的词数。
+    """
+    title = title or ""
+    if not title:
+        return {"matched": 0, "updated": 0}
+    items = load_keywords()
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    matched = 0
+    updated = 0
+    for k in items:
+        w = (k.get("word") or "").strip()
+        if len(w) < 2 or w not in title:
+            continue
+        matched += 1
+        ub = list(k.get("used_by") or [])
+        if k.get("status") == "已用" and product_id in ub:
+            continue  # 同商品已回填过，跳过
+        k["status"] = "已用"
+        k["used_at"] = now
+        k["used_count"] = int(k.get("used_count", 0) or 0) + 1
+        if product_id and product_id not in ub:
+            ub.append(product_id)
+        k["used_by"] = ub
+        updated += 1
+    if updated:
+        save_keywords(items)
+    return {"matched": matched, "updated": updated}
 
 
 def add_keyword(item: dict) -> dict:
