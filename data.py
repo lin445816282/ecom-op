@@ -1749,6 +1749,115 @@ def ai_filter_competitors(anchor_title, candidates):
     return result
 
 
+def ai_extract_core_words(names, batch=40):
+    """AI 从供应商商品名批量提炼「买家会搜索的品类核心词」。
+
+    names: [供应商内部商品名]（含编号/尺寸/规格/描述词）
+    返回 [核心词]（按输入顺序，无法判断品类的为空字符串）；失败返回全空。
+    """
+    import re
+    if not names or not DEEPSEEK_API_KEY:
+        return [""] * len(names)
+
+    result = []
+    for i in range(0, len(names), batch):
+        chunk = names[i:i + batch]
+        lines = [f"{j + 1}. {n}" for j, n in enumerate(chunk)]
+        prompt = (
+            "你是电商品类词提炼专家。下面是供应商内部商品名（含编号/尺寸/规格/描述词），请为每个提炼出一个「买家会搜索的品类核心词」（2-6字）。\n"
+            "规则：\n"
+            "1. 去掉编号(#010)、尺寸(1.5*4.5)、规格(1.5mm厚)、数量词(10斤/三颗)、描述词(带灯/抬头款/对装)\n"
+            "2. 提炼商品核心品类（如：松鼠摆件、米桶、风铃、烛台、花盆、铁板、挂钩）\n"
+            "3. 无法判断品类时输出空字符串\n\n"
+            "商品名列表：\n" + "\n".join(lines) + "\n\n"
+            "只输出 JSON 数组 [{\"i\":序号,\"word\":核心词}]，严格按输入顺序，不要 markdown。"
+        )
+        body = json.dumps({
+            "model": "deepseek-chat",
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.1,
+            "stream": False,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            "https://api.deepseek.com/chat/completions",
+            data=body,
+            headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"},
+        )
+        try:
+            resp = json.loads(urllib.request.urlopen(req, timeout=90).read())
+            content = resp["choices"][0]["message"]["content"]
+        except Exception:
+            result.extend([""] * len(chunk))
+            continue
+        words = [""] * len(chunk)
+        m = re.search(r"\[.*\]", content, re.DOTALL)
+        if m:
+            try:
+                arr = json.loads(m.group(0))
+                for item in arr:
+                    idx = int(item.get("i", 0)) - 1
+                    if 0 <= idx < len(words):
+                        words[idx] = (item.get("word") or "").strip()
+            except Exception:
+                pass
+        result.extend(words)
+    return result
+
+
+def ai_classify_keywords(words, core_word=""):
+    """AI 把拼多多筛选词分类为 材质/风格/场景，其余忽略。
+
+    words: [筛选词]（含分组标题和噪音）
+    返回 {"属性词": [...], "风格词": [...], "场景词": [...]}
+    """
+    import re
+    if not words or not DEEPSEEK_API_KEY:
+        return {}
+    words = [w for w in words if w and len(w) >= 2]
+    if not words:
+        return {}
+
+    prompt = (
+        "你是电商关键词分类专家。下面是拼多多搜索页的筛选词（含分组标题和噪音），请把每个词分类。\n"
+        f"（这些词来自「{core_word}」的搜索筛选栏）\n\n"
+        "分类规则：\n"
+        "- 材质：材料/材质词，如 陶瓷、实木、铁艺、涤棉、树脂、玻璃、金属\n"
+        "- 风格：设计风格词，如 简约、北欧、田园、复古、公主风、韩版、新中式\n"
+        "- 场景：使用场景/摆放位置词，如 卧室、阳台、落地、壁挂、台桌、厨房\n"
+        "- 忽略：分组标题（面料支数、质检标准、适用部位）、规格、工艺（印花、织造）、季节、产地、品牌、服务词，以及其他无价值词\n\n"
+        f"筛选词：{'、'.join(words)}\n\n"
+        '只输出 JSON 对象 {"材质":["词"],"风格":["词"],"场景":["词"]}，忽略类不输出。不要 markdown。'
+    )
+    body = json.dumps({
+        "model": "deepseek-chat",
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.1,
+        "stream": False,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        "https://api.deepseek.com/chat/completions",
+        data=body,
+        headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}", "Content-Type": "application/json"},
+    )
+    try:
+        resp = json.loads(urllib.request.urlopen(req, timeout=60).read())
+        content = resp["choices"][0]["message"]["content"]
+    except Exception:
+        return {}
+    m = re.search(r"\{.*\}", content, re.DOTALL)
+    if not m:
+        return {}
+    try:
+        d = json.loads(m.group(0))
+    except Exception:
+        return {}
+    return {
+        "属性词": d.get("材质", []),
+        "风格词": d.get("风格", []),
+        "场景词": d.get("场景", []),
+    }
+
+
 # 词角色 → 关键词库 category 映射
 ROLE_TO_CATEGORY = {
     "核心主词": "核心词",
