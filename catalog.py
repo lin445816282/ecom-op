@@ -539,6 +539,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
     tlcols = {r[1] for r in conn.execute("PRAGMA table_info(title_opt_log)").fetchall()}
     if "source" not in tlcols:
         conn.execute("ALTER TABLE title_opt_log ADD COLUMN source TEXT DEFAULT 'ai'")
+    # competitors 表 ai_status/ai_reason 列（AI 精准匹配：same/diff + 理由）
+    compcols = {r[1] for r in conn.execute("PRAGMA table_info(competitors)").fetchall()}
+    if "ai_status" not in compcols:
+        conn.execute("ALTER TABLE competitors ADD COLUMN ai_status TEXT DEFAULT ''")
+    if "ai_reason" not in compcols:
+        conn.execute("ALTER TABLE competitors ADD COLUMN ai_reason TEXT DEFAULT ''")
     conn.commit()
 
 
@@ -3710,21 +3716,46 @@ def freight_three_way(month: str = None) -> dict:
 # ----------------------------- 竞品监控 -----------------------------
 
 def save_competitors(shop_id: int, platform_product_id: str, keyword: str, items: list[dict]) -> int:
-    """保存一批竞品（先清掉该商品+关键词的旧记录，再插入）。"""
+    """保存一批竞品（先清掉该商品+关键词的旧记录，再插入）。
+
+    items 每条可带 AI 精准匹配结果：{is_comp, ai_reason}。
+    - is_comp=False → status='no'（AI 判定非竞品，自动排除）+ ai_status='diff'
+    - is_comp=True  → status='pending'（待人工确认）+ ai_status='same'
+    - 未带 is_comp  → status='pending'（AI 未判定，回退为待确认）
+    """
     with closing(_conn()) as c:
         c.execute(
             "DELETE FROM competitors WHERE platform_product_id=? AND keyword=?",
             (platform_product_id, keyword),
         )
         for it in items:
+            is_comp = it.get("is_comp")
+            ai_reason = (it.get("ai_reason") or "").strip()
+            if is_comp is False:
+                status, ai_status = "no", "diff"
+            elif is_comp is True:
+                status, ai_status = "pending", "same"
+            else:
+                status, ai_status = "pending", ""
             c.execute(
-                "INSERT INTO competitors(shop_id, platform_product_id, keyword, comp_title, comp_price, comp_sales, comp_img) "
-                "VALUES(?,?,?,?,?,?,?)",
+                "INSERT INTO competitors(shop_id, platform_product_id, keyword, comp_title, comp_price, comp_sales, comp_img, status, ai_status, ai_reason) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?)",
                 (shop_id, platform_product_id, keyword,
-                 it.get("title") or "", it.get("price"), it.get("sales") or "", it.get("img") or ""),
+                 it.get("title") or "", it.get("price"), it.get("sales") or "", it.get("img") or "",
+                 status, ai_status, ai_reason),
             )
         c.commit()
     return len(items)
+
+
+def get_product_title(shop_id: int, platform_product_id: str) -> str:
+    """查商品标题（竞品 AI 精准匹配的锚点用）。"""
+    with closing(_conn()) as c:
+        row = c.execute(
+            "SELECT name FROM products WHERE shop_id=? AND platform_product_id=?",
+            (shop_id, platform_product_id),
+        ).fetchone()
+        return row["name"] if row else ""
 
 
 def list_competitors(platform_product_id: str = None, keyword: str = None) -> list[dict]:

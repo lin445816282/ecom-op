@@ -1667,6 +1667,88 @@ def split_competitor_title(title):
     return {"words": [], "template": "", "error": f"AI 输出解析失败：{content[:200]}"}
 
 
+def ai_filter_competitors(anchor_title, candidates):
+    """AI 判断候选竞品是否同款/直接竞品（精准匹配层）。
+
+    anchor_title: 自家商品标题（锚点）
+    candidates: [{"title", "price", "sales"}] 候选竞品列表
+
+    返回 [{"is_comp": bool, "reason": str}]（按输入顺序，长度与 candidates 一致）；
+    API key 缺失或 AI 失败时返回空列表，调用方据此回退为「全部待确认」。
+    """
+    import re
+    if not anchor_title or not candidates:
+        return []
+    if not DEEPSEEK_API_KEY:
+        return []
+
+    lines = []
+    for i, c in enumerate(candidates, 1):
+        title = (c.get("title") or "").strip()
+        price = c.get("price")
+        sales = (c.get("sales") or "").strip()
+        meta = []
+        if price is not None:
+            meta.append(f"¥{price}")
+        if sales:
+            meta.append(sales)
+        line = f"{i}. {title}"
+        if meta:
+            line += "（" + "·".join(meta) + "）"
+        lines.append(line)
+    item_block = "\n".join(lines)
+
+    prompt = (
+        "你是电商竞品判断专家。判断下面每个候选商品，是否与「锚点商品」是同款或直接竞品。\n"
+        f"锚点商品：{anchor_title}\n\n"
+        "判断标准：\n"
+        "1. 同款/直接竞品 = 核心品类一致，且关键属性（材质/款式/规格/用途）相同或高度接近，会直接争抢同一批搜索用户\n"
+        "2. 不同款/无关 = 品类不同、材质不同（如铁皮花盆 vs 树脂花盆）、用途不同（花盆 vs 花架），或明显是筛选栏/导航/品牌词堆砌的噪音文本\n\n"
+        f"候选列表：\n{item_block}\n\n"
+        "只输出 JSON 数组，每项对象格式 {\"i\":序号,\"comp\":true/false,\"reason\":\"一句话理由\"}，严格按输入顺序，不要输出 markdown 代码块。"
+    )
+    body = json.dumps({
+        "model": "deepseek-chat",
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.1,
+        "stream": False,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        "https://api.deepseek.com/chat/completions",
+        data=body,
+        headers={
+            "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        resp = json.loads(urllib.request.urlopen(req, timeout=60).read())
+        content = resp["choices"][0]["message"]["content"]
+    except Exception:
+        return []
+
+    m = re.search(r"\[.*\]", content, re.DOTALL)
+    if not m:
+        return []
+    try:
+        arr = json.loads(m.group(0))
+    except Exception:
+        return []
+
+    result = [{"is_comp": True, "reason": ""} for _ in candidates]
+    for item in arr:
+        try:
+            idx = int(item.get("i", 0)) - 1
+            if 0 <= idx < len(result):
+                result[idx] = {
+                    "is_comp": bool(item.get("comp", False)),
+                    "reason": (item.get("reason") or "").strip(),
+                }
+        except Exception:
+            continue
+    return result
+
+
 # 词角色 → 关键词库 category 映射
 ROLE_TO_CATEGORY = {
     "核心主词": "核心词",

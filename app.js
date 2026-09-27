@@ -1750,6 +1750,7 @@ function renderCompList() {
       <div style="flex:1;min-width:0">
         <div style="font-size:13px;color:#17203a;line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc(c.comp_title)}</div>
         <div style="margin-top:4px;font-size:15px;font-weight:700;color:#dc2626">${c.comp_price != null ? '¥' + fmt(c.comp_price) : '—'} <span style="font-size:11px;color:#8899b0;font-weight:400">${esc(c.comp_sales || '')}</span></div>
+        ${c.ai_reason ? `<div style="margin-top:3px;font-size:11px;color:#7c3aed">🤖 AI：${esc(c.ai_reason)}</div>` : ''}
         <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
           ${st !== 'ok' ? `<button class="btn xs" style="background:#f0fdf4;color:#16a34a;border-color:#bbf7d0" onclick="confirmCompetitor(${c.id},'ok')">✓ 是竞品</button>` : ''}
           ${st !== 'no' ? `<button class="btn xs" style="background:#fee2e2;color:#dc2626;border-color:#fca5a5" onclick="confirmCompetitor(${c.id},'no')">✗ 排除</button>` : ''}

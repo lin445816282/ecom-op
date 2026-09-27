@@ -1327,7 +1327,7 @@ def _apply_batch(batch, port):
 
 
 def _collect_competitors_bg(shop_id, platform_product_id, keyword):
-    """后台线程：调买家端 node 脚本搜关键词抓竞品，写库。"""
+    """后台线程：调买家端 node 脚本搜关键词抓竞品，AI 精准匹配后写库。"""
     import subprocess
     try:
         r = subprocess.run(
@@ -1343,8 +1343,17 @@ def _collect_competitors_bg(shop_id, platform_product_id, keyword):
                     items = json.loads(line)
                 except Exception:
                     pass
-        if items:
-            catalog.save_competitors(shop_id, platform_product_id, keyword, items)
+        if not items:
+            return
+        # AI 精准匹配：拿自家商品标题做锚点，逐条判断是否同款/直接竞品
+        anchor = catalog.get_product_title(shop_id, platform_product_id)
+        if anchor:
+            verdicts = data.ai_filter_competitors(anchor, items)
+            if len(verdicts) == len(items):
+                for it, v in zip(items, verdicts):
+                    it["is_comp"] = v["is_comp"]
+                    it["ai_reason"] = v["reason"]
+        catalog.save_competitors(shop_id, platform_product_id, keyword, items)
     except Exception:
         pass  # 静默失败，前端轮询无数据会提示
 
