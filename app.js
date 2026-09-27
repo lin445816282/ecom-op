@@ -4732,7 +4732,7 @@ async function loadTitleOptData() {
   const [cand, opt, log, allOpt] = await Promise.all([
     api('/api/catalog/title-opt/candidates?shop_id=' + sid + q),
     api('/api/catalog/title-opt?shop_id=' + sid),
-    api('/api/catalog/title-opt/log?shop_id=' + sid + '&limit=50'),
+    api('/api/catalog/title-opt/log?shop_id=' + sid + '&limit=10000'),
     api('/api/catalog/title-opt')
   ]);
   titleOptCache.candidates = cand.items || [];
@@ -5029,26 +5029,23 @@ function paintTitleOpt(el) {
   boxes.forEach(b => { b.onchange = syncSel; });
 }
 
-function titleOptLogHtml(logs) {
-  if (!logs || !logs.length) return '';
-  const actionMap = {
-    pick: { label: '挑选', color: '#7c3aed', bg: '#ede9fe' },
-    optimize: { label: '优化', color: '#d97706', bg: '#fef3c7' },
-    apply: { label: '执行', color: '#2563eb', bg: '#dbeafe' },
-    fix: { label: '确认修复', color: '#16a34a', bg: '#dcfce7' }
-  };
-  const srcMap = {
-    ai: { label: '🤖 AI', color: '#64748b', bg: '#f1f5f9' },
-    manual: { label: '👤 人工', color: '#c2410c', bg: '#ffedd5' }
-  };
-  let h = '<div onclick="toggleBlock(\'log-body\',\'log-arrow\')" style="font-size:13px;font-weight:700;color:#1e3a5f;margin:14px 12px 6px;display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">';
-  h += '<span id="log-arrow" style="color:#94a3b8">▶</span>📜 修改日志（最近 ' + logs.length + ' 条）';
-  h += '</div>';
-  h += '<div id="log-body" style="display:none">';
-  h += '<div style="max-height:360px;overflow-y:auto;margin:0 12px 16px;background:#fff;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.05)">';
+// 标题优化日志 — 动作/来源标签映射（模块级，列表渲染与搜索共用）
+const TITLE_OPT_ACTION_MAP = {
+  pick: { label: '挑选', color: '#7c3aed', bg: '#ede9fe' },
+  optimize: { label: '优化', color: '#d97706', bg: '#fef3c7' },
+  apply: { label: '执行', color: '#2563eb', bg: '#dbeafe' },
+  fix: { label: '确认修复', color: '#16a34a', bg: '#dcfce7' }
+};
+const TITLE_OPT_SRC_MAP = {
+  ai: { label: '🤖 AI', color: '#64748b', bg: '#f1f5f9' },
+  manual: { label: '👤 人工', color: '#c2410c', bg: '#ffedd5' }
+};
+
+function titleOptLogListHtml(logs) {
+  let h = '';
   logs.forEach(l => {
-    const a = actionMap[l.action] || { label: l.action, color: '#8899b0', bg: '#f3f4f6' };
-    const src = srcMap[l.source] || srcMap.ai;
+    const a = TITLE_OPT_ACTION_MAP[l.action] || { label: l.action, color: '#8899b0', bg: '#f3f4f6' };
+    const src = TITLE_OPT_SRC_MAP[l.source] || TITLE_OPT_SRC_MAP.ai;
     const ok = l.status === 'success';
     h += '<div style="padding:10px 12px;border-bottom:1px solid #f3f4f6">';
     h += '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:3px">';
@@ -5067,9 +5064,89 @@ function titleOptLogHtml(logs) {
     if (l.note) h += '<div style="font-size:11px;color:#dc2626;margin-top:2px">' + esc(l.note) + '</div>';
     h += '</div>';
   });
+  if (!h) h = '<div style="padding:16px;text-align:center;color:#8899b0;font-size:12px">无匹配日志</div>';
+  return h;
+}
+
+// 标题优化日志 — 分页辅助
+function titleOptLogFiltered() {
+  const all = titleOptCache.logs || [];
+  const kw = (titleOptCache.logFilter || '').toLowerCase();
+  if (!kw) return all;
+  return all.filter(l => {
+    const hay = [l.product_name, l.platform_product_id, l.old_title, l.new_title, l.action, l.status, l.note,
+      (TITLE_OPT_ACTION_MAP[l.action] || {}).label, (TITLE_OPT_SRC_MAP[l.source] || {}).label
+    ].join(' ').toLowerCase();
+    return hay.includes(kw);
+  });
+}
+
+function titleOptLogPage() {
+  const filtered = titleOptLogFiltered();
+  const size = 20;
+  const total = filtered.length;
+  const totalPages = Math.max(1, Math.ceil(total / size));
+  let page = titleOptCache.logPage || 1;
+  if (page > totalPages) page = totalPages;
+  const start = (page - 1) * size;
+  return { items: filtered.slice(start, start + size), total, page, size, totalPages };
+}
+
+function titleOptLogPagerHtml(pg) {
+  if (pg.totalPages <= 1) return '';
+  let h = '';
+  h += '<button class="btn xs" ' + (pg.page <= 1 ? 'disabled' : '') + ' onclick="titleOptLogGo(' + (pg.page - 1) + ')">‹ 上一页</button>';
+  h += '<span>第 ' + pg.page + ' / ' + pg.totalPages + ' 页 · 共 ' + pg.total + ' 条</span>';
+  h += '<button class="btn xs" ' + (pg.page >= pg.totalPages ? 'disabled' : '') + ' onclick="titleOptLogGo(' + (pg.page + 1) + ')">下一页 ›</button>';
+  return h;
+}
+
+function titleOptLogHtml(logs) {
+  if (!logs || !logs.length) return '';
+  const q = titleOptCache.logFilter || '';
+  const pg = titleOptLogPage();
+  let h = '<div onclick="toggleBlock(\'log-body\',\'log-arrow\')" style="font-size:13px;font-weight:700;color:#1e3a5f;margin:14px 12px 6px;display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;flex-wrap:wrap">';
+  h += '<span id="log-arrow" style="color:#94a3b8">▶</span><span id="log-count">📜 修改日志（共 ' + pg.total + ' 条）</span>';
+  h += '<input id="log-search" type="text" placeholder="🔍 搜商品/ID/标题/动作" value="' + esc(q) + '" oninput="titleOptLogSearch(this.value)" onclick="event.stopPropagation()" style="margin-left:auto;padding:4px 10px;border:1px solid #cdd7e5;border-radius:6px;font-size:12px;width:180px;font-weight:400">';
+  h += '</div>';
+  h += '<div id="log-body" style="display:none">';
+  h += '<div id="log-list" style="max-height:360px;overflow-y:auto;margin:0 12px;background:#fff;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.05)">';
+  h += titleOptLogListHtml(pg.items);
+  h += '</div>';
+  h += '<div id="log-pager" style="display:flex;align-items:center;gap:8px;justify-content:center;padding:6px 12px 14px;font-size:12px;color:#5a6b85;flex-wrap:wrap">';
+  h += titleOptLogPagerHtml(pg);
   h += '</div>';
   h += '</div>';
   return h;
+}
+
+function titleOptLogRender() {
+  const body = $('#log-body');
+  if (!body) return;
+  const pg = titleOptLogPage();
+  const list = document.getElementById('log-list');
+  if (list) list.innerHTML = titleOptLogListHtml(pg.items);
+  const cnt = document.getElementById('log-count');
+  if (cnt) cnt.textContent = '📜 修改日志（共 ' + pg.total + ' 条）';
+  const pager = document.getElementById('log-pager');
+  if (pager) pager.innerHTML = titleOptLogPagerHtml(pg);
+  const kw = (titleOptCache.logFilter || '').toLowerCase();
+  if (kw && body.style.display === 'none') {
+    body.style.display = 'block';
+    const a = document.getElementById('log-arrow');
+    if (a) a.textContent = '▼';
+  }
+}
+
+function titleOptLogSearch(v) {
+  titleOptCache.logFilter = (v || '').trim();
+  titleOptCache.logPage = 1;
+  titleOptLogRender();
+}
+
+function titleOptLogGo(page) {
+  titleOptCache.logPage = page;
+  titleOptLogRender();
 }
 
 // 通用折叠：切换区块/卡片 body 显示，可选同步箭头
