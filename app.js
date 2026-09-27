@@ -4819,7 +4819,7 @@ function paintTitleOpt(el) {
   h += '<div><b>② 选定商品后动态选词</b> — pick_golden_words(商品名)，候选词覆盖核心+属性+场景+风格，无噪声词</div>';
   h += '<div><b>③ AI 生成 + 质量门</b> — 黄金词喂进 prompt、拦截偷懒标题（仅加空格/净减核心词）、有订单不碰</div>';
   h += '<div><b>④ CDP 改后台</b> — check_shop 确认店铺、端口映射（嘉裕9232/如若月下9230/欧世艺9228/闲时来9222）、结果 VERIFIED=done</div>';
-  h += '<div><b>⑤ 回填时间标注</b> — mark_keywords_used 记录 used_at / used_count / used_by</div>';
+  h += '<div><b>⑤ 回填时间标注</b> — 改后台成功(VERIFIED)后 mark_keywords_used 记录 used_at / used_count / used_by / used_history（完整时间线）</div>';
   h += '<div><b>⑥ 验证报告</b> — done=成功 / 无结果=CDP死了 / NO_LIST=商品下架 / MISMATCH=价格校验</div>';
   h += '</div>';
   h += '</div>';
