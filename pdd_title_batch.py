@@ -276,11 +276,8 @@ def main():
             catalog.save_title_opt_baseline(rid)  # 自动基线：改标题前快照近7天流量
             catalog.update_title_opt(rid, new_title=t, status="optimized")
             ids.append(rid)
-            # 落地闭环：回填标题用到的词（记录时间/商品，便于按时间调整）
-            try:
-                data.mark_keywords_used(t, p["platform_product_id"])
-            except Exception as e:
-                print(json.dumps({"warning": f"关键词回填失败:{e}"}, ensure_ascii=False), file=sys.stderr)
+            # 注：关键词回填已移至 apply 改后台成功（VERIFIED）后，见 api.py _apply_batch
+            # 避免 CDP 失败的商品也误标「已用」
 
     if ids:
         res = apply_ids(ids)

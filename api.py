@@ -1308,6 +1308,11 @@ def _apply_batch(batch, port):
             if st == "VERIFIED":
                 catalog.update_title_opt(rec["id"], status="done", note="")
                 catalog.log_title_opt(rec["shop_id"], gid, rec["product_name"], rec["old_title"], rec["new_title"], "apply", "success", "")
+                # 落地闭环：改后台成功后回填标题用到的词（记录时间/商品，便于按时间追踪）
+                try:
+                    data.mark_keywords_used(rec["new_title"], rec["platform_product_id"])
+                except Exception as _e:
+                    print(f"[关键词回填失败] {rec['platform_product_id']}: {_e}", file=sys.stderr)
             else:
                 catalog.update_title_opt(rec["id"], note=st)
                 catalog.log_title_opt(rec["shop_id"], gid, rec["product_name"], rec["old_title"], rec["new_title"], "apply", "fail", st)
