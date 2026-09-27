@@ -189,6 +189,7 @@ CREATE TABLE IF NOT EXISTS title_opt_log (
     action TEXT DEFAULT '',
     status TEXT DEFAULT '',
     note TEXT DEFAULT '',
+    source TEXT DEFAULT 'ai',
     created_at TEXT DEFAULT (datetime('now','localtime'))
 );
 
@@ -534,6 +535,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
     brcols = {r[1] for r in conn.execute("PRAGMA table_info(buyer_reviews)").fetchall()}
     if "source" not in brcols:
         conn.execute("ALTER TABLE buyer_reviews ADD COLUMN source TEXT DEFAULT 'brief'")
+    # title_opt_log 表 source 列（ai 自动流程 / manual 人工操作）
+    tlcols = {r[1] for r in conn.execute("PRAGMA table_info(title_opt_log)").fetchall()}
+    if "source" not in tlcols:
+        conn.execute("ALTER TABLE title_opt_log ADD COLUMN source TEXT DEFAULT 'ai'")
     conn.commit()
 
 
@@ -1760,8 +1765,11 @@ def title_opt_candidates(shop_id: int, q: str = None, limit: int = 500) -> list[
         return [dict(r) for r in c.execute(sql, args).fetchall()]
 
 
-def add_title_opt(shop_id: int, platform_product_id: str) -> int:
-    """挑选商品进标题优化，快照旧标题，状态 selected。返回 id；有订单返回 -1；不存在返回 None。"""
+def add_title_opt(shop_id: int, platform_product_id: str, source: str = "ai") -> int:
+    """挑选商品进标题优化，快照旧标题，状态 selected。返回 id；有订单返回 -1；不存在返回 None。
+
+    source: ai=自动流程(定时任务) / manual=人工在页面挑。
+    """
     with closing(_conn()) as c:
         prod = c.execute(
             "SELECT id, platform_product_id, name, code FROM products WHERE shop_id=? AND platform_product_id=?",
@@ -1783,9 +1791,9 @@ def add_title_opt(shop_id: int, platform_product_id: str) -> int:
         )
         if cur.rowcount > 0:
             c.execute(
-                "INSERT INTO title_opt_log(shop_id, platform_product_id, product_name, old_title, new_title, action, status, note) "
-                "VALUES(?,?,?,?,?,'pick','success','')",
-                (shop_id, platform_product_id, prod["name"] or "", prod["name"] or "", ""),
+                "INSERT INTO title_opt_log(shop_id, platform_product_id, product_name, old_title, new_title, action, status, note, source) "
+                "VALUES(?,?,?,?,?,'pick','success','',?)",
+                (shop_id, platform_product_id, prod["name"] or "", prod["name"] or "", "", source),
             )
         c.commit()
         row = c.execute(
@@ -1864,7 +1872,8 @@ def flow_stats() -> dict:
         }
 
 
-def update_title_opt(opt_id: int, new_title: str = None, status: str = None, note: str = None) -> bool:
+def update_title_opt(opt_id: int, new_title: str = None, status: str = None, note: str = None, source: str = "ai") -> bool:
+    """更新标题优化记录，new_title 变更时写 optimize 日志。source: ai/manual。"""
     with closing(_conn()) as c:
         prev = None
         if new_title is not None:
@@ -1888,10 +1897,10 @@ def update_title_opt(opt_id: int, new_title: str = None, status: str = None, not
         c.execute(f"UPDATE title_opt SET {', '.join(sets)} WHERE id=?", args)
         if new_title is not None and prev and (prev["new_title"] or "") != new_title:
             c.execute(
-                "INSERT INTO title_opt_log(shop_id, platform_product_id, product_name, old_title, new_title, action, status, note) "
-                "VALUES(?,?,?,?,?,'optimize','success','')",
+                "INSERT INTO title_opt_log(shop_id, platform_product_id, product_name, old_title, new_title, action, status, note, source) "
+                "VALUES(?,?,?,?,?,'optimize','success','',?)",
                 (prev["shop_id"], prev["platform_product_id"], prev["product_name"] or "",
-                 prev["new_title"] or prev["old_title"] or "", new_title),
+                 prev["new_title"] or prev["old_title"] or "", new_title, source),
             )
         c.commit()
         return True
@@ -1912,8 +1921,8 @@ def mark_title_opt_fixed(opt_id: int) -> bool:
             return False
         c.execute("UPDATE title_opt SET fixed=1 WHERE id=?", (opt_id,))
         c.execute(
-            "INSERT INTO title_opt_log(shop_id, platform_product_id, product_name, old_title, new_title, action, status, note) "
-            "VALUES(?,?,?,?,?,?,?,?)",
+            "INSERT INTO title_opt_log(shop_id, platform_product_id, product_name, old_title, new_title, action, status, note, source) "
+            "VALUES(?,?,?,?,?,?,?,?,'manual')",
             (row["shop_id"], row["platform_product_id"], row["product_name"] or "", row["old_title"] or "", row["new_title"] or "", "fix", "success", row["note"] or "确认修复"),
         )
         c.commit()
@@ -1932,8 +1941,8 @@ def mark_title_opt_fixed_batch(ids: list) -> int:
         c.execute(f"UPDATE title_opt SET fixed=1 WHERE id IN ({ph})", ids)
         for row in rows:
             c.execute(
-                "INSERT INTO title_opt_log(shop_id, platform_product_id, product_name, old_title, new_title, action, status, note) "
-                "VALUES(?,?,?,?,?,?,?,?)",
+                "INSERT INTO title_opt_log(shop_id, platform_product_id, product_name, old_title, new_title, action, status, note, source) "
+                "VALUES(?,?,?,?,?,?,?,?,'manual')",
                 (row["shop_id"], row["platform_product_id"], row["product_name"] or "", row["old_title"] or "", row["new_title"] or "", "fix", "success", row["note"] or "确认修复"),
             )
         c.commit()
@@ -1950,13 +1959,13 @@ def get_title_opt_by_ids(ids: list) -> list[dict]:
         return [dict(r) for r in rows]
 
 
-def log_title_opt(shop_id, platform_product_id, product_name, old_title, new_title, action, status="", note=""):
-    """记录标题优化操作日志（pick/optimize/apply）。"""
+def log_title_opt(shop_id, platform_product_id, product_name, old_title, new_title, action, status="", note="", source="ai"):
+    """记录标题优化操作日志（pick/optimize/apply）。source: ai=自动流程 / manual=人工操作。"""
     with closing(_conn()) as c:
         c.execute(
-            "INSERT INTO title_opt_log(shop_id, platform_product_id, product_name, old_title, new_title, action, status, note) "
-            "VALUES(?,?,?,?,?,?,?,?)",
-            (shop_id, platform_product_id, product_name or "", old_title or "", new_title or "", action, status, note or ""),
+            "INSERT INTO title_opt_log(shop_id, platform_product_id, product_name, old_title, new_title, action, status, note, source) "
+            "VALUES(?,?,?,?,?,?,?,?,?)",
+            (shop_id, platform_product_id, product_name or "", old_title or "", new_title or "", action, status, note or "", source),
         )
         c.commit()
 

@@ -1045,7 +1045,7 @@ class Handler(BaseHTTPRequestHandler):
             platform_product_id = (item.get("platform_product_id") or "").strip()
             if not shop_id or not platform_product_id:
                 return _json(self, {"error": "参数不完整"}, 400)
-            rid = catalog.add_title_opt(shop_id, platform_product_id)
+            rid = catalog.add_title_opt(shop_id, platform_product_id, source="manual")
             if rid == -1:
                 return _json(self, {"error": "该商品已有订单，标题不动"}, 400)
             if rid is None:
@@ -1060,7 +1060,7 @@ class Handler(BaseHTTPRequestHandler):
             note = item.get("note")
             if not opt_id:
                 return _json(self, {"error": "id required"}, 400)
-            ok = catalog.update_title_opt(opt_id, new_title, status, note)
+            ok = catalog.update_title_opt(opt_id, new_title, status, note, source="manual")
             return _json(self, {"ok": ok})
 
         if path == "/api/catalog/title-opt/baseline" and self.command == "POST":

@@ -5021,16 +5021,23 @@ function titleOptLogHtml(logs) {
   const actionMap = {
     pick: { label: '挑选', color: '#7c3aed', bg: '#ede9fe' },
     optimize: { label: '优化', color: '#d97706', bg: '#fef3c7' },
-    apply: { label: '执行', color: '#2563eb', bg: '#dbeafe' }
+    apply: { label: '执行', color: '#2563eb', bg: '#dbeafe' },
+    fix: { label: '确认修复', color: '#16a34a', bg: '#dcfce7' }
+  };
+  const srcMap = {
+    ai: { label: '🤖 AI', color: '#64748b', bg: '#f1f5f9' },
+    manual: { label: '👤 人工', color: '#c2410c', bg: '#ffedd5' }
   };
   let h = '<div style="font-size:13px;font-weight:700;color:#1e3a5f;margin:14px 12px 6px">📜 修改日志（最近 ' + logs.length + ' 条）</div>';
   h += '<div style="max-height:360px;overflow-y:auto;margin:0 12px 16px;background:#fff;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.05)">';
   logs.forEach(l => {
     const a = actionMap[l.action] || { label: l.action, color: '#8899b0', bg: '#f3f4f6' };
+    const src = srcMap[l.source] || srcMap.ai;
     const ok = l.status === 'success';
     h += '<div style="padding:10px 12px;border-bottom:1px solid #f3f4f6">';
     h += '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:3px">';
     h += '<span style="font-size:11px;font-weight:700;color:' + a.color + ';background:' + a.bg + ';padding:1px 7px;border-radius:5px">' + a.label + '</span>';
+    h += '<span style="font-size:11px;font-weight:700;color:' + src.color + ';background:' + src.bg + ';padding:1px 7px;border-radius:5px" title="操作来源">' + src.label + '</span>';
     if (l.action === 'apply') h += '<span style="font-size:11px;font-weight:700;color:' + (ok ? '#16a34a' : '#dc2626') + '">' + (ok ? '✅成功' : '❌失败') + '</span>';
     h += '<span style="font-size:11px;color:#8899b0;margin-left:auto">' + esc(l.created_at || '') + '</span>';
     h += '</div>';
