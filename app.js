@@ -4850,10 +4850,12 @@ function paintTitleOpt(el) {
     );
 
     h += '<div style="background:#fff7ed;border:1px solid #fdba74;border-radius:12px;margin:12px;padding:12px">';
-    h += '<div style="font-size:13px;font-weight:700;color:#c2410c;display:flex;align-items:center;gap:8px;flex-wrap:wrap">';
+    h += '<div onclick="toggleBlock(\'fail-body\',\'fail-arrow\')" style="font-size:13px;font-weight:700;color:#c2410c;display:flex;align-items:center;gap:8px;flex-wrap:wrap;cursor:pointer;user-select:none">';
+    h += '<span id="fail-arrow" style="color:#c2410c">▶</span>';
     h += '<span>⚠️ 失败清单（' + failOpts.length + ' 个待处理' + (shown.length !== failOpts.length ? '，筛出 ' + shown.length : '') + '）</span>';
-    h += '<button onclick="titleOptFixBatch()" class="btn xs" style="margin-left:auto;background:#16a34a;color:#fff;border:none">✅ 一键全部修复（' + shown.length + '）</button>';
+    h += '<button onclick="event.stopPropagation();titleOptFixBatch()" class="btn xs" style="margin-left:auto;background:#16a34a;color:#fff;border:none">✅ 一键全部修复（' + shown.length + '）</button>';
     h += '</div>';
+    h += '<div id="fail-body" style="display:none">';
 
     // 筛选器：店铺 + 结果类型 + 原因说明
     h += '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">';
@@ -4892,13 +4894,17 @@ function paintTitleOpt(el) {
     });
     if (!shown.length) h += '<div style="padding:10px;text-align:center;color:#9a3412;font-size:12px">当前筛选无结果</div>';
     h += '</div>';
+    h += '</div>';
   }
 
   // 🛑 质量门拦截清单（AI 偷懒/负优化，未执行更新，只读）
   const blockedOpts = allOpts.filter(o => o.status === 'blocked');
   if (blockedOpts.length) {
     h += '<div style="background:#f8fafc;border:1px solid #cbd5e1;border-radius:12px;margin:12px;padding:12px">';
-    h += '<div style="font-size:13px;font-weight:700;color:#475569">🛑 质量门拦截（' + blockedOpts.length + ' 个，AI 偷懒/负优化未执行）</div>';
+    h += '<div onclick="toggleBlock(\'blocked-body\',\'blocked-arrow\')" style="font-size:13px;font-weight:700;color:#475569;display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">';
+    h += '<span id="blocked-arrow" style="color:#94a3b8">▶</span><span>🛑 质量门拦截（' + blockedOpts.length + ' 个，AI 偷懒/负优化未执行）</span>';
+    h += '</div>';
+    h += '<div id="blocked-body" style="display:none">';
     blockedOpts.forEach(o => {
       h += '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 0;border-bottom:1px dashed #e2e8f0">';
       if (o.shop_name) h += '<span style="font-size:11px;font-weight:700;color:#3b82f6;background:#e0f2fe;padding:1px 8px;border-radius:5px;flex-shrink:0">' + esc(o.shop_name) + '</span>';
@@ -4906,6 +4912,7 @@ function paintTitleOpt(el) {
       h += '<span style="font-size:11px;color:#64748b;background:#e2e8f0;padding:1px 8px;border-radius:5px;flex-shrink:0">' + esc(o.note || '质量门拦截') + '</span>';
       h += '</div>';
     });
+    h += '</div>';
     h += '</div>';
   }
 
@@ -4918,16 +4925,17 @@ function paintTitleOpt(el) {
   h += '<input id="to-search" placeholder="搜索商品名/货号/ID" value="' + esc(titleOptCache.filter) + '" style="flex:1;min-width:160px;padding:8px 10px;border:1px solid #cdd7e5;border-radius:8px;font-size:13px">';
   h += '</div>';
 
-  h += '<div style="font-size:13px;font-weight:700;color:#1e3a5f;margin:14px 12px 6px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">';
-  h += '<span>📋 已挑商品 · 跟踪日志（' + opts.length + '/5）</span>';
+  h += '<div onclick="toggleBlock(\'picked-body\',\'picked-arrow\')" style="font-size:13px;font-weight:700;color:#1e3a5f;margin:14px 12px 6px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;cursor:pointer;user-select:none">';
+  h += '<span style="display:flex;align-items:center;gap:8px"><span id="picked-arrow" style="color:#94a3b8">▼</span>📋 已挑商品 · 跟踪日志（' + opts.length + '/5）</span>';
   const applyable = opts.filter(o => o.new_title && o.status !== 'done');
   if (applyable.length) {
-    h += '<span style="display:flex;gap:8px;align-items:center">';
+    h += '<span style="display:flex;gap:8px;align-items:center" onclick="event.stopPropagation()">';
     h += '<button class="btn xs primary" onclick="titleOptApply()">🚀 执行更新（<span id="to-sel-count">0</span>）</button>';
     h += '<label style="font-size:11px;color:#5a6b85;cursor:pointer;white-space:nowrap"><input type="checkbox" id="to-sel-all" style="vertical-align:middle"> 全选</label>';
     h += '</span>';
   }
   h += '</div>';
+  h += '<div id="picked-body" style="display:block">';
   if (!opts.length) {
     h += '<div class="empty" style="margin:0 12px">暂无挑选商品，从下方候选列表挑选 5 个</div>';
   } else {
@@ -4964,8 +4972,12 @@ function paintTitleOpt(el) {
       h += '</div>';
     });
   }
+  h += '</div>';
 
-  h += '<div style="font-size:13px;font-weight:700;color:#1e3a5f;margin:14px 12px 6px">🎯 候选商品（无订单 · ' + cands.length + ' 个）</div>';
+  h += '<div onclick="toggleBlock(\'cand-body\',\'cand-arrow\')" style="font-size:13px;font-weight:700;color:#1e3a5f;margin:14px 12px 6px;display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">';
+  h += '<span id="cand-arrow" style="color:#94a3b8">▶</span>🎯 候选商品（无订单 · ' + cands.length + ' 个）';
+  h += '</div>';
+  h += '<div id="cand-body" style="display:none">';
   if (!cands.length) {
     h += '<div class="empty" style="margin:0 12px">无候选商品（可能已挑满或该店无订单商品已挑完）</div>';
   } else {
@@ -4983,6 +4995,7 @@ function paintTitleOpt(el) {
     });
     h += '</div>';
   }
+  h += '</div>';
 
   h += titleOptLogHtml(titleOptCache.logs);
 
@@ -5028,7 +5041,10 @@ function titleOptLogHtml(logs) {
     ai: { label: '🤖 AI', color: '#64748b', bg: '#f1f5f9' },
     manual: { label: '👤 人工', color: '#c2410c', bg: '#ffedd5' }
   };
-  let h = '<div style="font-size:13px;font-weight:700;color:#1e3a5f;margin:14px 12px 6px">📜 修改日志（最近 ' + logs.length + ' 条）</div>';
+  let h = '<div onclick="toggleBlock(\'log-body\',\'log-arrow\')" style="font-size:13px;font-weight:700;color:#1e3a5f;margin:14px 12px 6px;display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">';
+  h += '<span id="log-arrow" style="color:#94a3b8">▶</span>📜 修改日志（最近 ' + logs.length + ' 条）';
+  h += '</div>';
+  h += '<div id="log-body" style="display:none">';
   h += '<div style="max-height:360px;overflow-y:auto;margin:0 12px 16px;background:#fff;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.05)">';
   logs.forEach(l => {
     const a = actionMap[l.action] || { label: l.action, color: '#8899b0', bg: '#f3f4f6' };
@@ -5052,7 +5068,20 @@ function titleOptLogHtml(logs) {
     h += '</div>';
   });
   h += '</div>';
+  h += '</div>';
   return h;
+}
+
+// 通用折叠：切换区块/卡片 body 显示，可选同步箭头
+function toggleBlock(id, arrowId) {
+  const b = document.getElementById(id);
+  if (!b) return;
+  const open = b.style.display === 'none';
+  b.style.display = open ? 'block' : 'none';
+  if (arrowId) {
+    const a = document.getElementById(arrowId);
+    if (a) a.textContent = open ? '▼' : '▶';
+  }
 }
 
 async function titleOptApply() {
