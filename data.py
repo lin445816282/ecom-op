@@ -841,23 +841,21 @@ def _word_overlap(a: str, b: str, min_len: int = 2) -> bool:
 
 
 def pick_golden_words(name: str, limit: int = 40) -> list[dict]:
-    """从词库筛出喂给标题 AI 的黄金候选词（多级过滤，避免误用跨品类词）。
+    """选定商品后，动态计算词库每个词对该商品的相关性，筛出黄金候选词。
 
-    多级过滤：
-    1. 池过滤：main 池（排除 black 负面词 / spare 备用词）
-    2. 文本清洗：含中文 + 2~15 字（排除纯英文数字噪声）
-    3. 相关性收紧：= 高（排除「中」里的大量泛词）
-    4. 搜索量区间：100~30000（排除超大类目词 + 过低碎片）
-    5. 噪声黑名单：颜色词 + 品牌词
-    6. 品类锚定：商品名命中词 product 众数
-    7. 核心词词素重叠：category=核心词 的词必须与商品名有 ≥2 连续字重叠（排除跨品类核心词）
+    核心思想：关键词相关性是「相对具体商品」的动态值，不是全局静态标签。
+    - 词素重叠：词与商品名的关系（完整包含 > 部分重叠≥2字 > 无重叠）
+    - 品类一致：词的 product 是否与商品命中品类一致（同一词对不同类目权重不同）
+    - 角色：核心词必须与商品名重叠（否则跨品类排除）；修饰词靠品类一致加分
+    - 热度/搜索量：仅作排序因子，不参与过滤
     """
+    import math
     import re
     from collections import Counter
     name = (name or "").strip()
     items = load_keywords()
 
-    # 1. 品类锚定
+    # 1. 品类锚定：商品名里命中的词的 product 众数
     hit_products = Counter()
     for k in items:
         w = (k.get("word") or "").strip()
@@ -865,8 +863,8 @@ def pick_golden_words(name: str, limit: int = 40) -> list[dict]:
             hit_products[k.get("product", "其他")] += 1
     target_product = hit_products.most_common(1)[0][0] if hit_products else None
 
-    # 2~5. 多级过滤基础池
-    def _ok(k):
+    # 2. 基础过滤（池 + 文本 + 黑名单，不依赖 rel/hot 标签）
+    def base_ok(k):
         w = (k.get("word") or "").strip()
         if len(w) < 2 or len(w) > 15:
             return False
@@ -874,51 +872,77 @@ def pick_golden_words(name: str, limit: int = 40) -> list[dict]:
             return False
         if k.get("pool_type", "main") != "main":
             return False
-        if k.get("hot") != "热":
-            return False
-        if k.get("relevance") not in ("高", "中"):
-            return False
-        sv = int(k.get("search_volume", 0) or 0)
-        if sv < 100 or sv > 30000:
-            return False
         if w in GOLDEN_NOISE:
             return False
         return True
 
-    pool = [k for k in items if _ok(k)]
-    if target_product:
-        same = [k for k in pool if k.get("product") == target_product]
-        if len(same) >= 5:
-            pool = same
+    pool = [k for k in items if base_ok(k)]
 
-    # 7. 核心词词素重叠（跨品类核心词排除）
-    filtered = []
+    # 3. 动态相关打分（针对 name）
+    scored = []
     for k in pool:
-        if k.get("category") == "核心词" and not _word_overlap(k.get("word", ""), name):
-            continue
-        filtered.append(k)
+        w = k.get("word", "")
+        cat = k.get("category", "")
+        prod = k.get("product", "")
 
-    # 分层取 top N（搜索量降序）
+        # 词素重叠：完整包含(2) > 部分重叠≥2字(1) > 无重叠(0)
+        overlap = 0
+        if w in name:
+            overlap = 2
+        elif name and _word_overlap(w, name, min_len=2):
+            overlap = 1
+
+        # 核心词必须与商品名重叠，否则跨品类排除
+        if cat == "核心词" and overlap == 0:
+            continue
+
+        product_match = bool(target_product and prod == target_product)
+
+        score = 0.0
+        if overlap == 2:
+            score += 50
+        elif overlap == 1:
+            score += 30
+        if product_match:
+            score += 25
+        # 角色分：核心词略高；修饰词靠 overlap/product_match 决定
+        if cat == "核心词":
+            score += 15
+        elif cat in ("属性词", "场景词", "卖点词", "风格词", "规格词"):
+            score += 5
+        # 热度分（排序因子）
+        score += {"热": 10, "中": 6, "长尾": 3}.get(k.get("hot", ""), 0)
+        # 搜索量分（对数，0~10）
+        sv = int(k.get("search_volume", 0) or 0)
+        if sv > 0:
+            score += min(10, math.log10(sv + 1))
+
+        scored.append((score, k))
+
+    scored.sort(key=lambda x: -x[0])
+
+    # 4. 分层取 top N（各 category 取该商品相关性最高的）
     per_cat = {"核心词": 3, "属性词": 8, "场景词": 5, "卖点词": 5, "规格词": 3, "风格词": 3}
     result = []
-    for cat, n in per_cat.items():
-        cat_pool = sorted([k for k in filtered if k.get("category") == cat],
-                          key=lambda x: -(int(x.get("search_volume", 0) or 0)))
-        result.extend(cat_pool[:n])
-    # 兜底：分层筛出太少则补搜索量最高的词（按 word 去重，避免重复）
-    if len(result) < 8:
-        seen = {k.get("word") for k in result}
-        extra = [k for k in sorted(filtered, key=lambda x: -(int(x.get("search_volume", 0) or 0)))
-                 if k.get("word") not in seen][:limit - len(result)]
-        result.extend(extra)
-    # 最终按 word 去重（兜底可能引入重复）
-    dedup = []
     seen_words = set()
-    for k in result:
-        if k.get("word") not in seen_words:
-            seen_words.add(k.get("word"))
-            dedup.append(k)
-    return dedup[:limit]
+    for cat, n in per_cat.items():
+        cnt = 0
+        for s, k in scored:
+            if cnt >= n:
+                break
+            if k.get("category") == cat and k.get("word") not in seen_words:
+                result.append(k)
+                seen_words.add(k.get("word"))
+                cnt += 1
+    # 兜底：分层取太少则按综合分补足
+    if len(result) < 8:
+        for s, k in scored:
+            if k.get("word") not in seen_words:
+                result.append(k)
+                seen_words.add(k.get("word"))
+            if len(result) >= limit:
+                break
+    return result[:limit]
 
 
 def mark_keywords_used(title: str, product_id: str) -> dict:
