@@ -470,6 +470,26 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/catalog/stats" and self.command == "GET":
             return _json(self, catalog.catalog_stats())
 
+        if path == "/api/catalog/flow-status" and self.command == "GET":
+            stats = catalog.flow_stats()
+            kws = data.load_keywords()
+            pool, kstat = {}, {}
+            for k in kws:
+                p = k.get("pool_type") or "?"
+                s = k.get("status") or "?"
+                pool[p] = pool.get(p, 0) + 1
+                kstat[s] = kstat.get(s, 0) + 1
+            stats["keywords"] = {
+                "total": len(kws), "main": pool.get("main", 0),
+                "spare": pool.get("spare", 0), "black": pool.get("black", 0),
+                "used": kstat.get("已用", 0),
+            }
+            tasks = data.load_tasks()
+            logs = data.load_logs()
+            stats["tasks"] = {"total": len(tasks), "done": sum(1 for t in tasks if t.get("done"))}
+            stats["logs"] = {"total": len(logs)}
+            return _json(self, stats)
+
         if path == "/api/catalog/platforms" and self.command == "GET":
             return _json(self, {"items": catalog.list_platforms()})
 

@@ -1820,6 +1820,50 @@ def list_title_opt(shop_id: int = None) -> list[dict]:
         return [dict(r) for r in rows]
 
 
+def title_opt_stats(conn: sqlite3.Connection = None) -> dict:
+    """标题优化闭环统计：总数 / 已改后台 / 待处理 / 待确认修复。"""
+    own = conn is None
+    if own:
+        conn = _conn()
+    try:
+        total = conn.execute("SELECT COUNT(*) AS n FROM title_opt").fetchone()["n"]
+        done = conn.execute("SELECT COUNT(*) AS n FROM title_opt WHERE status='done'").fetchone()["n"]
+        optimized = conn.execute("SELECT COUNT(*) AS n FROM title_opt WHERE status='optimized'").fetchone()["n"]
+        fixed = conn.execute("SELECT COUNT(*) AS n FROM title_opt WHERE status='optimized' AND fixed=1").fetchone()["n"]
+        logs = conn.execute("SELECT COUNT(*) AS n FROM title_opt_log").fetchone()["n"]
+        return {"total": total, "done": done, "optimized": optimized,
+                "pending_fixed": optimized - fixed, "fixed": fixed, "logs": logs}
+    finally:
+        if own:
+            conn.close()
+
+
+def flow_stats() -> dict:
+    """运营闭环全景：各环节关键计数（选品 → 上架 → 测款 → 采集 → 复盘）。"""
+    with closing(_conn()) as c:
+        def n(sql):
+            return c.execute(sql).fetchone()[0]
+        return {
+            "suppliers": n("SELECT COUNT(*) FROM suppliers"),
+            "supplier_products": n("SELECT COUNT(*) FROM supplier_products"),
+            "platforms": n("SELECT COUNT(*) FROM platforms"),
+            "shops": n("SELECT COUNT(*) FROM shops"),
+            "products": n("SELECT COUNT(*) FROM products"),
+            "skus": n("SELECT COUNT(*) FROM skus"),
+            "orders": n("SELECT COUNT(*) FROM orders"),
+            "promotions": n("SELECT COUNT(*) FROM promotions"),
+            "competitors": n("SELECT COUNT(*) FROM competitors"),
+            "reviews": n("SELECT COUNT(*) FROM reviews"),
+            "buyer_reviews": n("SELECT COUNT(*) FROM buyer_reviews"),
+            "scheduled_tasks": n("SELECT COUNT(*) FROM scheduled_tasks"),
+            "task_runs": n("SELECT COUNT(*) FROM task_runs"),
+            "freight": n("SELECT COUNT(*) FROM freight"),
+            "pack_records": n("SELECT COUNT(*) FROM pack_records"),
+            "goods_effect": n("SELECT COUNT(*) FROM goods_effect"),
+            "title_opt": title_opt_stats(c),
+        }
+
+
 def update_title_opt(opt_id: int, new_title: str = None, status: str = None, note: str = None) -> bool:
     with closing(_conn()) as c:
         prev = None

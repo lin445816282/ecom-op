@@ -35,6 +35,33 @@ const GUIDE_ITEMS = [
   { view:'calendar', icon:'▤', title:'选品日历', desc:'按月提前布局应季商品，建议提前 2-4 周预热。' },
 ];
 
+// 运营闭环全景（单一数据源：运营总览页的「运营全流程」区块按此渲染，环节 → 对应模块可点击跳转）
+const FLOW_STAGES = [
+  { icon:'📦', name:'选品备货', color:'#8b5cf6', steps:[
+      { view:'calendar', icon:'▤', name:'选品日历', desc:'应季提前布局' },
+      { view:'suppliers', icon:'🏭', name:'供应商', desc:'货源·报价·图', stat:'suppliers' },
+      { view:'keywords', icon:'🔑', name:'关键词库', desc:'拓词储备', stat:'keywords' },
+  ]},
+  { icon:'🛒', name:'铺品上架', color:'#2563eb', steps:[
+      { view:'catalog', icon:'🗂', name:'商品库', desc:'平台→店→品→SKU', stat:'catalog' },
+      { view:'titleopt', icon:'✍️', name:'标题优化', desc:'选词→生成→改后台', stat:'title_opt' },
+      { view:'products', icon:'💰', name:'商品投产', desc:'毛利·保本ROI', stat:'invest' },
+  ]},
+  { icon:'📣', name:'测款冷启动', color:'#f59e0b', steps:[
+      { view:'catalog', icon:'🎯', name:'推广审计', desc:'保本投产比', stat:'promotions' },
+      { view:'competitors', icon:'👀', name:'竞品监控', desc:'比价·销量', stat:'competitors' },
+  ]},
+  { icon:'📊', name:'数据采集', color:'#10b981', steps:[
+      { view:'scheduler', icon:'⏰', name:'任务调度', desc:'定时采集', stat:'scheduler' },
+      { view:'reviews', icon:'⭐', name:'评价监控', desc:'差评预警', stat:'reviews' },
+  ]},
+  { icon:'📈', name:'复盘迭代', color:'#ef4444', steps:[
+      { view:'logs', icon:'📝', name:'运营日志', desc:'每天结论', stat:'logs' },
+      { view:'freight', icon:'🚚', name:'运费对账', desc:'三方比对', stat:'freight' },
+      { view:'packing', icon:'📦', name:'打单登记', desc:'各入口单量', stat:'packing' },
+  ]},
+];
+
 const state = { view:'dashboard', shop:'拼多多', products:[], knowledge:[], calendar:[], templates:[], tasks:[], keywords:[], promotionHistory:[], logs:[] };
 
 // 店铺过滤辅助（当前店铺视角）
@@ -801,6 +828,49 @@ function renderLogs() {
 }
 
 /* ---------------- 总览 ---------------- */
+// 运营闭环全景：把 flow-status 数据映射成每个环节的徽标文案
+function flowStatText(step, flow) {
+  if (!step.stat) return step.desc || '';
+  switch (step.stat) {
+    case 'suppliers': return `${flow.suppliers} 家 · ${flow.supplier_products} 品`;
+    case 'keywords': return `${flow.keywords.main} 主词 · ${flow.keywords.used} 已用`;
+    case 'catalog': return `${flow.products} 品 · ${flow.skus} SKU`;
+    case 'title_opt': return `${flow.title_opt.done}/${flow.title_opt.total} 已改后台`;
+    case 'invest': return `${state.products.length} 个精算`;
+    case 'promotions': return `${flow.promotions} 条推广`;
+    case 'competitors': return `${flow.competitors} 竞品`;
+    case 'scheduler': return `${flow.scheduled_tasks} 任务 · ${flow.task_runs} 次`;
+    case 'reviews': return `${flow.reviews} 评价`;
+    case 'logs': return `${flow.logs.total} 条`;
+    case 'freight': return `${flow.freight} 条`;
+    case 'packing': return `${flow.pack_records} 条`;
+    default: return step.desc || '';
+  }
+}
+
+// 运营闭环全景区块：5 阶段 × 环节卡片，可点击跳转对应模块
+function flowMapHTML(flow) {
+  flow = flow || {};
+  const stages = FLOW_STAGES.map((st, i) => {
+    const steps = st.steps.map(sp => `
+      <div class="flow-step" onclick="setView('${sp.view}')" style="--fc:${st.color}">
+        <div class="flow-step-top"><span class="flow-step-ico">${sp.icon}</span><span class="flow-step-name">${esc(sp.name)}</span></div>
+        <div class="flow-step-stat">${esc(flowStatText(sp, flow))}</div>
+      </div>`).join('');
+    const arrow = i < FLOW_STAGES.length - 1 ? `<div class="flow-arrow">›</div>` : '';
+    return `
+      <div class="flow-stage">
+        <div class="flow-stage-head" style="--fc:${st.color}"><span class="flow-stage-ico">${st.icon}</span><span class="flow-stage-name">${esc(st.name)}</span></div>
+        <div class="flow-steps">${steps}</div>
+      </div>${arrow}`;
+  }).join('');
+  return `
+    <div class="panel" style="margin-bottom:16px">
+      <div class="panel-header"><h2>🔄 运营闭环全景</h2><span class="badge">选品 → 上架 → 测款 → 采集 → 复盘</span></div>
+      <div class="flow-map">${stages}</div>
+    </div>`;
+}
+
 function trendSVG(history) {
   const data = (history || []).slice(-14);
   if (!data.length) return '<div class="empty">暂无推广历史数据（等 cron 跑几次就有）</div>';
@@ -853,6 +923,10 @@ async function renderDashboard() {
     ov = (resp.items || []).find(x => x.name === state.shop) || null;
   } catch (e) {}
 
+  // 运营闭环全景各环节计数（选品 → 上架 → 测款 → 采集 → 复盘）
+  let flow = {};
+  try { flow = await api('/api/catalog/flow-status'); } catch (e) {}
+
   const realHTML = ov ? `
     <div class="panel" style="margin-bottom:16px">
       <div class="panel-header"><h2>📊 真实经营数据（${esc(state.shop)}）</h2><span class="badge">${lm.label}</span></div>
@@ -893,6 +967,8 @@ async function renderDashboard() {
       </div>
       <button class="cta" data-nav="products">＋ 新增商品投产</button>
     </section>
+
+    ${flowMapHTML(flow)}
 
     ${alertHTML}
 
