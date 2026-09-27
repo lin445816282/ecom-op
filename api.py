@@ -17,7 +17,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROMOTION_HISTORY_PATH = os.path.expanduser("~/.hermes/pdd_promotion_history.json")
 
 # 店铺 → 拼多多 CDP 端口（Edge 独立 profile，详见 pdd-promotion-cdp skill）
-SHOP_CDP_PORT = {5: 9232, 3: 9230, 1: 9234, 6: 9228}
+SHOP_CDP_PORT = {5: 9232, 3: 9230, 1: 9222, 6: 9228}
 NODE_EXE = "/mnt/d/Program Files/nodejs/node.exe"
 PDD_SET_TITLE_JS = r"C:\tmp\pdd_set_titles.js"
 # 竞品监控：买家端搜索实例 + 采集脚本
