@@ -1876,6 +1876,26 @@ def mark_title_opt_fixed(opt_id: int) -> bool:
         return True
 
 
+def mark_title_opt_fixed_batch(ids: list) -> int:
+    """批量标记失败记录为「已确认修复」（fixed=1）。返回更新数量。"""
+    if not ids:
+        return 0
+    with closing(_conn()) as c:
+        ph = ",".join("?" * len(ids))
+        rows = c.execute(
+            f"SELECT id, shop_id, platform_product_id, product_name, old_title, new_title, note FROM title_opt WHERE id IN ({ph})",
+            ids).fetchall()
+        c.execute(f"UPDATE title_opt SET fixed=1 WHERE id IN ({ph})", ids)
+        for row in rows:
+            c.execute(
+                "INSERT INTO title_opt_log(shop_id, platform_product_id, product_name, old_title, new_title, action, status, note) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                (row["shop_id"], row["platform_product_id"], row["product_name"] or "", row["old_title"] or "", row["new_title"] or "", "fix", "success", row["note"] or "确认修复"),
+            )
+        c.commit()
+        return len(rows)
+
+
 def get_title_opt_by_ids(ids: list) -> list[dict]:
     """按 id 批量查标题优化记录（执行更新用）。"""
     if not ids:

@@ -4727,17 +4727,69 @@ function paintTitleOpt(el) {
   const allOpts = titleOptCache.allOpts || opts;
   const failOpts = allOpts.filter(o => o.note && o.note !== '执行中…' && o.note !== '已出单，跳过' && o.status !== 'done' && o.status !== 'blocked' && !o.fixed);
   if (failOpts.length) {
+    // 各结果类型 → 出现原因（供运营理解，hover 每条 note 也会显示）
+    const failReasons = {
+      '无结果': 'CDP 浏览器死了，node 连不上，标题未改到后台。重启 CDP 后重新执行更新即可',
+      'NO_LIST': '商品已下架或后台搜不到。无需处理',
+      'MISMATCH': '价格校验拦截（单买价 > 拼单价 ×2），提交被拦。修价后重新执行',
+      'NO_COMMIT_ID': '点编辑未拿到草稿 ID（多为价格校验错误）。修价后重试',
+      'DONE_NO_VERIFY': '已提交但未验证成功。重新执行核对',
+      '执行超时': 'node 脚本执行超时。分批重跑',
+      '执行异常': 'node 脚本异常退出。重跑',
+      '清单写入失败': '临时清单文件写入失败。重跑',
+    };
+    const noteTypes = [...new Set(failOpts.map(o => o.note))];
+    const failShops = [...new Set(failOpts.map(o => o.shop_id))];
+    // 筛选状态（惰性初始化）
+    titleOptCache.failShop = titleOptCache.failShop || 'all';
+    titleOptCache.failNote = titleOptCache.failNote || 'all';
+    const shown = failOpts.filter(o =>
+      (titleOptCache.failShop === 'all' || String(o.shop_id) === String(titleOptCache.failShop)) &&
+      (titleOptCache.failNote === 'all' || o.note === titleOptCache.failNote)
+    );
+
     h += '<div style="background:#fff7ed;border:1px solid #fdba74;border-radius:12px;margin:12px;padding:12px">';
-    h += '<div style="font-size:13px;font-weight:700;color:#c2410c">⚠️ 失败清单（' + failOpts.length + ' 个待处理）</div>';
-    h += '<div style="font-size:11px;color:#9a3412;margin-top:3px;line-height:1.6">多为价格校验拦截（单买价 > 拼单价 ×2），修价后可重新执行更新</div>';
-    failOpts.forEach(o => {
+    h += '<div style="font-size:13px;font-weight:700;color:#c2410c;display:flex;align-items:center;gap:8px;flex-wrap:wrap">';
+    h += '<span>⚠️ 失败清单（' + failOpts.length + ' 个待处理' + (shown.length !== failOpts.length ? '，筛出 ' + shown.length : '') + '）</span>';
+    h += '<button onclick="titleOptFixBatch()" class="btn xs" style="margin-left:auto;background:#16a34a;color:#fff;border:none">✅ 一键全部修复（' + shown.length + '）</button>';
+    h += '</div>';
+
+    // 筛选器：店铺 + 结果类型 + 原因说明
+    h += '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">';
+    h += '<select onchange="titleOptFailFilter(\'shop\', this.value)" style="padding:6px 8px;border:1px solid #fdba74;border-radius:8px;font-size:12px;background:#fff;color:#7c2d12">';
+    h += '<option value="all"' + (titleOptCache.failShop === 'all' ? ' selected' : '') + '>🏪 全部店铺</option>';
+    failShops.forEach(sid => {
+      const sn = (shopOptions.find(s => s.id === sid) || {}).name || ('店铺' + sid);
+      h += '<option value="' + sid + '"' + (String(titleOptCache.failShop) === String(sid) ? ' selected' : '') + '>' + esc(sn) + '</option>';
+    });
+    h += '</select>';
+    h += '<select onchange="titleOptFailFilter(\'note\', this.value)" style="padding:6px 8px;border:1px solid #fdba74;border-radius:8px;font-size:12px;background:#fff;color:#7c2d12">';
+    h += '<option value="all"' + (titleOptCache.failNote === 'all' ? ' selected' : '') + '>📊 全部结果</option>';
+    noteTypes.forEach(nt => {
+      h += '<option value="' + esc(nt) + '"' + (titleOptCache.failNote === nt ? ' selected' : '') + '>' + esc(nt) + '</option>';
+    });
+    h += '</select>';
+    h += '<button onclick="var b=document.getElementById(\'fail-reason-body\');if(b.style.display===\'none\'){b.style.display=\'block\'}else{b.style.display=\'none\'}" class="btn xs" style="margin-left:auto;background:#fff;color:#c2410c;border:1px solid #fdba74">📖 结果原因说明</button>';
+    h += '</div>';
+
+    // 原因说明折叠体
+    h += '<div id="fail-reason-body" style="display:none;margin-top:8px;font-size:11px;line-height:1.8;color:#7c2d12;background:#fff;border:1px dashed #fdba74;border-radius:8px;padding:8px 10px">';
+    noteTypes.forEach(nt => {
+      const cnt = failOpts.filter(o => o.note === nt).length;
+      h += '<div><b>' + esc(nt) + '</b>（' + cnt + '）· ' + esc(failReasons[nt] || '未知原因') + '</div>';
+    });
+    h += '</div>';
+
+    // 列表（按筛选结果）
+    shown.forEach(o => {
       h += '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 0;border-bottom:1px dashed #fed7aa">';
       if (o.shop_name) h += '<span style="font-size:11px;font-weight:700;color:#3b82f6;background:#e0f2fe;padding:1px 8px;border-radius:5px;flex-shrink:0">' + esc(o.shop_name) + '</span>';
       h += '<span style="font-size:11px;color:#5a6b85;flex-shrink:0">ID <b>' + esc(o.platform_product_id) + '</b></span>';
-      h += '<span style="font-size:11px;color:#dc2626;background:#fee2e2;padding:1px 8px;border-radius:5px;flex-shrink:0">' + esc(o.note) + '</span>';
+      h += '<span title="' + esc(failReasons[o.note] || '') + '" style="font-size:11px;color:#dc2626;background:#fee2e2;padding:1px 8px;border-radius:5px;flex-shrink:0;cursor:help">' + esc(o.note) + '</span>';
       h += '<button class="btn xs" style="margin-left:auto;background:#16a34a;color:#fff;border:none;flex-shrink:0" onclick="titleOptFix(' + o.id + ')">✅ 确认修复</button>';
       h += '</div>';
     });
+    if (!shown.length) h += '<div style="padding:10px;text-align:center;color:#9a3412;font-size:12px">当前筛选无结果</div>';
     h += '</div>';
   }
 
@@ -4941,6 +4993,32 @@ async function titleOptFix(optId) {
   try {
     await api('/api/catalog/title-opt/fix', 'POST', { id: optId });
     toast('✅ 已确认修复');
+    await loadTitleOptData();
+    paintTitleOpt($('#view-titleopt'));
+  } catch (e) { toast('❌ ' + e.message); }
+}
+
+function titleOptFailFilter(key, val) {
+  // 失败清单筛选：shop=店铺 / note=结果类型
+  if (key === 'shop') titleOptCache.failShop = val;
+  else titleOptCache.failNote = val;
+  paintTitleOpt($('#view-titleopt'));
+}
+
+async function titleOptFixBatch() {
+  // 一键把当前筛选出的失败记录全部标记「已修复」
+  const allOpts = titleOptCache.allOpts || [];
+  const failOpts = allOpts.filter(o => o.note && o.note !== '执行中…' && o.note !== '已出单，跳过' && o.status !== 'done' && o.status !== 'blocked' && !o.fixed);
+  const shown = failOpts.filter(o =>
+    (titleOptCache.failShop === 'all' || String(o.shop_id) === String(titleOptCache.failShop)) &&
+    (titleOptCache.failNote === 'all' || o.note === titleOptCache.failNote)
+  );
+  if (!shown.length) { toast('⚠️ 当前筛选无失败记录'); return; }
+  if (!confirm('确认将当前筛选的 ' + shown.length + ' 条失败记录全部标记为「已修复」？')) return;
+  try {
+    const ids = shown.map(o => o.id);
+    await api('/api/catalog/title-opt/fix-batch', 'POST', { ids });
+    toast('✅ 已批量确认修复 ' + shown.length + ' 条');
     await loadTitleOptData();
     paintTitleOpt($('#view-titleopt'));
   } catch (e) { toast('❌ ' + e.message); }

@@ -1059,6 +1059,18 @@ class Handler(BaseHTTPRequestHandler):
             ok = catalog.mark_title_opt_fixed(opt_id)
             return _json(self, {"ok": ok})
 
+        if path == "/api/catalog/title-opt/fix-batch" and self.command == "POST":
+            item = self._read_body()
+            ids = item.get("ids") or []
+            if not ids:
+                return _json(self, {"error": "ids required"}, 400)
+            try:
+                ids = [int(x) for x in ids]
+            except (TypeError, ValueError):
+                return _json(self, {"error": "非法 id"}, 400)
+            n = catalog.mark_title_opt_fixed_batch(ids)
+            return _json(self, {"ok": True, "count": n})
+
         if path == "/api/catalog/title-opt/apply" and self.command == "POST":
             import threading
             item = self._read_body()
