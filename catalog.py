@@ -125,6 +125,25 @@ CREATE INDEX IF NOT EXISTS idx_promotions_shop ON promotions(shop_id);
 CREATE INDEX IF NOT EXISTS idx_promotions_product ON promotions(platform_product_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_promotions_uniq ON promotions(shop_id, platform_product_id, scene, plan_name, group_name, period);
 
+CREATE TABLE IF NOT EXISTS promo_finance (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    shop_id INTEGER NOT NULL,
+    stat_date TEXT NOT NULL,
+    total_balance REAL,
+    avail_balance REAL,
+    general_balance REAL,
+    restricted_balance REAL,
+    locked_balance REAL,
+    cash_balance REAL,
+    red_packet_balance REAL,
+    today_spend REAL,
+    yesterday_spend REAL,
+    created_at TEXT DEFAULT (datetime('now','localtime')),
+    FOREIGN KEY(shop_id) REFERENCES shops(id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_promo_finance_uniq ON promo_finance(shop_id, stat_date);
+
 CREATE TABLE IF NOT EXISTS modifications (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     shop_id INTEGER NOT NULL,
@@ -810,6 +829,62 @@ def import_promotions(shop_id: int, promos: list[dict]) -> int:
             n += 1
         conn.commit()
         return n
+    finally:
+        conn.close()
+
+
+def import_promo_finance(shop_id: int, data: dict) -> int:
+    """导入推广账户财务快照（单连接，按 (shop_id, stat_date) 幂等覆盖）。
+
+    data: {stat_date, total_balance, avail_balance, general_balance,
+           restricted_balance, locked_balance, cash_balance, red_packet_balance,
+           today_spend, yesterday_spend}
+    """
+    conn = _conn()
+    try:
+        conn.execute(
+            "INSERT INTO promo_finance(shop_id, stat_date, total_balance, avail_balance, "
+            "general_balance, restricted_balance, locked_balance, cash_balance, "
+            "red_packet_balance, today_spend, yesterday_spend) "
+            "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(shop_id, stat_date) "
+            "DO UPDATE SET total_balance=excluded.total_balance, avail_balance=excluded.avail_balance, "
+            "general_balance=excluded.general_balance, restricted_balance=excluded.restricted_balance, "
+            "locked_balance=excluded.locked_balance, cash_balance=excluded.cash_balance, "
+            "red_packet_balance=excluded.red_packet_balance, today_spend=excluded.today_spend, "
+            "yesterday_spend=excluded.yesterday_spend",
+            (shop_id, data.get("stat_date", ""),
+             data.get("total_balance"), data.get("avail_balance"),
+             data.get("general_balance"), data.get("restricted_balance"),
+             data.get("locked_balance"), data.get("cash_balance"),
+             data.get("red_packet_balance"), data.get("today_spend"),
+             data.get("yesterday_spend")),
+        )
+        conn.commit()
+        return 1
+    finally:
+        conn.close()
+
+
+def query_promo_finance(shop_id: int = None, limit: int = 30) -> list[dict]:
+    """查询推广账户财务快照（按日期倒序，带店铺名）。"""
+    conn = _conn()
+    try:
+        if shop_id:
+            rows = conn.execute(
+                "SELECT pf.*, s.name AS shop_name FROM promo_finance pf "
+                "LEFT JOIN shops s ON s.id = pf.shop_id "
+                "WHERE pf.shop_id=? ORDER BY pf.stat_date DESC LIMIT ?",
+                (shop_id, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT pf.*, s.name AS shop_name FROM promo_finance pf "
+                "LEFT JOIN shops s ON s.id = pf.shop_id "
+                "ORDER BY pf.stat_date DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [dict(r) for r in rows]
     finally:
         conn.close()
 

@@ -25,6 +25,7 @@ const VIEWS = {
   packing: {title:'打单登记', sub:'打单人员每日登记各入口打单数量，区分平台/代发/散单。'},
   freight: {title:'运费结算', sub:'快递账单 + 订单匹配对账，三方比对（打单/订单/运费）预警。'},
   competitors: {title:'竞品监控', sub:'搜索同类商品，对比价格/销量/主图，人工确认竞品。'},
+  promofinance: {title:'推广财务', sub:'各店推广账户余额 + 每日花费快照，余额告急预警。'},
 };
 
 // 运营指南分组（单一数据源：新增子模块只需在这里加一条，侧边栏子菜单 + 目录页自动生成）
@@ -550,6 +551,81 @@ function setView(view) {
   if (view === 'packing') renderPacking();
   if (view === 'freight') renderFreightView();
   if (view === 'competitors') renderCompetitorsView();
+  if (view === 'promofinance') renderPromoFinance();
+}
+
+// 推广财务：各店余额 + 每日花费快照 + 余额告警
+async function renderPromoFinance() {
+  const el = $('#view-promofinance');
+  const ym = (v) => (v == null || Number.isNaN(v)) ? '—' : '¥' + Number(v).toFixed(2);
+  el.innerHTML = '<div style="padding:24px;color:#666">加载中…</div>';
+  let items = [];
+  try {
+    const resp = await api('/api/catalog/promo-finance?limit=90');
+    items = (resp && resp.items) || [];
+  } catch (e) {
+    items = [];
+  }
+  if (!items.length) {
+    el.innerHTML = '<div style="padding:32px;color:#999;text-align:center">暂无财务快照数据。<br>每天 22:00 定时采集（如若月下/嘉裕/欧世艺），积累后可看余额与花费趋势。</div>';
+    return;
+  }
+  // 按店铺分组（rows 已按日期倒序）
+  const byShop = {};
+  items.forEach(r => {
+    if (!byShop[r.shop_id]) byShop[r.shop_id] = { name: r.shop_name || ('店铺 ' + r.shop_id), rows: [] };
+    byShop[r.shop_id].rows.push(r);
+  });
+  const cards = Object.values(byShop).map(g => {
+    const latest = g.rows[0];
+    const recent = [...g.rows].slice(0, 14).reverse();
+    // 余额告警：余额 < 昨日花费（即撑不过一天）
+    const balance = latest.total_balance;
+    const yesterday = latest.yesterday_spend || 0;
+    const danger = balance != null && balance < yesterday;
+    const warn = balance != null && balance < yesterday + 100;
+    const badge = danger
+      ? '<span style="background:#fee2e2;color:#dc2626;padding:2px 8px;border-radius:6px;font-size:12px;font-weight:600">⚠️ 余额告急（撑不过1天）</span>'
+      : warn
+        ? '<span style="background:#fef3c7;color:#b45309;padding:2px 8px;border-radius:6px;font-size:12px;font-weight:600">⚠️ 余额偏低</span>'
+        : '<span style="background:#dcfce7;color:#15803d;padding:2px 8px;border-radius:6px;font-size:12px;font-weight:600">✓ 余额充足</span>';
+    return `
+      <div class="panel" style="margin:12px;padding:16px 18px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <b style="font-size:16px">${g.name}</b>${badge}
+        </div>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+          <div style="flex:1;min-width:110px;background:#f8fafc;border-radius:10px;padding:12px">
+            <div style="color:#64748b;font-size:12px">总余额</div>
+            <div style="font-size:22px;font-weight:700;margin-top:4px">${ym(balance)}</div>
+          </div>
+          <div style="flex:1;min-width:110px;background:#f8fafc;border-radius:10px;padding:12px">
+            <div style="color:#64748b;font-size:12px">今日花费</div>
+            <div style="font-size:22px;font-weight:700;margin-top:4px;color:#ea580c">${ym(latest.today_spend)}</div>
+          </div>
+          <div style="flex:1;min-width:110px;background:#f8fafc;border-radius:10px;padding:12px">
+            <div style="color:#64748b;font-size:12px">昨日花费</div>
+            <div style="font-size:22px;font-weight:700;margin-top:4px">${ym(yesterday)}</div>
+          </div>
+        </div>
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <tr style="color:#94a3b8;text-align:left">
+            <th style="padding:6px 4px;font-weight:500">日期</th>
+            <th style="padding:6px 4px;font-weight:500">余额</th>
+            <th style="padding:6px 4px;font-weight:500">今日花费</th>
+            <th style="padding:6px 4px;font-weight:500">昨日花费</th>
+          </tr>
+          ${recent.map(r => `
+            <tr style="border-top:1px solid #f1f5f9">
+              <td style="padding:6px 4px;color:#475569">${r.stat_date}</td>
+              <td style="padding:6px 4px">${ym(r.total_balance)}</td>
+              <td style="padding:6px 4px;color:#ea580c">${ym(r.today_spend)}</td>
+              <td style="padding:6px 4px">${ym(r.yesterday_spend)}</td>
+            </tr>`).join('')}
+        </table>
+      </div>`;
+  }).join('');
+  el.innerHTML = cards;
 }
 
 function toggleNavGroup(name, ev) {
