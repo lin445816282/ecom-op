@@ -786,17 +786,78 @@ def save_keywords(items: list[dict]) -> None:
         json.dump(items, f, ensure_ascii=False, indent=2)
 
 
-def pick_golden_words(name: str, limit: int = 40) -> list[dict]:
-    """从词库筛出喂给标题 AI 的黄金候选词。
+# 黄金词拉黑名单：命中即「直接不进入候选」。
+# 1) 品牌词（任何商品标题都不该出现他人品牌，违禁风险）
+# 2) 跨品类名词（家电/家具/厨卫/服饰/家纺/美妆/数码/食品/工具/摄影/二次元/建材，与主营品类无关）
+# 3) 颜色词（无品类指向）
+GOLDEN_NOISE = {
+    # 品牌词（词库采集时混入的同行/杂牌 + 常见大牌）
+    "苏泊尔", "沃卫", "爱嘉莉", "潜水艇", "飞雕", "索克比", "宜索克", "卡莱",
+    "顾家", "宜家", "欧派", "全友", "林氏", "索菲亚", "芝华仕", "左右",
+    "美的", "格力", "海尔", "九阳", "小米", "华为",
+    # IP / 二次元
+    "三丽鸥", "库洛米", "奶龙", "蜡笔小新",
+    # 跨品类名词（家电/厨卫/建材）
+    "电视", "冰箱", "洗衣机", "空调", "油烟机", "微波炉", "烤箱", "马桶", "卫浴",
+    "淋浴房", "鱼缸", "水龙头", "水槽", "太阳能", "岩板", "岛台",
+    # 跨品类名词（家具）
+    "沙发", "茶几", "餐桌", "床头柜", "梳妆台", "衣柜", "鞋柜", "橱柜", "书架",
+    "货架", "遥控器", "拖把", "晾衣架", "晾衣",
+    # 跨品类名词（服饰/家纺）
+    "大衣", "外套", "被子", "床单", "被套", "衣服", "浴巾", "毛巾", "抹布",
+    "海绵", "百洁布", "行李箱", "手提包", "包包",
+    # 跨品类名词（首饰/美妆）
+    "吊坠", "项链", "耳环", "手链", "手串", "耳钉", "耳饰", "首饰", "戒指",
+    "发饰", "发绳", "发圈", "钥匙扣", "化妆品", "护肤品",
+    # 跨品类名词（数码/玩具/食品/工具）
+    "手机", "充电器", "耳机", "数据线", "U盘", "乐高", "积木", "模型", "餐具",
+    "调料", "调味品", "鸡蛋", "水果", "饮料", "杯子", "水杯", "咖啡杯", "茶具",
+    "工具箱", "零件盒", "螺丝", "螺丝钉", "五金", "工具", "钻头", "串珠", "文具",
+    "便签", "奖杯", "喂食", "食盒", "鸟笼", "香料", "花椒", "佐料", "锅具", "五谷杂粮",
+    # 跨品类名词（摄影/印刷）
+    "婚纱", "写真", "艺术照", "相片", "海报", "拼图", "洗照片", "全家福",
+    # 灯具属性（跨品类，与园艺/挂钩/收纳无关）
+    "七彩", "感应", "超亮", "高亮", "草坪灯", "灯座", "台座", "彩灯", "壁灯",
+    "装饰灯", "路灯", "小夜灯", "灯串", "灯笼", "庭院灯", "射灯", "台灯", "落地灯",
+    "照明灯", "景观灯", "照明", "灯具", "灯饰",
+    # 其他跨品类修饰词
+    "飘窗", "换鞋", "罗马柱", "三角架", "水果篮", "水桶", "供桌",
+    # 颜色词（无品类指向）
+    "白色", "黑色", "红色", "蓝色", "绿色", "粉色", "灰色", "金色", "银色", "彩色",
+    "黄色", "紫色", "米白", "米黄", "纯白", "纯黑", "哑黑", "浅灰", "银灰", "深灰",
+    "驼色", "棕色", "透明", "渐变", "撞色",
+}
 
-    匹配逻辑：商品名命中的词库词的 product 品类众数 → 筛该品类下
-    main 池 + hot=热 + relevance 高/中 + 有搜索量 的词 → 按 category 分层取 top N。
-    返回 [{word, category, product, search_volume, ...}]。
+
+def _word_overlap(a: str, b: str, min_len: int = 2) -> bool:
+    """a 与 b 是否有 ≥min_len 连续字符重叠（词素锚定：判断语义相关性的代理）。"""
+    a, b = (a or "").strip(), (b or "").strip()
+    if len(a) < min_len or len(b) < min_len:
+        return False
+    for i in range(len(a) - min_len + 1):
+        if a[i:i + min_len] in b:
+            return True
+    return False
+
+
+def pick_golden_words(name: str, limit: int = 40) -> list[dict]:
+    """从词库筛出喂给标题 AI 的黄金候选词（多级过滤，避免误用跨品类词）。
+
+    多级过滤：
+    1. 池过滤：main 池（排除 black 负面词 / spare 备用词）
+    2. 文本清洗：含中文 + 2~15 字（排除纯英文数字噪声）
+    3. 相关性收紧：= 高（排除「中」里的大量泛词）
+    4. 搜索量区间：100~30000（排除超大类目词 + 过低碎片）
+    5. 噪声黑名单：颜色词 + 品牌词
+    6. 品类锚定：商品名命中词 product 众数
+    7. 核心词词素重叠：category=核心词 的词必须与商品名有 ≥2 连续字重叠（排除跨品类核心词）
     """
+    import re
     from collections import Counter
-    name = name or ""
+    name = (name or "").strip()
     items = load_keywords()
-    # 1. 品类判断：商品名里命中的词库词的 product 众数
+
+    # 1. 品类锚定
     hit_products = Counter()
     for k in items:
         w = (k.get("word") or "").strip()
@@ -804,30 +865,60 @@ def pick_golden_words(name: str, limit: int = 40) -> list[dict]:
             hit_products[k.get("product", "其他")] += 1
     target_product = hit_products.most_common(1)[0][0] if hit_products else None
 
-    # 2. 黄金词池：main 池 + 热度热 + 相关高/中 + 有搜索量
-    pool = [k for k in items
-            if k.get("pool_type", "main") == "main"
-            and k.get("hot") == "热"
-            and k.get("relevance") in ("高", "中")
-            and int(k.get("search_volume", 0) or 0) > 0]
-    # 品类优先：命中的品类词足够多则只看该品类，否则回退全品类
+    # 2~5. 多级过滤基础池
+    def _ok(k):
+        w = (k.get("word") or "").strip()
+        if len(w) < 2 or len(w) > 15:
+            return False
+        if not re.search(r"[\u4e00-\u9fff]", w):
+            return False
+        if k.get("pool_type", "main") != "main":
+            return False
+        if k.get("hot") != "热":
+            return False
+        if k.get("relevance") != "高":
+            return False
+        sv = int(k.get("search_volume", 0) or 0)
+        if sv < 100 or sv > 30000:
+            return False
+        if w in GOLDEN_NOISE:
+            return False
+        return True
+
+    pool = [k for k in items if _ok(k)]
     if target_product:
         same = [k for k in pool if k.get("product") == target_product]
         if len(same) >= 5:
             pool = same
 
-    # 3. 按 category 分层取 top N（搜索量降序）
+    # 7. 核心词词素重叠（跨品类核心词排除）
+    filtered = []
+    for k in pool:
+        if k.get("category") == "核心词" and not _word_overlap(k.get("word", ""), name):
+            continue
+        filtered.append(k)
+
+    # 分层取 top N（搜索量降序）
     per_cat = {"核心词": 3, "属性词": 8, "场景词": 5, "卖点词": 5, "规格词": 3, "风格词": 3}
     result = []
     for cat, n in per_cat.items():
-        cat_pool = sorted([k for k in pool if k.get("category") == cat],
+        cat_pool = sorted([k for k in filtered if k.get("category") == cat],
                           key=lambda x: -(int(x.get("search_volume", 0) or 0)))
         result.extend(cat_pool[:n])
-    # 兜底：若分层筛出太少（如冷门品类），补搜索量最高的词
+    # 兜底：分层筛出太少则补搜索量最高的词（按 word 去重，避免重复）
     if len(result) < 8:
-        extra = sorted(pool, key=lambda x: -(int(x.get("search_volume", 0) or 0)))[:limit]
+        seen = {k.get("word") for k in result}
+        extra = [k for k in sorted(filtered, key=lambda x: -(int(x.get("search_volume", 0) or 0)))
+                 if k.get("word") not in seen][:limit - len(result)]
         result.extend(extra)
-    return result[:limit]
+    # 最终按 word 去重（兜底可能引入重复）
+    dedup = []
+    seen_words = set()
+    for k in result:
+        if k.get("word") not in seen_words:
+            seen_words.add(k.get("word"))
+            dedup.append(k)
+    return dedup[:limit]
 
 
 def mark_keywords_used(title: str, product_id: str) -> dict:
