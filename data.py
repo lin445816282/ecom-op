@@ -876,7 +876,7 @@ def pick_golden_words(name: str, limit: int = 40) -> list[dict]:
             return False
         if k.get("hot") != "热":
             return False
-        if k.get("relevance") != "高":
+        if k.get("relevance") not in ("高", "中"):
             return False
         sv = int(k.get("search_volume", 0) or 0)
         if sv < 100 or sv > 30000:
