@@ -4706,6 +4706,23 @@ function paintTitleOpt(el) {
   h += '<div style="font-size:11px;opacity:.88;margin-top:6px;line-height:1.7">规则：已有订单的商品标题不动；挑选 5 个无订单商品优化标题；优化后通过平台「近7天访问数据」对比 UV / PV / 成交变化。</div>';
   h += '</div>';
 
+  // 📋 工作流 SOP（折叠，供运营对照检查，防 AI 跳步/走偏）
+  h += '<div style="margin:12px 12px 0;background:#f0f9ff;border:1px solid #bae6fd;border-radius:12px;padding:10px 12px">';
+  h += '<div onclick="var b=document.getElementById(\'sop-body\');var a=document.getElementById(\'sop-arrow\');if(b.style.display===\'none\'){b.style.display=\'block\';a.textContent=\'▴\'}else{b.style.display=\'none\';a.textContent=\'▾\'}" style="cursor:pointer;display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;color:#0369a1">';
+  h += '<span>📋 工作流 SOP</span><span style="font-size:11px;font-weight:500;color:#64748b">6 步骤 + 检查点（点击展开）</span>';
+  h += '<span id="sop-arrow" style="margin-left:auto;color:#64748b">▾</span>';
+  h += '</div>';
+  h += '<div id="sop-body" style="display:none;margin-top:8px;font-size:12px;line-height:1.8;color:#334155">';
+  h += '<div style="background:#fff7ed;border:1px solid #fdba74;border-radius:8px;padding:8px 10px;margin-bottom:6px;color:#9a3412">⚠️ <b>核心原则</b>：关键词相关性是相对具体商品的动态值，不用全局 rel 标签；同一词对不同类目权重不同（免打孔对挂钩高、对花盆低）。品牌名/跨品类词直接黑名单排除。</div>';
+  h += '<div><b>① 关键词库就绪</b> — 词量 > 0、已清洗、品牌/跨品类/灯具/颜色词已移 black</div>';
+  h += '<div><b>② 选定商品后动态选词</b> — pick_golden_words(商品名)，候选词覆盖核心+属性+场景+风格，无噪声词</div>';
+  h += '<div><b>③ AI 生成 + 质量门</b> — 黄金词喂进 prompt、拦截偷懒标题（仅加空格/净减核心词）、有订单不碰</div>';
+  h += '<div><b>④ CDP 改后台</b> — check_shop 确认店铺、端口映射（嘉裕9232/如若月下9230/欧世艺9228/闲时来9222）、结果 VERIFIED=done</div>';
+  h += '<div><b>⑤ 回填时间标注</b> — mark_keywords_used 记录 used_at / used_count / used_by</div>';
+  h += '<div><b>⑥ 验证报告</b> — done=成功 / 无结果=CDP死了 / NO_LIST=商品下架 / MISMATCH=价格校验</div>';
+  h += '</div>';
+  h += '</div>';
+
   // ⚠️ 失败清单（最上面，跨店铺展示待处理失败记录）
   const allOpts = titleOptCache.allOpts || opts;
   const failOpts = allOpts.filter(o => o.note && o.note !== '执行中…' && o.note !== '已出单，跳过' && o.status !== 'done' && o.status !== 'blocked' && !o.fixed);
