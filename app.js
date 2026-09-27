@@ -559,12 +559,16 @@ async function renderPromoFinance() {
   const el = $('#view-promofinance');
   const ym = (v) => (v == null || Number.isNaN(v)) ? '—' : '¥' + Number(v).toFixed(2);
   el.innerHTML = '<div style="padding:24px;color:#666">加载中…</div>';
-  let items = [];
+  let items = [], bills = [];
   try {
-    const resp = await api('/api/catalog/promo-finance?limit=90');
+    const [resp, billResp] = await Promise.all([
+      api('/api/catalog/promo-finance?limit=90'),
+      api('/api/catalog/promo-monthly-bill?limit=200'),
+    ]);
     items = (resp && resp.items) || [];
+    bills = (billResp && billResp.items) || [];
   } catch (e) {
-    items = [];
+    items = []; bills = [];
   }
   if (!items.length) {
     el.innerHTML = '<div style="padding:32px;color:#999;text-align:center">暂无财务快照数据。<br>每天 22:00 定时采集（如若月下/嘉裕/欧世艺），积累后可看余额与花费趋势。</div>';
@@ -625,7 +629,32 @@ async function renderPromoFinance() {
         </table>
       </div>`;
   }).join('');
-  el.innerHTML = cards;
+  // 月结账单区块（跨店铺）
+  let billHtml = '';
+  if (bills.length) {
+    const billRows = bills.map(b => `
+      <tr style="border-top:1px solid #f1f5f9">
+        <td style="padding:6px 4px">${b.shop_name || ''}</td>
+        <td style="padding:6px 4px;color:#475569">${b.bill_period}</td>
+        <td style="padding:6px 4px;color:#64748b">${b.bill_subject || ''}</td>
+        <td style="padding:6px 4px;font-weight:600;${Number(b.bill_amount) < 0 ? 'color:#dc2626' : ''}">${ym(b.bill_amount)}</td>
+      </tr>`).join('');
+    billHtml = `
+      <div class="panel" style="margin:12px;padding:16px 18px">
+        <b style="font-size:16px">📅 月结账单（待开票金额）</b>
+        <div style="color:#94a3b8;font-size:12px;margin-top:4px">每月 10 号生成上月账单；负数会与后续月份合并开票</div>
+        <table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:8px">
+          <tr style="color:#94a3b8;text-align:left">
+            <th style="padding:6px 4px;font-weight:500">店铺</th>
+            <th style="padding:6px 4px;font-weight:500">账单月份</th>
+            <th style="padding:6px 4px;font-weight:500">开票主体</th>
+            <th style="padding:6px 4px;font-weight:500">金额</th>
+          </tr>
+          ${billRows}
+        </table>
+      </div>`;
+  }
+  el.innerHTML = billHtml + cards;
 }
 
 function toggleNavGroup(name, ev) {

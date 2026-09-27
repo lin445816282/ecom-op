@@ -144,6 +144,18 @@ CREATE TABLE IF NOT EXISTS promo_finance (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_promo_finance_uniq ON promo_finance(shop_id, stat_date);
 
+CREATE TABLE IF NOT EXISTS promo_monthly_bill (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    shop_id INTEGER NOT NULL,
+    bill_period TEXT DEFAULT '',
+    bill_amount REAL,
+    bill_subject TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now','localtime')),
+    FOREIGN KEY(shop_id) REFERENCES shops(id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_promo_monthly_bill_uniq ON promo_monthly_bill(shop_id, bill_period, bill_subject);
+
 CREATE TABLE IF NOT EXISTS modifications (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     shop_id INTEGER NOT NULL,
@@ -882,6 +894,52 @@ def query_promo_finance(shop_id: int = None, limit: int = 30) -> list[dict]:
                 "SELECT pf.*, s.name AS shop_name FROM promo_finance pf "
                 "LEFT JOIN shops s ON s.id = pf.shop_id "
                 "ORDER BY pf.stat_date DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def import_promo_monthly_bill(shop_id: int, bills: list[dict]) -> int:
+    """导入月结账单（按 (shop_id, bill_period, bill_subject) 幂等覆盖）。
+
+    bills: [{bill_period, bill_amount, bill_subject}]
+    """
+    conn = _conn()
+    try:
+        n = 0
+        for b in bills:
+            conn.execute(
+                "INSERT INTO promo_monthly_bill(shop_id, bill_period, bill_amount, bill_subject) "
+                "VALUES(?, ?, ?, ?) "
+                "ON CONFLICT(shop_id, bill_period, bill_subject) "
+                "DO UPDATE SET bill_amount=excluded.bill_amount",
+                (shop_id, b.get("bill_period", ""), b.get("bill_amount"), b.get("bill_subject", "")),
+            )
+            n += 1
+        conn.commit()
+        return n
+    finally:
+        conn.close()
+
+
+def query_promo_monthly_bill(shop_id: int = None, limit: int = 100) -> list[dict]:
+    """查询月结账单（带店铺名，按账单日期倒序）。"""
+    conn = _conn()
+    try:
+        if shop_id:
+            rows = conn.execute(
+                "SELECT pmb.*, s.name AS shop_name FROM promo_monthly_bill pmb "
+                "LEFT JOIN shops s ON s.id = pmb.shop_id "
+                "WHERE pmb.shop_id=? ORDER BY pmb.bill_period DESC LIMIT ?",
+                (shop_id, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT pmb.*, s.name AS shop_name FROM promo_monthly_bill pmb "
+                "LEFT JOIN shops s ON s.id = pmb.shop_id "
+                "ORDER BY pmb.bill_period DESC LIMIT ?",
                 (limit,),
             ).fetchall()
         return [dict(r) for r in rows]
