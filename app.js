@@ -3239,12 +3239,13 @@ function renderKeywords() {
     <div class="task-row" style="align-items:center">
       <div class="task-body" style="flex:1">
         <div class="task-title">${esc(k.word)}</div>
-        <div class="task-meta">${esc(k.source||'')} · ${esc(k.category||'')} · 权重${esc(k.weight!=null?k.weight:5)}${dimStr}</div>
+        <div class="task-meta">${esc(k.source||'')} · ${esc(k.category||'')} · 权重${esc(k.weight!=null?k.weight:5)}${dimStr}${k.status==='已用' ? ` · 已用${k.used_count||0}次` : ''}</div>
       </div>
       ${poolTag}
       <span class="tag ${hotCls(k.hot)}" style="margin:0 4px" title="热度">🔥${esc(k.hot||'—')}</span>
       <span class="tag ${relCls(k.relevance)}" style="margin:0 4px" title="关联性">${esc(k.relevance||'—')}关联</span>
       <span class="tag ${statusCls(k.status)}">${esc(k.status||'待用')}</span>
+      ${k.status==='已用' ? `<button class="btn sm" style="margin-left:4px" onclick="window.__kwHistory && window.__kwHistory('${k.id}')" title="查看使用时间线">历史</button>` : ''}
       ${poolBtn}
       <button class="btn sm" style="margin-left:4px" onclick="window.__kwStatus && window.__kwStatus('${k.id}')">状态</button>
       <button class="btn sm danger" onclick="window.__delKw && window.__delKw('${k.id}')">删</button>
@@ -3938,6 +3939,30 @@ function renderKeywords() {
     k.status = order[(order.indexOf(k.status||'待用')+1)%order.length];
     try { await api('/api/keywords','POST',k); renderKeywords(); }
     catch(err){ toast(err.message); }
+  };
+  // 查看关键词使用时间线（used_history：每次使用的时间 + 商品）
+  window.__kwHistory = id => {
+    const k = kws.find(x=>x.id===id); if(!k) return;
+    const hist = (k.used_history || []).slice().reverse();  // 倒序，最近在前
+    const rows = hist.length ? hist.map(h => `
+      <div style="display:flex;justify-content:space-between;gap:12px;padding:7px 0;border-bottom:1px solid #f1f5f9">
+        <span style="font-family:ui-monospace,monospace;font-size:12px;color:#475569">${esc(h.time||'')}</span>
+        <span style="font-family:ui-monospace,monospace;font-size:12px;color:#64748b">${esc(h.product_id||'')}</span>
+      </div>`).join('') : '<div class="empty">暂无使用时间线</div>';
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:1200;display:flex;align-items:center;justify-content:center;padding:20px';
+    overlay.innerHTML = `
+      <div style="background:#fff;border-radius:14px;width:100%;max-width:420px;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.3)">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid #f1f5f9">
+          <div style="font-size:15px;font-weight:700;color:#17203a">🔎 ${esc(k.word)}</div>
+          <button class="kw-hist-close" style="border:none;background:#f1f5f9;width:30px;height:30px;border-radius:8px;cursor:pointer;font-size:16px;color:#64748b">✕</button>
+        </div>
+        <div style="padding:6px 18px;font-size:12px;color:#64748b">已用 ${hist.length} 次（倒序，最近在前）</div>
+        <div style="padding:4px 18px 16px;overflow-y:auto">${rows}</div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('.kw-hist-close').onclick = () => overlay.remove();
+    overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
   };
   // 池子迁移：main↔spare↔black
   window.__kwPool = async (id, pool) => {

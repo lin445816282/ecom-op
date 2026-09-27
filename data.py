@@ -971,10 +971,40 @@ def mark_keywords_used(title: str, product_id: str) -> dict:
         if product_id and product_id not in ub:
             ub.append(product_id)
         k["used_by"] = ub
+        # 完整时间线：每次使用追加一条 {time, product_id}（同商品去重跳过，故不重复）
+        if product_id:
+            hist = list(k.get("used_history") or [])
+            hist.append({"time": now, "product_id": product_id})
+            k["used_history"] = hist
         updated += 1
     if updated:
         save_keywords(items)
     return {"matched": matched, "updated": updated}
+
+
+def backfill_used_history() -> int:
+    """一次性迁移：给旧「已用」词初始化 used_history（用 used_at 近似统一时间）。
+
+    旧版只有 used_by（商品列表）+ used_at（最近时间），无逐次时间线。
+    本函数把 used_by 里每个商品记成一条 {time: used_at, product_id}，
+    幂等：已有 used_history 的词跳过。返回迁移的词数。
+    """
+    items = load_keywords()
+    n = 0
+    for k in items:
+        if k.get("status") != "已用":
+            continue
+        if k.get("used_history"):
+            continue
+        ub = k.get("used_by") or []
+        if not ub:
+            continue
+        at = k.get("used_at") or time.strftime("%Y-%m-%d %H:%M:%S")
+        k["used_history"] = [{"time": at, "product_id": pid} for pid in ub]
+        n += 1
+    if n:
+        save_keywords(items)
+    return n
 
 
 def add_keyword(item: dict) -> dict:

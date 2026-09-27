@@ -54,11 +54,18 @@ def main():
         if removed == 0:
             continue
         removed_refs += removed
+        # 同步清理 used_history 里的误报商品记录
+        hist = k.get("used_history") or []
+        if hist:
+            new_hist = [h for h in hist if h.get("product_id") not in bad_ids]
+            if len(new_hist) != len(hist):
+                k["used_history"] = new_hist
         if not new_ub:
             k["status"] = "待用"
             k.pop("used_at", None)
             k.pop("used_count", None)
             k.pop("used_by", None)
+            k.pop("used_history", None)
             cleared += 1
         else:
             k["used_by"] = new_ub
