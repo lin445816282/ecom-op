@@ -1242,6 +1242,7 @@ class Handler(BaseHTTPRequestHandler):
 
         # ------------------------- 一键上架 pipeline -------------------------
         if path == "/api/autopublish" and self.command == "POST":
+            import threading
             item = self._read_body()
             url = str(item.get("url") or "").strip()
             shop_id = int(item.get("shop_id") or 5)

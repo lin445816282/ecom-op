@@ -66,8 +66,20 @@ function download(url, savePath){
   // 4. 抓 body 文本（价格+规格）
   const text=await ev(c,'document.body.innerText');
 
-  // 5. 抓主图 URL（去重，天然尺寸>=400）
-  const imgs=await ev(c,`JSON.stringify([...new Set([...document.querySelectorAll('img[src*="alicdn"]')].filter(i=>(i.naturalWidth||0)>=400).map(i=>i.src))])`);
+  // 5. 抓主图 URL：先滚动触发懒加载，等图片加载完再抓
+  // 1688 主图懒加载：不滚动 naturalWidth=0，会被过滤掉
+  await ev(c,'window.scrollTo(0, document.body.scrollHeight)');
+  await sleep(1500);
+  await ev(c,'window.scrollTo(0, 0)');
+  await sleep(1500);
+  // 等所有候选图加载完成（最多 8 秒）
+  for(let i=0;i<8;i++){
+    const ready=await ev(c,`[...document.querySelectorAll('img')].filter(i=>i.src&&(i.src.includes('alicdn')||i.src.includes('1688'))&&(i.naturalWidth||0)>=400).length`);
+    if(ready>=3)break;
+    await sleep(1000);
+  }
+  // 抓主图：alicdn + 1688 域名，naturalWidth>=400，去重
+  const imgs=await ev(c,`JSON.stringify([...new Set([...document.querySelectorAll('img')].filter(i=>i.src&&(i.src.includes('alicdn')||i.src.includes('1688'))&&(i.naturalWidth||0)>=400).map(i=>i.src))])`);
   const imgUrls=JSON.parse(imgs||'[]');
 
   // 6. 下载主图（剥 _.webp 后缀）
