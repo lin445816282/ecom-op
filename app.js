@@ -591,7 +591,7 @@ function expandMonthlyBills(bills) {
 async function renderPromoFinance() {
   const el = $('#view-promofinance');
   const ym = (v) => (v == null || Number.isNaN(v)) ? '—' : '¥' + Number(v).toFixed(2);
-  const fold = (title, content) => `<details class="pf-fold" style="margin:12px 12px 0"><summary style="cursor:pointer;font-weight:600;font-size:15px;padding:12px 16px;background:#fff;border-radius:10px;border:1px solid #e2e8f0;list-style:none;user-select:none;color:#1e293b">${title}</summary><div style="margin-top:8px">${content}</div></details>`;
+  const fold = (title, content, open) => `<details class="pf-fold" ${open ? 'open' : ''} style="margin:12px 12px 0"><summary style="cursor:pointer;font-weight:600;font-size:15px;padding:12px 16px;background:#fff;border-radius:10px;border:1px solid #e2e8f0;list-style:none;user-select:none;color:#1e293b">${title}</summary><div style="margin-top:8px">${content}</div></details>`;
   el.innerHTML = '<div style="padding:24px;color:#666">加载中…</div>';
   let items = [], bills = [], dailyBills = [];
   try {
@@ -738,7 +738,7 @@ async function renderPromoFinance() {
         </table>
       </div>`);
   }
-  el.innerHTML = fold('💳 卡片 · 各店余额与花费', cards) + dailyHtml + billHtml;
+  el.innerHTML = fold('💳 卡片 · 各店余额与花费', cards, true) + dailyHtml + billHtml;
 }
 
 function toggleNavGroup(name, ev) {
