@@ -683,7 +683,7 @@ class Handler(BaseHTTPRequestHandler):
                 int(shop_id) if shop_id else None,
                 start, end, int(limit),
             )
-            return _json(self, {"items": rows})
+            return _json(self, {"items": rows, "server_today": datetime.now().strftime("%Y-%m-%d")})
 
         if path == "/api/catalog/daily-profit/settle" and self.command == "POST":
             item = self._read_body()

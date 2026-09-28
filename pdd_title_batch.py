@@ -138,6 +138,55 @@ def quality_gate(old, new):
     return False, "仅格式调整"
 
 
+def _parse_json_arrays(content):
+    """Parse DeepSeek output that may contain one or more concatenated JSON arrays."""
+    content = (content or "").strip()
+    if content.startswith("```"):
+        content = content.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+    try:
+        v = json.loads(content)
+        if isinstance(v, list):
+            return v
+    except Exception:
+        pass
+    start = content.find("[")
+    end = content.rfind("]")
+    if start < 0 or end < 0:
+        raise RuntimeError("AI response is not JSON: " + content[:200])
+    text = content[start:end + 1]
+    try:
+        v = json.loads(text)
+        if isinstance(v, list):
+            return v
+    except Exception:
+        pass
+    try:
+        dec = json.JSONDecoder()
+        items = []
+        i = 0
+        n = len(text)
+        while i < n:
+            while i < n and text[i] in " \t\r\n":
+                i += 1
+            if i >= n:
+                break
+            val, consumed = dec.raw_decode(text, i)
+            if isinstance(val, list):
+                items.extend(val)
+            i += consumed
+        if items:
+            return items
+    except Exception:
+        pass
+    items = _re.findall(r'"(?:[^"\\]|\\.)*"', text)
+    if items:
+        try:
+            items = [json.loads(s) for s in items]
+        except Exception:
+            items = [s[1:-1] for s in items]
+        if items:
+            return items
+    raise RuntimeError("AI response cannot be parsed: " + text[:200])
 def gen_titles(products, api_key):
     """调 DeepSeek 批量生成优化标题，返回 [新标题] 列表（按输入顺序）。分批 15 个/次，避免输出超限。"""
     titles = []
@@ -192,10 +241,7 @@ def _gen_titles_chunk(products, api_key):
     content = content.strip()
     if content.startswith("```"):
         content = content.split("\n", 1)[-1].rsplit("```", 1)[0]
-    start, end = content.find("["), content.rfind("]")
-    if start < 0 or end < 0:
-        raise RuntimeError(f"AI 返回非 JSON: {content[:200]}")
-    arr = json.loads(content[start:end + 1])
+    arr = _parse_json_arrays(content)
     return [cut_title(str(x).strip()) for x in arr]  # 按 GBK 60 字符（30 汉字）截断
 
 

@@ -564,7 +564,7 @@ async function renderProfit() {
   const ym = (v) => (v == null || Number.isNaN(Number(v))) ? '—' : '¥' + Number(v).toFixed(2);
   const sign = (v) => { v = Number(v) || 0; return (v >= 0 ? '' : '−') + '¥' + Math.abs(v).toFixed(2); };
   el.innerHTML = '<div style="padding:24px;color:#666">加载中…</div>';
-  let items = [], params = [];
+  let items = [], params = [], serverToday = '';
   try {
     const [resp, paramResp] = await Promise.all([
       api('/api/catalog/daily-profit?limit=90'),
@@ -572,6 +572,7 @@ async function renderProfit() {
     ]);
     items = (resp && resp.items) || [];
     params = (paramResp && paramResp.params) || [];
+    serverToday = (resp && resp.server_today) || '';
   } catch (e) { items = []; params = []; }
 
   // 按日期汇总各店净利
@@ -587,10 +588,15 @@ async function renderProfit() {
       <div style="color:#64748b;font-size:12px">${label}</div>
       <div style="font-size:24px;font-weight:700;margin-top:6px;color:${val >= 0 ? '#0f766e' : '#dc2626'}">${sign(val)}</div>
     </div>`;
+  // 服务器今天（判断「今日净利」是否真的有当天数据，避免用昨天数据冒充「今日」误导）
+  const latestDate = dates[0] || '';
+  const hasToday = latestDate === serverToday;
 
   let html = '<div style="padding:16px 20px">';
   html += `<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px">
-    ${card('今日净利', dates[0] ? byDate[dates[0]].profit : 0)}
+    ${hasToday
+      ? card('今日净利', byDate[latestDate].profit)
+      : card('最新净利（' + latestDate + '）', latestDate ? byDate[latestDate].profit : 0)}
     ${card('昨日净利', dates[1] ? byDate[dates[1]].profit : 0)}
     ${card('近7天净利', sum(dates.slice(0, 7)))}
   </div>`;
@@ -602,7 +608,7 @@ async function renderProfit() {
   if (!items.length) {
     html += '<div style="padding:32px;color:#999;text-align:center">暂无盈利数据。<br>点「结算昨天」生成，或等每日 20:30 自动结算。</div>';
   } else {
-    html += `<table style="width:100%;border-collapse:collapse;font-size:12px">
+    html += `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px;min-width:680px">
       <tr style="color:#94a3b8;text-align:left">
         <th style="padding:8px 6px;font-weight:500">日期</th>
         <th style="padding:8px 6px;font-weight:500">店铺</th>
@@ -626,7 +632,7 @@ async function renderProfit() {
           <td style="padding:7px 6px;text-align:right;font-weight:700;color:${(r.gross_profit || 0) >= 0 ? '#0f766e' : '#dc2626'}">${sign(r.gross_profit)}</td>
           <td style="padding:7px 6px;text-align:right;color:#64748b">${r.order_count}</td>
         </tr>`).join('')}
-    </table>`;
+    </table></div>`;
   }
 
   html += `<div class="panel" style="margin-top:20px;padding:16px 18px">
@@ -708,16 +714,17 @@ async function renderSale() {
     <div style="margin-top:12px">${cats.map((c, i) => {
       const pct = totalAmt ? (ym(c.amt) / totalAmt * 100) : 0;
       const color = COLOR[i % COLOR.length];
-      return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
-        <div style="width:110px;font-size:12px;color:#475569;text-align:right;flex-shrink:0">${c.category}</div>
-        <div style="flex:1;background:#f1f5f9;border-radius:6px;height:20px;overflow:hidden">
-          <div style="height:100%;width:${pct}%;background:${color};border-radius:6px"></div>
+      return `<div style="margin-bottom:10px">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:4px;margin-bottom:4px">
+          <span style="font-size:13px;color:#475569;font-weight:600"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color};margin-right:6px"></span>${c.category}</span>
+          <span style="font-size:12px;color:#64748b">¥${ym(c.amt).toFixed(0)} · ${c.qty}件 · ${pct.toFixed(0)}%</span>
         </div>
-        <div style="width:120px;font-size:12px;color:#64748b;text-align:left;flex-shrink:0">¥${ym(c.amt).toFixed(0)} · ${c.qty}件</div>
-        <div style="width:44px;font-size:12px;color:#94a3b8;text-align:right;flex-shrink:0">${pct.toFixed(0)}%</div>
+        <div style="background:#f1f5f9;border-radius:6px;height:16px;overflow:hidden">
+          <div style="height:100%;width:${pct}%;background:${color};border-radius:6px;min-width:2px"></div>
+        </div>
       </div>`;
     }).join('')}</div>
-    <table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:8px">
+    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:8px;min-width:520px">
       <tr style="color:#94a3b8;text-align:left">
         <th style="padding:6px 4px;font-weight:500">品类</th><th style="padding:6px 4px;font-weight:500;text-align:right">销量(件)</th>
         <th style="padding:6px 4px;font-weight:500;text-align:right">成交额</th><th style="padding:6px 4px;font-weight:500;text-align:right">单数</th>
@@ -732,6 +739,7 @@ async function renderSale() {
         <td style="padding:6px 4px;text-align:right;color:#64748b">${totalAmt ? (ym(c.amt)/totalAmt*100).toFixed(1) : 0}%</td>
       </tr>`).join('')}
     </table>
+    </div>
   </div>`;
 
   // 每日明细（可折叠，数据量较大）
@@ -755,7 +763,7 @@ async function renderSale() {
   // 每月汇总
   html += `<div class="panel" style="padding:16px 18px;margin-bottom:14px">
     <b style="font-size:15px">📅 每月汇总</b>
-    <table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:10px">
+    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:10px;min-width:560px">
       <tr style="color:#94a3b8;text-align:left">
         <th style="padding:6px 4px;font-weight:500">月份</th><th style="padding:6px 4px;font-weight:500;text-align:right">销量(件)</th>
         <th style="padding:6px 4px;font-weight:500;text-align:right">成交额</th><th style="padding:6px 4px;font-weight:500">品类构成</th>
@@ -767,6 +775,7 @@ async function renderSale() {
         <td style="padding:6px 4px;color:#64748b;font-size:11px">${Object.entries(m.categories || {}).map(([k, v]) => `${k} ${v.qty}件/¥${ym(v.amt).toFixed(0)}`).join(' · ')}</td>
       </tr>`).join('')}
     </table>
+    </div>
   </div>`;
 
   // SKU 明细（可折叠）
@@ -775,7 +784,8 @@ async function renderSale() {
       <table style="width:100%;border-collapse:collapse;font-size:12px">
         <tr style="color:#94a3b8;text-align:left;position:sticky;top:0;background:#fff">
           <th style="padding:6px 4px;font-weight:500">品类</th><th style="padding:6px 4px;font-weight:500">商品</th>
-          <th style="padding:6px 4px;font-weight:500">SKU（规格）</th><th style="padding:6px 4px;font-weight:500;text-align:right">销量</th>
+          <th style="padding:6px 4px;font-weight:500">SKU（规格）</th><th style="padding:6px 4px;font-weight:500;text-align:right">销量(件)</th>
+          <th style="padding:6px 4px;font-weight:500;text-align:right">挂钩数</th>
           <th style="padding:6px 4px;font-weight:500;text-align:right">成交额</th><th style="padding:6px 4px;font-weight:500;text-align:right">单数</th>
         </tr>
         ${skus.map(s => `<tr style="border-top:1px solid #f1f5f9">
@@ -783,6 +793,7 @@ async function renderSale() {
           <td style="padding:6px 4px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(s.name)}">${esc(s.name)}</td>
           <td style="padding:6px 4px;color:#64748b;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(s.spec)}">${esc(s.spec || '—')}</td>
           <td style="padding:6px 4px;text-align:right">${s.qty}</td>
+          <td style="padding:6px 4px;text-align:right;color:#7c3aed;font-weight:600">${s.hook_count ? s.hook_count : '—'}</td>
           <td style="padding:6px 4px;text-align:right;font-weight:600">¥${ym(s.amt).toFixed(2)}</td>
           <td style="padding:6px 4px;text-align:right;color:#64748b">${s.cnt}</td>
         </tr>`).join('')}

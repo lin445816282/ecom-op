@@ -575,22 +575,25 @@ def calc_hook_cost(n_hooks: int, grade: str = "heavy") -> dict:
 
 
 def _parse_hook_spec(spec: str):
-    """从订单 spec 解析挂钩数量 + 款型。
+    """从订单 spec 解析挂钩数量（个装数）+ 款型。
 
     spec 如 '经典黑,七钩 【加厚加粗】(2个装)' → (2, 'heavy')
-    返回 (n_hooks, grade)；解析不出默认 (1, 'heavy')。
+    支持阿拉伯数字「2个装」+ 中文数字「二个装/一个装」。
+    返回 (n_per, grade)；解析不出默认 (1, 'heavy')。
     """
     import re
-    n_hooks = 1
+    CN_NUM = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+    n_per = 1
     grade = "heavy"
     if not spec:
-        return n_hooks, grade
-    m = re.search(r"(\d+)\s*个装", spec)
+        return n_per, grade
+    m = re.search(r"(\d+|一|二|三|四|五|六|七|八|九|十)\s*[个件]装", spec)
     if m:
-        n_hooks = int(m.group(1))
+        g = m.group(1)
+        n_per = int(g) if g.isdigit() else CN_NUM.get(g, 1)
     if "加厚加粗" not in spec and "加粗" not in spec:
         grade = "light"
-    return n_hooks, grade
+    return n_per, grade
 
 
 def _hook_freight(weight: float):
@@ -626,7 +629,7 @@ def settle_daily_profit(stat_date: str) -> dict:
         box_weight = p.get("box_weight", 0.08)
 
         order_rows = c.execute(
-            "SELECT shop_id, aftersale_status, spec, seller_amount FROM orders "
+            "SELECT shop_id, aftersale_status, spec, seller_amount, quantity FROM orders "
             "WHERE pay_time LIKE ? AND seller_amount IS NOT NULL "
             "AND status NOT IN ('已取消', '待付款', '交易关闭', '已关闭')",
             (stat_date + "%",),
@@ -646,9 +649,12 @@ def settle_daily_profit(stat_date: str) -> dict:
                 continue
             income[sid] = income.get(sid, 0.0) + amt
             spec = r["spec"] or ""
-            # 门后挂钩类（spec 含「个装」）才按参数模型计成本
-            if "个装" in spec:
-                n_hooks, grade = _parse_hook_spec(spec)
+            qty = r["quantity"] or 1
+            # 门后挂钩类（spec 含「个装/件装」）才按参数模型计成本
+            if "个装" in spec or "件装" in spec:
+                n_per, grade = _parse_hook_spec(spec)
+                # 挂钩总数量 = 订单数量 × 个装数（如「数量2 的 2个装」= 2×2 = 4 个挂钩）
+                n_hooks = qty * n_per
                 hc = hook_cost_light if grade == "light" else hook_cost
                 gcost[sid] = gcost.get(sid, 0.0) + (hc * n_hooks + box_cost + labor_cost)
                 w = hook_weight * n_hooks + box_weight
@@ -874,13 +880,20 @@ def sale_sku_detail(start=None, end=None, limit=500) -> list[dict]:
         ).fetchall()
     out = []
     for r in rows:
+        spec = r["spec"] or ""
+        # 挂钩个数 = 件数 × 个装数（门后挂钩类才计，1个装=1、2个装=2，数量2的2个装=2×2=4）
+        hook_count = 0
+        if "个装" in spec or "件装" in spec:
+            n_per, _ = _parse_hook_spec(spec)
+            hook_count = (r["qty"] or 0) * n_per
         out.append({
             "shop_id": r["shop_id"],
             "platform_product_id": r["platform_product_id"],
             "name": r["name"] or "",
             "category": _classify_category(r["name"] or ""),
-            "spec": r["spec"] or "",
+            "spec": spec,
             "qty": r["qty"] or 0,
+            "hook_count": hook_count,
             "amt": round(r["amt"] or 0.0, 2),
             "cnt": r["cnt"] or 0,
         })
