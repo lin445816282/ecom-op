@@ -2,7 +2,7 @@
 # 采集拼多多推广「日账单」流水明细，入库 promo_daily_bill
 # 用法: python3 collect_daily_bill.py <shop_id> [startDate] [endDate]
 # 默认 2026-06-01 ~ 2026-09-28
-import sys, subprocess, json, os
+import sys, subprocess, json, os, datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import catalog
@@ -13,8 +13,9 @@ SHOP_CDP_PORT = {3: 9230, 5: 9232, 6: 9228}  # 如若月下/嘉裕/欧世艺
 
 def main():
     shop_id = int(sys.argv[1]) if len(sys.argv) > 1 else 3
-    start = sys.argv[2] if len(sys.argv) > 2 else "2026-06-01"
-    end = sys.argv[3] if len(sys.argv) > 3 else "2026-09-28"
+    today = datetime.date.today()
+    start = sys.argv[2] if len(sys.argv) > 2 else (today - datetime.timedelta(days=30)).strftime('%Y-%m-%d')
+    end = sys.argv[3] if len(sys.argv) > 3 else today.strftime('%Y-%m-%d')
     port = SHOP_CDP_PORT.get(shop_id)
     if not port:
         print(f"[ERR] 未知 shop_id={shop_id}")

@@ -591,6 +591,7 @@ function expandMonthlyBills(bills) {
 async function renderPromoFinance() {
   const el = $('#view-promofinance');
   const ym = (v) => (v == null || Number.isNaN(v)) ? '—' : '¥' + Number(v).toFixed(2);
+  const fold = (title, content) => `<details class="pf-fold" style="margin:12px 12px 0"><summary style="cursor:pointer;font-weight:600;font-size:15px;padding:12px 16px;background:#fff;border-radius:10px;border:1px solid #e2e8f0;list-style:none;user-select:none;color:#1e293b">${title}</summary><div style="margin-top:8px">${content}</div></details>`;
   el.innerHTML = '<div style="padding:24px;color:#666">加载中…</div>';
   let items = [], bills = [], dailyBills = [];
   try {
@@ -684,10 +685,9 @@ async function renderPromoFinance() {
           <td style="padding:6px 4px;text-align:right">${amtHtml}</td>
         </tr>`;
     }).join('');
-    billHtml = `
-      <div class="panel" style="margin:12px;padding:16px 18px">
-        <b style="font-size:16px">📅 月结账单（待开票金额）</b>
-        <div style="color:#94a3b8;font-size:12px;margin-top:4px">按月逐一展示；合并账单已展开，金额为整单合计；负数会与后续月份合并开票</div>
+    billHtml = fold('📅 月明细 · 月结账单（待开票金额）', `
+      <div class="panel" style="padding:16px 18px">
+        <div style="color:#94a3b8;font-size:12px">按月逐一展示；合并账单已展开，金额为整单合计；负数会与后续月份合并开票</div>
         <table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:8px">
           <tr style="color:#94a3b8;text-align:left">
             <th style="padding:6px 4px;font-weight:500">店铺</th>
@@ -697,7 +697,7 @@ async function renderPromoFinance() {
           </tr>
           ${billRows}
         </table>
-      </div>`;
+      </div>`);
   }
   // 日账单区块（按日汇总：支出/收入/净额）
   let dailyHtml = '';
@@ -723,10 +723,9 @@ async function renderPromoFinance() {
           <td style="padding:6px 4px;font-weight:600;text-align:right;${net < 0 ? 'color:#dc2626' : 'color:#16a34a'}">${net >= 0 ? '+' : ''}${ym(net)}</td>
         </tr>`;
     }).join('');
-    dailyHtml = `
-      <div class="panel" style="margin:12px;padding:16px 18px">
-        <b style="font-size:16px">📊 日账单（按日汇总）</b>
-        <div style="color:#94a3b8;font-size:12px;margin-top:4px">支出=推广花费；收入=充值/红包；净额=收入−支出（负数=当日净烧钱）</div>
+    dailyHtml = fold(`📊 日明细 · 按日汇总（${Object.keys(dailyMap).length} 天）`, `
+      <div class="panel" style="padding:16px 18px">
+        <div style="color:#94a3b8;font-size:12px">支出=推广花费；收入=充值/红包；净额=收入−支出（负数=当日净烧钱）</div>
         <table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:8px">
           <tr style="color:#94a3b8;text-align:left">
             <th style="padding:6px 4px;font-weight:500">日期</th>
@@ -737,9 +736,9 @@ async function renderPromoFinance() {
           </tr>
           ${dailyRows}
         </table>
-      </div>`;
+      </div>`);
   }
-  el.innerHTML = dailyHtml + billHtml + cards;
+  el.innerHTML = fold('💳 卡片 · 各店余额与花费', cards) + dailyHtml + billHtml;
 }
 
 function toggleNavGroup(name, ev) {
