@@ -156,6 +156,23 @@ CREATE TABLE IF NOT EXISTS promo_monthly_bill (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_promo_monthly_bill_uniq ON promo_monthly_bill(shop_id, bill_period, bill_subject);
 
+CREATE TABLE IF NOT EXISTS promo_daily_bill (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    shop_id INTEGER NOT NULL,
+    flow_time TEXT DEFAULT '',
+    transaction_id TEXT DEFAULT '',
+    fund_type INTEGER,
+    flow_type INTEGER,
+    amount REAL,
+    balance REAL,
+    brief TEXT DEFAULT '',
+    summary TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now','localtime')),
+    FOREIGN KEY(shop_id) REFERENCES shops(id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_promo_daily_bill_uniq ON promo_daily_bill(shop_id, flow_time, transaction_id, amount, flow_type);
+
 CREATE TABLE IF NOT EXISTS modifications (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     shop_id INTEGER NOT NULL,
@@ -942,6 +959,68 @@ def query_promo_monthly_bill(shop_id: int = None, limit: int = 100) -> list[dict
                 "ORDER BY pmb.bill_period DESC LIMIT ?",
                 (limit,),
             ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def import_promo_daily_bill(shop_id: int, rows: list[dict]) -> int:
+    """导入日账单流水明细（按 (shop_id, flow_time, transaction_id, amount, flow_type) 幂等跳过）。
+
+    rows: [{flow_time, transaction_id, fund_type, flow_type, amount, balance, brief, summary}]
+    """
+    def _f(v):
+        try:
+            return float(v) if v not in (None, "") else None
+        except (ValueError, TypeError):
+            return None
+    conn = _conn()
+    try:
+        n = 0
+        for r in rows:
+            cur = conn.execute(
+                "INSERT INTO promo_daily_bill(shop_id, flow_time, transaction_id, fund_type, flow_type, amount, balance, brief, summary) "
+                "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(shop_id, flow_time, transaction_id, amount, flow_type) DO NOTHING",
+                (
+                    shop_id,
+                    r.get("flow_time", ""),
+                    r.get("transaction_id", ""),
+                    r.get("fund_type"),
+                    r.get("flow_type"),
+                    _f(r.get("amount")),
+                    _f(r.get("balance")),
+                    r.get("brief", ""),
+                    r.get("summary", ""),
+                ),
+            )
+            if cur.rowcount > 0:
+                n += 1
+        conn.commit()
+        return n
+    finally:
+        conn.close()
+
+
+def query_promo_daily_bill(shop_id: int = None, start: str = None, end: str = None, limit: int = 500) -> list[dict]:
+    """查询日账单流水（带店铺名，按流水时间倒序）。可按店铺/日期范围筛选。"""
+    conn = _conn()
+    try:
+        sql = ("SELECT pdb.*, s.name AS shop_name FROM promo_daily_bill pdb "
+               "LEFT JOIN shops s ON s.id = pdb.shop_id WHERE 1=1")
+        args = []
+        if shop_id:
+            sql += " AND pdb.shop_id=?"
+            args.append(shop_id)
+        if start:
+            sql += " AND pdb.flow_time >= ?"
+            args.append(start)
+        if end:
+            sql += " AND pdb.flow_time <= ?"
+            args.append(end)
+        sql += " ORDER BY pdb.flow_time DESC LIMIT ?"
+        args.append(limit)
+        rows = conn.execute(sql, args).fetchall()
         return [dict(r) for r in rows]
     finally:
         conn.close()

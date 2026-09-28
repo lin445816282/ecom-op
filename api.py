@@ -649,6 +649,17 @@ class Handler(BaseHTTPRequestHandler):
             rows = catalog.query_promo_monthly_bill(int(shop_id) if shop_id else None, int(limit))
             return _json(self, {"items": rows})
 
+        if path == "/api/catalog/promo-daily-bill" and self.command == "GET":
+            shop_id = qs.get("shop_id", [None])[0]
+            start = qs.get("start", [None])[0]
+            end = qs.get("end", [None])[0]
+            limit = qs.get("limit", ["500"])[0]
+            rows = catalog.query_promo_daily_bill(
+                int(shop_id) if shop_id else None,
+                start, end, int(limit),
+            )
+            return _json(self, {"items": rows})
+
         if path == "/api/hook-cost" and self.command == "GET":
             n = int(qs.get("n", ["1"])[0] or 1)
             return _json(self, catalog.calc_hook_cost(n))

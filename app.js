@@ -592,16 +592,18 @@ async function renderPromoFinance() {
   const el = $('#view-promofinance');
   const ym = (v) => (v == null || Number.isNaN(v)) ? '—' : '¥' + Number(v).toFixed(2);
   el.innerHTML = '<div style="padding:24px;color:#666">加载中…</div>';
-  let items = [], bills = [];
+  let items = [], bills = [], dailyBills = [];
   try {
-    const [resp, billResp] = await Promise.all([
+    const [resp, billResp, dailyResp] = await Promise.all([
       api('/api/catalog/promo-finance?limit=90'),
       api('/api/catalog/promo-monthly-bill?limit=200'),
+      api('/api/catalog/promo-daily-bill?limit=1000'),
     ]);
     items = (resp && resp.items) || [];
     bills = (billResp && billResp.items) || [];
+    dailyBills = (dailyResp && dailyResp.items) || [];
   } catch (e) {
-    items = []; bills = [];
+    items = []; bills = []; dailyBills = [];
   }
   if (!items.length) {
     el.innerHTML = '<div style="padding:32px;color:#999;text-align:center">暂无财务快照数据。<br>每天 22:00 定时采集（如若月下/嘉裕/欧世艺），积累后可看余额与花费趋势。</div>';
@@ -697,7 +699,47 @@ async function renderPromoFinance() {
         </table>
       </div>`;
   }
-  el.innerHTML = billHtml + cards;
+  // 日账单区块（按日汇总：支出/收入/净额）
+  let dailyHtml = '';
+  if (dailyBills.length) {
+    const dailyMap = {};
+    dailyBills.forEach(r => {
+      const day = (r.flow_time || '').slice(0, 10);
+      if (!day) return;
+      const key = r.shop_id + '|' + day;
+      if (!dailyMap[key]) dailyMap[key] = { shop_name: r.shop_name || '', day, spend: 0, income: 0 };
+      const amt = Number(r.amount) || 0;
+      if (r.flow_type === 2) dailyMap[key].spend += amt;
+      else dailyMap[key].income += amt;
+    });
+    const dailyRows = Object.values(dailyMap).sort((a, b) => b.day.localeCompare(a.day)).map(d => {
+      const net = d.income - d.spend;
+      return `
+        <tr style="border-top:1px solid #f1f5f9">
+          <td style="padding:6px 4px;color:#475569">${d.day}</td>
+          <td style="padding:6px 4px">${d.shop_name}</td>
+          <td style="padding:6px 4px;color:#ea580c;text-align:right">${ym(d.spend)}</td>
+          <td style="padding:6px 4px;color:#16a34a;text-align:right">${ym(d.income)}</td>
+          <td style="padding:6px 4px;font-weight:600;text-align:right;${net < 0 ? 'color:#dc2626' : 'color:#16a34a'}">${net >= 0 ? '+' : ''}${ym(net)}</td>
+        </tr>`;
+    }).join('');
+    dailyHtml = `
+      <div class="panel" style="margin:12px;padding:16px 18px">
+        <b style="font-size:16px">📊 日账单（按日汇总）</b>
+        <div style="color:#94a3b8;font-size:12px;margin-top:4px">支出=推广花费；收入=充值/红包；净额=收入−支出（负数=当日净烧钱）</div>
+        <table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:8px">
+          <tr style="color:#94a3b8;text-align:left">
+            <th style="padding:6px 4px;font-weight:500">日期</th>
+            <th style="padding:6px 4px;font-weight:500">店铺</th>
+            <th style="padding:6px 4px;font-weight:500;text-align:right">支出</th>
+            <th style="padding:6px 4px;font-weight:500;text-align:right">收入</th>
+            <th style="padding:6px 4px;font-weight:500;text-align:right">净额</th>
+          </tr>
+          ${dailyRows}
+        </table>
+      </div>`;
+  }
+  el.innerHTML = dailyHtml + billHtml + cards;
 }
 
 function toggleNavGroup(name, ev) {
