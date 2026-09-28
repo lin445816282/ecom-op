@@ -54,8 +54,9 @@ async function fillByType(c, selector, text){
   log('启动，端口=' + PORT + '，config=' + CONFIG);
 
   // ===== 连接：优先复用已存在的发布页（续填），否则新建干净 tab =====
+  // 注意：只匹配 goods_add/index（发布页），排除 goods_add/success（上架成功结果页）
   let c = null;
-  let pubPage = await getPage(/goods_add/);
+  let pubPage = await getPage(/goods_add\/index/);
   if(pubPage){
     // 发布页已存在 → 续填模式
     try{
