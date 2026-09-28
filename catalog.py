@@ -17,6 +17,7 @@ import sqlite3
 import json
 import time
 from contextlib import closing
+from datetime import datetime
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -465,6 +466,26 @@ CREATE TABLE IF NOT EXISTS error_knowledge (
     last_seen TEXT DEFAULT '',
     created_at TEXT DEFAULT (datetime('now','localtime'))
 );
+
+CREATE TABLE IF NOT EXISTS autopublish_tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_url TEXT NOT NULL,
+    shop_id INTEGER DEFAULT 5,
+    status TEXT DEFAULT 'queued',
+    stage TEXT DEFAULT '',
+    raw_title TEXT DEFAULT '',
+    ai_title TEXT DEFAULT '',
+    ai_desc TEXT DEFAULT '',
+    price REAL,
+    skus TEXT DEFAULT '[]',
+    images TEXT DEFAULT '[]',
+    pdd_goods_id TEXT DEFAULT '',
+    error TEXT DEFAULT '',
+    log TEXT DEFAULT '[]',
+    created_at TEXT DEFAULT (datetime('now','localtime')),
+    updated_at TEXT DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_autopublish_status ON autopublish_tasks(status);
 """
 
 
@@ -516,6 +537,114 @@ def hit_error(error_id: int) -> dict:
             "SELECT * FROM error_knowledge WHERE id=?", (error_id,)
         ).fetchone()
         return dict(row) if row else {}
+
+
+def hit_error_by_type(error_type: str, description: str = "") -> dict:
+    """按错误类型命中（不存在则自动创建），count+1。供编排流程自动记账。"""
+    with closing(_conn()) as c:
+        c.execute(
+            "INSERT OR IGNORE INTO error_knowledge "
+            "(error_type, description, first_seen, last_seen) "
+            "VALUES (?,?,datetime('now','localtime'),datetime('now','localtime'))",
+            (error_type.strip(), description),
+        )
+        c.execute(
+            "UPDATE error_knowledge SET count=count+1, "
+            "last_seen=datetime('now','localtime') WHERE error_type=?",
+            (error_type.strip(),),
+        )
+        c.commit()
+        row = c.execute(
+            "SELECT * FROM error_knowledge WHERE error_type=?", (error_type.strip(),)
+        ).fetchone()
+        return dict(row) if row else {}
+
+
+# ----------------------------- 一键上架 pipeline -----------------------------
+
+def create_autopublish_task(source_url: str, shop_id: int = 5) -> dict:
+    """新建一键上架任务，初始状态 queued。"""
+    with closing(_conn()) as c:
+        cur = c.execute(
+            "INSERT INTO autopublish_tasks(source_url, shop_id, status) VALUES(?,?,?)",
+            (source_url.strip(), shop_id, "queued"),
+        )
+        c.commit()
+        row = c.execute(
+            "SELECT * FROM autopublish_tasks WHERE id=?", (cur.lastrowid,)
+        ).fetchone()
+        return dict(row) if row else {}
+
+
+def get_autopublish_task(task_id: int) -> dict:
+    with closing(_conn()) as c:
+        row = c.execute(
+            "SELECT * FROM autopublish_tasks WHERE id=?", (task_id,)
+        ).fetchone()
+        return dict(row) if row else {}
+
+
+def list_autopublish_tasks(limit: int = 50) -> list[dict]:
+    with closing(_conn()) as c:
+        rows = c.execute(
+            "SELECT * FROM autopublish_tasks ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def update_autopublish_task(task_id: int, **fields) -> dict:
+    """按字段更新任务（status/stage/raw_title/ai_title/... 等），自动刷新 updated_at。"""
+    if not fields:
+        return get_autopublish_task(task_id)
+    allowed = {
+        "status", "stage", "raw_title", "ai_title", "ai_desc", "price",
+        "skus", "images", "pdd_goods_id", "error", "log",
+    }
+    sets, vals = [], []
+    for k, v in fields.items():
+        if k not in allowed:
+            continue
+        if k in ("skus", "images", "log"):
+            v = json.dumps(v, ensure_ascii=False)
+        sets.append(f"{k}=?")
+        vals.append(v)
+    if not sets:
+        return get_autopublish_task(task_id)
+    sets.append("updated_at=datetime('now','localtime')")
+    vals.append(task_id)
+    with closing(_conn()) as c:
+        c.execute(f"UPDATE autopublish_tasks SET {', '.join(sets)} WHERE id=?", vals)
+        c.commit()
+        row = c.execute(
+            "SELECT * FROM autopublish_tasks WHERE id=?", (task_id,)
+        ).fetchone()
+        return dict(row) if row else {}
+
+
+def append_autopublish_log(task_id: int, stage: str, status: str, msg: str) -> None:
+    """追加一条阶段日志到任务 log JSON 数组，并同步更新 stage/status。"""
+    with closing(_conn()) as c:
+        row = c.execute(
+            "SELECT log FROM autopublish_tasks WHERE id=?", (task_id,)
+        ).fetchone()
+        logs = []
+        if row and row["log"]:
+            try:
+                logs = json.loads(row["log"])
+            except Exception:
+                logs = []
+        logs.append({
+            "stage": stage,
+            "status": status,
+            "msg": msg,
+            "ts": datetime.now().strftime("%H:%M:%S"),
+        })
+        c.execute(
+            "UPDATE autopublish_tasks SET log=?, stage=?, status=?, "
+            "updated_at=datetime('now','localtime') WHERE id=?",
+            (json.dumps(logs, ensure_ascii=False), stage, status, task_id),
+        )
+        c.commit()
 
 
 def init_db() -> None:

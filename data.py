@@ -2322,3 +2322,115 @@ if __name__ == "__main__":
         print("已初始化示例数据 ->", DB_PATH)
     else:
         print("已有产品数据，跳过初始化。")
+
+
+# ----------------------------- 一键上架：AI 生成 config -----------------------------
+
+
+def ai_generate_publish_config(product: dict) -> dict:
+    """DeepSeek 把 1688 抓取的 product 自动生成 publish.js 的 config。
+
+    product: {title, bodyText, images, offerId}
+    返回: {config: {...}|None, warning: str, error: str|None}
+
+    config 字段（见 pdd-goods-publish-cdp skill / config.example.json）：
+      categoryKeyword, categoryPath, title, images, specs[0..1]{type,values},
+      priceBySpec2{spec2值:{pdd,danmai}}, stock, refPrice, previewImages{spec1值:图}
+    """
+    import re
+    title = (product.get("title") or "").strip()
+    body_text = (product.get("bodyText") or "")[:6000]
+    images = product.get("images") or []
+    if not title:
+        return {"config": None, "warning": "", "error": "商品标题为空"}
+    if not DEEPSEEK_API_KEY:
+        return {"config": None, "warning": "", "error": "未配置 DeepSeek API key"}
+
+    prompt = (
+        "你是拼多多商品上架配置专家。根据 1688 抓取的商品数据，生成拼多多发布页所需的 config.json。\n\n"
+        f"商品标题：{title}\n"
+        f"商品页面文本（含规格/价格/属性）：\n{body_text}\n\n"
+        "请输出一个 JSON 对象，字段如下：\n"
+        "{\n"
+        '  "categoryKeyword": "类目搜索关键词（2-4字，如 婚庆/宠物/家居/厨房）",\n'
+        '  "categoryPath": "完整类目路径（如 节庆用品/礼品 > 婚庆用品 > 拉花）",\n'
+        '  "title": "优化后标题，≤30个汉字、≤60字符，保留核心卖点+场景词，不要夸张违规词",\n'
+        '  "specs": [{"type":"规格类型名(颜色/款式/尺寸/型号)","values":["值1","值2"]}],\n'
+        '  "priceBySpec2": {"规格2的值":{"pdd":拼单价,"danmai":单买价}},\n'
+        '  "stock": 库存数字(默认500),\n'
+        '  "refPrice": 参考价(必须大于最大单买价),\n'
+        '  "previewImages": {"规格1的值":"对应主图索引(0-9，0表示第1张主图)"}\n'
+        "}\n\n"
+        "硬性规则：\n"
+        "1. 规格归纳：从页面文本的「颜色/款式/尺寸」等属性里提取规格。SKU 若超过 12 个，必须归纳合并成 ≤12 个（如 40 个复杂 SKU → 归纳成 3色×4款=12 个），specs 最多 2 维。\n"
+        "2. 定价：拼单价 ≈ 进价×1.5~1.85（覆盖运费+推广），单买价 = 拼单价+10~20。进价从页面文本的「¥」价格里取最低的那个。\n"
+        "3. 规格类型名只能用：颜色/款式/尺寸/型号/材质/容量/器型/口味/色号。\n"
+        "4. previewImages：规格1 每个值对应一张主图（用图片索引 0-9，第1张主图=0）。\n"
+        "5. 若 SKU 无法归纳到 12 个以内，如实列，外层会判断预警。\n"
+        "只输出 JSON 对象，不要 markdown 代码块，不要多余文字。"
+    )
+    body = json.dumps({
+        "model": "deepseek-chat",
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.2,
+        "stream": False,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        "https://api.deepseek.com/chat/completions",
+        data=body,
+        headers={
+            "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        resp = json.loads(urllib.request.urlopen(req, timeout=90).read())
+        content = resp["choices"][0]["message"]["content"]
+    except Exception as e:
+        return {"config": None, "warning": "", "error": f"DeepSeek 调用失败：{e}"}
+
+    m = re.search(r"\{.*\}", content, re.DOTALL)
+    if not m:
+        return {"config": None, "warning": "", "error": f"AI 输出解析失败：{content[:200]}"}
+    try:
+        cfg = json.loads(m.group(0))
+    except Exception:
+        return {"config": None, "warning": "", "error": f"config JSON 非法：{content[:200]}"}
+
+    # 校验 + 兜底
+    if not cfg.get("specs"):
+        return {"config": None, "warning": "", "error": "AI 未提取到规格"}
+    if not cfg.get("title"):
+        cfg["title"] = title[:60]
+    if not cfg.get("categoryKeyword"):
+        cfg["categoryKeyword"] = "婚庆"
+    # images 用真实抓取的图片路径（AI 只给索引，这里映射回真实路径）
+    cfg["images"] = images[:10]
+    # previewImages：AI 给的是索引 0-9，映射成真实图片路径
+    pv = cfg.get("previewImages") or {}
+    resolved_pv = {}
+    for k, v in pv.items():
+        try:
+            idx = int(v)
+        except (TypeError, ValueError):
+            idx = 0
+        resolved_pv[str(k)] = images[idx] if idx < len(images) else (images[0] if images else "")
+    cfg["previewImages"] = resolved_pv
+    # 定价兜底
+    if not cfg.get("priceBySpec2"):
+        return {"config": None, "warning": "", "error": "AI 未生成定价 priceBySpec2"}
+    if not cfg.get("refPrice"):
+        cfg["refPrice"] = 99.0
+    if not cfg.get("stock"):
+        cfg["stock"] = 500
+
+    # SKU 复杂度预警
+    warning = ""
+    specs = cfg.get("specs", [])
+    total_sku = 1
+    for s in specs:
+        total_sku *= max(1, len(s.get("values") or []))
+    if total_sku > 30:
+        warning = f"SKU 共 {total_sku} 个（>30），拼多多表格可能无法自动化填完，建议人工精简规格"
+
+    return {"config": cfg, "warning": warning, "error": None}

@@ -29,6 +29,7 @@ const VIEWS = {
   profit: {title:'盈利看板', sub:'当日净利 = 净收入 − 推广 − 商品成本 − 运费，成本按固定参数模型核算。'},
   sale: {title:'销售看板', sub:'成交订单 SKU → 品类归类，每日/每月销量与金额汇总。'},
   errors: {title:'错误处理', sub:'上架/采集/发布踩过的坑，对应处理技能 + 出现次数，遇到一次点一次。'},
+  autopublish: {title:'一键上架', sub:'输入 1688 链接 → 自动抓取 → AI 生成配置 → CDP 上架到拼多多。'},
 };
 
 // 运营指南分组（单一数据源：新增子模块只需在这里加一条，侧边栏子菜单 + 目录页自动生成）
@@ -558,6 +559,7 @@ function setView(view) {
   if (view === 'profit') renderProfit();
   if (view === 'sale') renderSale();
   if (view === 'errors') renderErrors();
+  if (view === 'autopublish') renderAutopublish();
 }
 
 // 错误处理：错误知识库（错误类型 → 处理技能 + 出现次数，遇到一次点一次）
@@ -639,6 +641,132 @@ async function renderErrors() {
     const resp = await api('/api/errors', 'POST', { action: 'hit', id: Number(btn.dataset.hit) });
     if (resp && resp.ok) { toast('已记录 +1'); renderErrors(); } else { toast('记录失败'); }
   });
+}
+
+// 一键上架：输入 1688 链接 → 抓取 → AI 配置 → CDP 上架，实时进度流
+let apTimer = null;
+async function renderAutopublish() {
+  const el = $('#view-autopublish');
+  el.innerHTML = `
+    <div style="padding:20px;max-width:1100px">
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:18px;margin-bottom:16px">
+        <div style="font-weight:700;font-size:15px;margin-bottom:4px">🚀 一键上架</div>
+        <div style="color:#64748b;font-size:13px;margin-bottom:12px">粘贴 1688 商品链接，自动跑完「抓取 → AI 生成配置 → CDP 上架拼多多」全流程，实时看进度。</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <input id="ap-url" placeholder="https://detail.1688.com/offer/xxxxx.html 或 qr.1688.com/s/xxx 短链" style="flex:1;min-width:280px;padding:11px 14px;border:1px solid #cbd5e1;border-radius:10px;font-size:14px">
+          <select id="ap-shop" style="padding:11px 12px;border:1px solid #cbd5e1;border-radius:10px;font-size:14px;background:#fff">
+            <option value="5">嘉裕工艺品(9232)</option>
+            <option value="3">如若月下(9230)</option>
+            <option value="1">闲时来(9222)</option>
+            <option value="6">欧世艺(9228)</option>
+          </select>
+          <button class="btn primary" id="ap-start-btn" style="padding:11px 22px;font-size:14px">开始上架</button>
+        </div>
+      </div>
+
+      <div id="ap-current" style="margin-bottom:16px"></div>
+      <div style="font-weight:700;font-size:14px;margin-bottom:10px;color:#334155">历史任务</div>
+      <div id="ap-list"><div class="empty" style="color:#94a3b8">暂无任务，输入链接点「开始上架」。</div></div>
+    </div>
+  `;
+
+  $('#ap-start-btn').onclick = async () => {
+    const url = $('#ap-url').value.trim();
+    if (!url) { toast('请先粘贴 1688 链接'); return; }
+    const shop_id = Number($('#ap-shop').value) || 5;
+    $('#ap-start-btn').disabled = true;
+    $('#ap-start-btn').textContent = '已提交…';
+    try {
+      const resp = await api('/api/autopublish', 'POST', { url, shop_id });
+      if (resp && resp.task && resp.task.id) {
+        toast('任务已启动');
+        $('#ap-url').value = '';
+        startApPolling(resp.task.id);
+      } else { toast((resp && resp.error) || '提交失败'); }
+    } catch (e) { toast(e.message); }
+    $('#ap-start-btn').disabled = false;
+    $('#ap-start-btn').textContent = '开始上架';
+  };
+
+  await loadApList();
+  startApListPolling();
+}
+
+const AP_STAGE = { scrape:'抓取1688', ai:'AI生成配置', publish:'CDP上架' };
+const AP_STATUS = { running:'⏳', done:'✅', failed:'❌' };
+
+function startApPolling(taskId) {
+  if (apTimer) clearInterval(apTimer);
+  const poll = async () => {
+    try {
+      const t = await api(`/api/autopublish/${taskId}`);
+      renderApCurrent(t);
+      if (['published', 'failed'].includes(t.status)) { clearInterval(apTimer); apTimer = null; loadApList(); }
+    } catch (e) {}
+  };
+  poll();
+  apTimer = setInterval(poll, 2500);
+}
+
+function renderApCurrent(t) {
+  const el = $('#ap-current');
+  if (!el) return;
+  const logs = (t.log || []);
+  const steps = logs.map((l, i) => {
+    const stage = AP_STAGE[l.stage] || l.stage;
+    const ic = AP_STATUS[l.status] || '•';
+    const color = l.status === 'failed' ? '#dc2626' : (l.status === 'done' ? '#16a34a' : '#2563eb');
+    return `<div style="display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px solid #f1f5f9">
+      <span style="font-size:14px">${ic}</span>
+      <div style="flex:1">
+        <span style="font-weight:600;color:${color}">${stage}</span>
+        <span style="color:#94a3b8;font-size:12px;margin-left:8px">${esc(l.ts || '')}</span>
+        <div style="color:#475569;font-size:13px;margin-top:2px">${esc(l.msg)}</div>
+      </div>
+    </div>`;
+  }).join('');
+  const statusTag = { queued:'排队中', crawling:'抓取中', ai:'AI配置中', publishing:'上架中', published:'✅ 已上架', failed:'❌ 失败' }[t.status] || t.status;
+  el.innerHTML = `
+    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:18px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <div style="font-weight:700;font-size:15px">任务 #${t.id} <span style="color:#2563eb;font-size:13px;margin-left:6px">${statusTag}</span></div>
+        <div style="color:#94a3b8;font-size:12px">${esc(t.raw_title || '')}</div>
+      </div>
+      ${t.ai_title ? `<div style="background:#f0f9ff;border-radius:8px;padding:10px;margin-bottom:10px;font-size:13px;color:#075985">AI 标题：${esc(t.ai_title)}</div>` : ''}
+      ${t.pdd_goods_id ? `<div style="background:#f0fdf4;border-radius:8px;padding:10px;margin-bottom:10px;font-size:13px;color:#166534">商品ID：${esc(t.pdd_goods_id)}</div>` : ''}
+      ${t.error ? `<div style="background:#fef2f2;border-radius:8px;padding:10px;margin-bottom:10px;font-size:13px;color:#b91c1c">${esc(t.error)}</div>` : ''}
+      ${steps || '<div style="color:#94a3b8">等待启动…</div>'}
+    </div>
+  `;
+}
+
+async function loadApList() {
+  const el = $('#ap-list');
+  if (!el) return;
+  let items = [];
+  try {
+    const resp = await api('/api/autopublish');
+    items = (resp && resp.items) || [];
+  } catch (e) { items = []; }
+  if (!items.length) { el.innerHTML = '<div class="empty" style="color:#94a3b8">暂无任务。</div>'; return; }
+  const statusTag = { queued:'排队', crawling:'抓取', ai:'AI配置', publishing:'上架中', published:'✅已上架', failed:'❌失败' };
+  el.innerHTML = items.map(t => `
+    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin-bottom:8px;display:flex;gap:12px;align-items:center;cursor:pointer" onclick="startApPolling(${t.id})">
+      <div style="font-size:14px;color:#94a3b8">#${t.id}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:600;font-size:14px;color:#17203a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.raw_title || t.ai_title || t.source_url || '')}</div>
+        <div style="color:#94a3b8;font-size:12px;margin-top:2px">${esc((t.source_url||'').slice(0,60))}</div>
+      </div>
+      <span style="background:#f1f5f9;border-radius:6px;padding:3px 10px;font-size:12px;color:#475569">${statusTag[t.status] || t.status}</span>
+      ${t.pdd_goods_id ? `<span style="font-size:12px;color:#16a34a">${esc(t.pdd_goods_id)}</span>` : ''}
+      <div style="color:#94a3b8;font-size:12px">${esc((t.created_at||'').slice(5,16))}</div>
+    </div>
+  `).join('');
+}
+
+function startApListPolling() {
+  if (window._apListTimer) clearInterval(window._apListTimer);
+  window._apListTimer = setInterval(() => { if (state.view === 'autopublish') loadApList(); }, 10000);
 }
 
 // 盈利看板：当日净利 = 净收入 − 推广 − 商品成本 − 运费

@@ -21,6 +21,11 @@ PROMOTION_HISTORY_PATH = os.path.expanduser("~/.hermes/pdd_promotion_history.jso
 SHOP_CDP_PORT = {5: 9232, 3: 9230, 1: 9222, 6: 9228}
 NODE_EXE = "/mnt/d/Program Files/nodejs/node.exe"
 PDD_SET_TITLE_JS = r"C:\tmp\pdd_set_titles.js"
+# 一键上架：执行层脚本目录（WSL 路径 / Windows 路径，node.exe 只能吃 Windows 路径）
+AUTOPUBLISH_DIR_WSL = os.path.join(BASE_DIR, "autopublish")
+AUTOPUBLISH_DIR_WIN = r"D:\电商运营\运营工作台\autopublish"
+# 1688 登录实例 CDP 端口（抓取商品详情用，详见 pdd-promotion-cdp / taobao 相关 skill）
+CLIENT_1688_PORT = 9238
 # 竞品监控：买家端搜索实例 + 采集脚本
 CLIENT_CDP_PORT = 9236
 PDD_SEARCH_COMP_JS = r"C:\tmp\fetch_competitors.js"
@@ -1235,6 +1240,34 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 return _json(self, {"error": "非法 id"}, 400)
 
+        # ------------------------- 一键上架 pipeline -------------------------
+        if path == "/api/autopublish" and self.command == "POST":
+            item = self._read_body()
+            url = str(item.get("url") or "").strip()
+            shop_id = int(item.get("shop_id") or 5)
+            if not url:
+                return _json(self, {"error": "请填写 1688 商品链接"}, 400)
+            task = catalog.create_autopublish_task(url, shop_id)
+            threading.Thread(target=_autopublish_bg, args=(task["id"],), daemon=True).start()
+            return _json(self, {"ok": True, "task": task})
+
+        if path == "/api/autopublish" and self.command == "GET":
+            limit = int(qs.get("limit", ["50"])[0] or 50)
+            return _json(self, {"items": catalog.list_autopublish_tasks(limit)})
+
+        if path.startswith("/api/autopublish/") and self.command == "GET":
+            try:
+                task_id = int(path.rsplit("/", 1)[-1])
+            except ValueError:
+                return _json(self, {"error": "非法 id"}, 400)
+            task = catalog.get_autopublish_task(task_id)
+            if not task:
+                return _json(self, {"error": "任务不存在"}, 404)
+            task["log"] = json.loads(task.get("log") or "[]")
+            task["skus"] = json.loads(task.get("skus") or "[]")
+            task["images"] = json.loads(task.get("images") or "[]")
+            return _json(self, task)
+
         # 静态页面
         if path in ("/", "/index.html") and self.command == "GET":
             return self._serve_file("index.html", "text/html; charset=utf-8")
@@ -1498,6 +1531,143 @@ def _collect_comments_full_bg(goods_id, target):
             catalog.save_buyer_review_full(data)
     except Exception:
         pass  # 静默失败，前端轮询无数据会提示
+
+
+def _run_node_script(script_name: str, args: list, timeout: int = 180) -> dict:
+    """执行 autopublish/ 下的 node 脚本，返回 {ok, stdout, stderr, data}。
+
+    node.exe 是 Windows 程序，脚本路径必须用 Windows 格式；输出取第一行合法 JSON。
+    """
+    import subprocess
+    script_win = AUTOPUBLISH_DIR_WIN + "\\" + script_name
+    script_wsl = os.path.join(AUTOPUBLISH_DIR_WSL, script_name)
+    if not os.path.exists(script_wsl):
+        return {"ok": False, "error": f"脚本缺失: {script_name}", "data": None}
+    try:
+        r = subprocess.run(
+            [NODE_EXE, script_win] + [str(a) for a in args],
+            capture_output=True, timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "执行超时", "data": None}
+    except Exception as e:
+        return {"ok": False, "error": f"执行异常:{e}", "data": None}
+    out = r.stdout.decode("utf-8", errors="replace").strip()
+    err = r.stderr.decode("utf-8", errors="replace").strip()
+    data = None
+    for line in out.splitlines():
+        line = line.strip()
+        if line.startswith("{") or line.startswith("["):
+            try:
+                data = json.loads(line)
+                break
+            except Exception:
+                continue
+    return {"ok": r.returncode == 0, "stdout": out, "stderr": err, "data": data}
+
+
+def _autopublish_bg(task_id: int):
+    """一键上架编排：scrape(1688抓取) → ai(data.ai_generate_publish_config) → publish(CDP上架)。
+
+    每环节回写任务状态+日志；环节失败即终止（failed），不跳过、不假装成功。
+    数据流：scrape.js 写 product.json + 图片到任务目录 → Python 读 product.json
+    → AI 生成 config.json → publish.js 读 config.json 上架。
+    """
+    import subprocess
+    task = catalog.get_autopublish_task(task_id)
+    if not task:
+        return
+    url = task["source_url"]
+    shop_id = task["shop_id"]
+
+    # 任务专属目录（Windows 路径给 node.exe，WSL 路径给 Python 读）
+    outdir_win = f"C:\\tmp\\pdd-publish\\task_{task_id}"
+    outdir_wsl = f"/mnt/c/tmp/pdd-publish/task_{task_id}"
+    os.makedirs(outdir_wsl, exist_ok=True)
+    config_win = outdir_win + "\\config.json"
+    config_wsl = os.path.join(outdir_wsl, "config.json")
+
+    def _fail(stage, msg):
+        catalog.append_autopublish_log(task_id, stage, "failed", msg)
+        catalog.update_autopublish_task(task_id, status="failed", error=msg)
+        try:
+            catalog.hit_error_by_type(f"一键上架:{stage}")
+        except Exception:
+            pass
+
+    # ---- 环节1：1688 抓取（scrape.js 写 product.json + 图） ----
+    catalog.append_autopublish_log(task_id, "scrape", "running", "开始抓取 1688 商品详情…")
+    catalog.update_autopublish_task(task_id, status="crawling", stage="scrape")
+    res = _run_node_script("scrape.js", [url, outdir_win, str(CLIENT_1688_PORT)], timeout=120)
+    if not res.get("data"):
+        return _fail("scrape", res.get("error") or res.get("stderr") or "抓取失败（无数据）")
+    d = res["data"]
+    if d.get("error"):
+        return _fail("scrape", d["error"])
+    # 读 product.json（含完整 bodyText，AI 环节要用）
+    product = {}
+    try:
+        with open(os.path.join(outdir_wsl, "product.json"), encoding="utf-8") as f:
+            product = json.load(f)
+    except Exception:
+        product = {}
+    if not product.get("title"):
+        product["title"] = d.get("title", "")
+        product["images"] = d.get("images", [])
+        product["bodyText"] = ""
+    catalog.update_autopublish_task(
+        task_id,
+        raw_title=product.get("title", ""),
+        images=product.get("images", []),
+    )
+    catalog.append_autopublish_log(
+        task_id, "scrape", "done",
+        f"抓取成功：{product.get('title','')[:30]} ｜ 图 {len(product.get('images',[]))} 张",
+    )
+
+    # ---- 环节2：AI 生成 config.json ----
+    catalog.append_autopublish_log(task_id, "ai", "running", "DeepSeek 分析规格/定价/类目，生成上架配置…")
+    catalog.update_autopublish_task(task_id, status="ai", stage="ai")
+    ai = data.ai_generate_publish_config(product)
+    if ai.get("error"):
+        return _fail("ai", ai["error"])
+    cfg = ai.get("config") or {}
+    if not cfg:
+        return _fail("ai", "AI 未生成配置")
+    catalog.update_autopublish_task(task_id, ai_title=cfg.get("title", ""))
+    # 写 config.json 供 publish.js 读
+    try:
+        with open(config_wsl, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return _fail("ai", f"写 config.json 失败:{e}")
+    warning = ai.get("warning", "")
+    catalog.append_autopublish_log(
+        task_id, "ai", "done",
+        f"AI 配置完成：标题 {cfg.get('title','')[:30]} ｜ 规格 {len(cfg.get('specs',[]))} 维"
+        + (f" ｜ ⚠️{warning}" if warning else ""),
+    )
+
+    # ---- 环节3：拼多多 CDP 真实上架 ----
+    catalog.append_autopublish_log(task_id, "publish", "running", "CDP 真实上架到拼多多…")
+    catalog.update_autopublish_task(task_id, status="publishing", stage="publish")
+    port = SHOP_CDP_PORT.get(shop_id)
+    if not port:
+        return _fail("publish", f"店铺 {shop_id} 未配置 CDP 端口")
+    res = _run_node_script("publish.js", [config_win, str(port)], timeout=300)
+    if not res.get("data") and not res.get("ok"):
+        return _fail("publish", res.get("error") or res.get("stderr") or "上架失败")
+    # publish.js 输出是进度日志（非 JSON），判断成功靠 stdout 里的 success 标记
+    out = res.get("stdout", "")
+    if "上架成功" in out or "/success" in out:
+        m = __import__("re").search(r"goods_id=(\d+)", out)
+        goods_id = m.group(1) if m else ""
+        catalog.update_autopublish_task(task_id, status="published", pdd_goods_id=goods_id)
+        catalog.append_autopublish_log(task_id, "publish", "done", f"✅ 上架成功，商品ID: {goods_id}")
+    else:
+        # 上架脚本跑完了但没成功标记，如实记 failed
+        last = (out.strip().splitlines() or [""])[-1][:200]
+        return _fail("publish", f"未确认上架成功（{last}）")
 
 
 def main():

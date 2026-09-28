@@ -1,0 +1,40 @@
+{
+  "categoryKeyword": "婚庆",
+  "categoryPath": "节庆用品/礼品 > 婚庆用品 > 拉花",
+  "title": "结婚装饰条幅挂布婚礼院子布置喜字横幅自建房室外庭院拉花彩带",
+  "images": [
+    "C:\\tmp\\1688_imgs3\\1.jpg",
+    "C:\\tmp\\1688_imgs3\\2.jpg",
+    "C:\\tmp\\1688_imgs3\\3.jpg",
+    "C:\\tmp\\1688_imgs3\\4.jpg",
+    "C:\\tmp\\1688_imgs3\\5.jpg",
+    "C:\\tmp\\1688_imgs3\\6.jpg",
+    "C:\\tmp\\1688_imgs3\\7.jpg",
+    "C:\\tmp\\1688_imgs3\\8.jpg",
+    "C:\\tmp\\1688_imgs3\\9.jpg",
+    "C:\\tmp\\1688_imgs3\\10.jpg"
+  ],
+  "specs": [
+    {
+      "type": "颜色",
+      "values": ["佳偶囍联", "花开富贵", "栀子花开"]
+    },
+    {
+      "type": "款式",
+      "values": ["2.8米【适合1-2层楼】", "2.8米+连身喜", "5.4米【适合2-3层楼】", "5.4米+连身喜"]
+    }
+  ],
+  "priceBySpec2": {
+    "2.8米【适合1-2层楼】": { "pdd": 39.9, "danmai": 49.9 },
+    "2.8米+连身喜": { "pdd": 49.9, "danmai": 59.9 },
+    "5.4米【适合2-3层楼】": { "pdd": 79.9, "danmai": 99.9 },
+    "5.4米+连身喜": { "pdd": 99.9, "danmai": 119.9 }
+  },
+  "stock": 500,
+  "refPrice": 199,
+  "previewImages": {
+    "佳偶囍联": "C:\\tmp\\1688_imgs3\\1.jpg",
+    "花开富贵": "C:\\tmp\\1688_imgs3\\2.jpg",
+    "栀子花开": "C:\\tmp\\1688_imgs3\\3.jpg"
+  }
+}
