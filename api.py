@@ -697,6 +697,7 @@ class Handler(BaseHTTPRequestHandler):
             start = qs.get("start", [None])[0]
             end = qs.get("end", [None])[0]
             return _json(self, {"items": catalog.sale_category_summary(start, end),
+                                "date_range": catalog.sale_date_range(),
                                 "server_today": datetime.now().strftime("%Y-%m-%d")})
 
         if path == "/api/catalog/sale-daily" and self.command == "GET":

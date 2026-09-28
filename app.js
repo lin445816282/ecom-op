@@ -681,7 +681,7 @@ async function renderSale() {
   const el = $('#view-sale');
   const ym = (v) => (v == null || Number.isNaN(Number(v))) ? 0 : Number(v);
   el.innerHTML = '<div style="padding:24px;color:#666">加载中…</div>';
-  let cats = [], monthly = [], skus = [], daily = [], serverToday = '';
+  let cats = [], monthly = [], skus = [], daily = [], serverToday = '', dateRange = null;
   try {
     const [catResp, monthlyResp, skuResp, dailyResp] = await Promise.all([
       api('/api/catalog/sale-category'),
@@ -694,7 +694,8 @@ async function renderSale() {
     skus = (skuResp && skuResp.items) || [];
     daily = (dailyResp && dailyResp.items) || [];
     serverToday = (catResp && catResp.server_today) || '';
-  } catch (e) { cats = []; monthly = []; skus = []; daily = []; serverToday = ''; }
+    dateRange = (catResp && catResp.date_range) || null;
+  } catch (e) { cats = []; monthly = []; skus = []; daily = []; serverToday = ''; dateRange = null; }
   const curMonth = (serverToday || '').slice(0, 7);
 
   const totalAmt = cats.reduce((s, c) => s + ym(c.amt), 0);
@@ -702,11 +703,14 @@ async function renderSale() {
 
   // 汇总卡
   let html = '<div style="padding:16px 20px">';
-  html += `<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+  const drStart = (dateRange && dateRange.start) || '';
+  const drEnd = (dateRange && dateRange.end) || '';
+  html += `<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px">
     <div style="flex:1;min-width:110px;background:#f8fafc;border-radius:12px;padding:14px"><div style="color:#64748b;font-size:12px">累计销量</div><div style="font-size:22px;font-weight:700;margin-top:4px">${totalQty} 件</div></div>
     <div style="flex:1;min-width:110px;background:#f8fafc;border-radius:12px;padding:14px"><div style="color:#64748b;font-size:12px">累计成交额</div><div style="font-size:22px;font-weight:700;margin-top:4px;color:#0f766e">¥${totalAmt.toFixed(2)}</div></div>
     <div style="flex:1;min-width:110px;background:#f8fafc;border-radius:12px;padding:14px"><div style="color:#64748b;font-size:12px">品类数</div><div style="font-size:22px;font-weight:700;margin-top:4px">${cats.length}</div></div>
   </div>`;
+  html += `<div style="font-size:12px;color:#94a3b8;margin-bottom:14px">📅 累计起始 <b style="color:#475569">${drStart}</b>${drEnd ? '（截至 ' + drEnd + '）' : ''} · 有效成交口径</div>`;
 
   // 品类分布（条形图 + 表格，日期可选，默认当月）
   html += `<div class="panel" style="padding:16px 18px;margin-bottom:14px">

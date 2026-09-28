@@ -810,6 +810,18 @@ def sale_category_summary(start=None, end=None) -> list[dict]:
     return sorted(cats.values(), key=lambda x: -x["amt"])
 
 
+def sale_date_range() -> dict:
+    """有效成交订单的日期范围（最早/最新 pay_time）。"""
+    where, args = _sale_where(None, None)
+    with closing(_conn()) as c:
+        row = c.execute(
+            "SELECT MIN(substr(o.pay_time,1,10)) mn, MAX(substr(o.pay_time,1,10)) mx FROM orders o "
+            f"WHERE {where}",
+            args,
+        ).fetchone()
+    return {"start": row["mn"], "end": row["mx"]}
+
+
 def sale_daily(start=None, end=None, limit=90) -> list[dict]:
     """按 日期 × 品类 汇总销售，日期倒序。"""
     where, args = _sale_where(start, end)
