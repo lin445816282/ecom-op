@@ -627,7 +627,8 @@ def settle_daily_profit(stat_date: str) -> dict:
 
         order_rows = c.execute(
             "SELECT shop_id, aftersale_status, spec, seller_amount FROM orders "
-            "WHERE pay_time LIKE ? AND seller_amount IS NOT NULL",
+            "WHERE pay_time LIKE ? AND seller_amount IS NOT NULL "
+            "AND status NOT IN ('已取消', '待付款', '交易关闭', '已关闭')",
             (stat_date + "%",),
         ).fetchall()
 
@@ -640,7 +641,7 @@ def settle_daily_profit(stat_date: str) -> dict:
             sid = r["shop_id"]
             amt = r["seller_amount"] or 0.0
             cnt[sid] = cnt.get(sid, 0) + 1
-            if r["aftersale_status"] == "退款成功":
+            if r["aftersale_status"] in ("退款成功", "退款完成"):
                 refund[sid] = refund.get(sid, 0.0) + amt
                 continue
             income[sid] = income.get(sid, 0.0) + amt
@@ -730,6 +731,160 @@ def update_cost_params(params: dict) -> dict:
             updated[k] = val
         c.commit()
     return updated
+
+
+def _classify_category(name: str) -> str:
+    """按商品名关键词归类品类（成交商品，优先级从高到低）。"""
+    if not name:
+        return "未分类"
+    if any(k in name for k in ("雨链", "导水链", "落水链", "雨水链")):
+        return "雨链"
+    if any(k in name for k in ("风铃", "门铃", "铃铛", "手摇铃")):
+        return "风铃/门铃"
+    if any(k in name for k in ("花架", "爬藤", "花墙", "攀爬", "花几", "花凳", "花盆", "花插", "花篮", "屏风")):
+        return "铁艺花架"
+    if any(k in name for k in ("壁饰", "壁挂", "背景墙", "假窗户", "五角星", "墙饰")):
+        return "铁艺壁饰"
+    if any(k in name for k in ("摆件", "小椅子", "树桩", "多肉", "小鸟")):
+        return "摆件"
+    if any(k in name for k in ("半成品", "冲压", "配件", "子母扣", "吸盘")):
+        return "配件半成品"
+    if any(k in name for k in ("橱柜挂钩", "厨房挂钩", "橱柜门", "五连钩", "短卡夹", "排钩")):
+        return "橱柜/厨房挂钩"
+    if any(k in name for k in ("收纳", "鞋柜")):
+        return "收纳"
+    if any(k in name for k in ("挂钩", "挂衣钩", "衣帽架", "挂架", "挂衣架", "门后")):
+        return "门后挂钩"
+    return "其他"
+
+
+def _sale_where(start=None, end=None):
+    """销售查询公共 WHERE（排除退款单 + 未成交单 + 无支付时间 + 时间范围）。
+
+    有效成交口径：status 非 已取消/待付款/交易关闭/已关闭，
+    aftersale_status 非 退款成功/退款完成，pay_time 有效日期。
+    """
+    sql = ("o.platform_product_id != '' "
+           "AND o.status NOT IN ('已取消', '待付款', '交易关闭', '已关闭') "
+           "AND o.aftersale_status NOT IN ('退款成功', '退款完成') "
+           "AND o.seller_amount IS NOT NULL "
+           "AND o.pay_time IS NOT NULL AND o.pay_time != '' AND o.pay_time >= '2000-01-01'")
+    args = []
+    if start:
+        sql += " AND o.pay_time >= ?"
+        args.append(start + " 00:00:00")
+    if end:
+        sql += " AND o.pay_time <= ?"
+        args.append(end + " 23:59:59")
+    return sql, args
+
+
+def sale_category_summary(start=None, end=None) -> list[dict]:
+    """按品类汇总销售（销量/金额/单数/商品数），按金额倒序。"""
+    where, args = _sale_where(start, end)
+    with closing(_conn()) as c:
+        rows = c.execute(
+            "SELECT o.platform_product_id, p.name, SUM(o.quantity) qty, "
+            "SUM(o.seller_amount) amt, COUNT(*) cnt FROM orders o "
+            "LEFT JOIN products p ON p.platform_product_id=o.platform_product_id AND p.shop_id=o.shop_id "
+            f"WHERE {where} GROUP BY o.shop_id, o.platform_product_id",
+            args,
+        ).fetchall()
+    cats = {}
+    for r in rows:
+        cat = _classify_category(r["name"] or "")
+        d = cats.setdefault(cat, {"category": cat, "qty": 0, "amt": 0.0, "cnt": 0, "products": 0})
+        d["qty"] += r["qty"] or 0
+        d["amt"] += r["amt"] or 0.0
+        d["cnt"] += r["cnt"] or 0
+        d["products"] += 1
+    for d in cats.values():
+        d["qty"] = round(d["qty"])
+        d["amt"] = round(d["amt"], 2)
+    return sorted(cats.values(), key=lambda x: -x["amt"])
+
+
+def sale_daily(start=None, end=None, limit=90) -> list[dict]:
+    """按 日期 × 品类 汇总销售，日期倒序。"""
+    where, args = _sale_where(start, end)
+    with closing(_conn()) as c:
+        rows = c.execute(
+            "SELECT substr(o.pay_time,1,10) d, o.platform_product_id, p.name, "
+            "SUM(o.quantity) qty, SUM(o.seller_amount) amt, COUNT(*) cnt FROM orders o "
+            "LEFT JOIN products p ON p.platform_product_id=o.platform_product_id AND p.shop_id=o.shop_id "
+            f"WHERE {where} GROUP BY substr(o.pay_time,1,10), o.shop_id, o.platform_product_id",
+            args,
+        ).fetchall()
+    daily = {}
+    for r in rows:
+        cat = _classify_category(r["name"] or "")
+        d = daily.setdefault(r["d"], {})
+        c2 = d.setdefault(cat, {"qty": 0, "amt": 0.0, "cnt": 0})
+        c2["qty"] += r["qty"] or 0
+        c2["amt"] += r["amt"] or 0.0
+        c2["cnt"] += r["cnt"] or 0
+    out = []
+    for date in sorted(daily.keys(), reverse=True)[:limit]:
+        cats = daily[date]
+        total_amt = round(sum(v["amt"] for v in cats.values()), 2)
+        total_qty = sum(v["qty"] for v in cats.values())
+        out.append({"date": date, "qty": total_qty, "amt": total_amt, "categories": cats})
+    return out
+
+
+def sale_monthly(limit=24) -> list[dict]:
+    """按 月份 × 品类 汇总销售，月份倒序。"""
+    where, args = _sale_where(None, None)
+    with closing(_conn()) as c:
+        rows = c.execute(
+            "SELECT substr(o.pay_time,1,7) m, o.platform_product_id, p.name, "
+            "SUM(o.quantity) qty, SUM(o.seller_amount) amt, COUNT(*) cnt FROM orders o "
+            "LEFT JOIN products p ON p.platform_product_id=o.platform_product_id AND p.shop_id=o.shop_id "
+            f"WHERE {where} GROUP BY substr(o.pay_time,1,7), o.shop_id, o.platform_product_id",
+            args,
+        ).fetchall()
+    monthly = {}
+    for r in rows:
+        cat = _classify_category(r["name"] or "")
+        d = monthly.setdefault(r["m"], {})
+        c2 = d.setdefault(cat, {"qty": 0, "amt": 0.0, "cnt": 0})
+        c2["qty"] += r["qty"] or 0
+        c2["amt"] += r["amt"] or 0.0
+        c2["cnt"] += r["cnt"] or 0
+    out = []
+    for month in sorted(monthly.keys(), reverse=True)[:limit]:
+        cats = monthly[month]
+        total_amt = round(sum(v["amt"] for v in cats.values()), 2)
+        total_qty = sum(v["qty"] for v in cats.values())
+        out.append({"month": month, "qty": total_qty, "amt": total_amt, "categories": cats})
+    return out
+
+
+def sale_sku_detail(start=None, end=None, limit=500) -> list[dict]:
+    """SKU 明细：商品 × spec（SKU）维度销量/金额，含品类，按金额倒序。"""
+    where, args = _sale_where(start, end)
+    with closing(_conn()) as c:
+        rows = c.execute(
+            "SELECT o.shop_id, o.platform_product_id, p.name, o.spec, "
+            "SUM(o.quantity) qty, SUM(o.seller_amount) amt, COUNT(*) cnt FROM orders o "
+            "LEFT JOIN products p ON p.platform_product_id=o.platform_product_id AND p.shop_id=o.shop_id "
+            f"WHERE {where} GROUP BY o.shop_id, o.platform_product_id, o.spec "
+            "ORDER BY amt DESC LIMIT ?",
+            args + [limit],
+        ).fetchall()
+    out = []
+    for r in rows:
+        out.append({
+            "shop_id": r["shop_id"],
+            "platform_product_id": r["platform_product_id"],
+            "name": r["name"] or "",
+            "category": _classify_category(r["name"] or ""),
+            "spec": r["spec"] or "",
+            "qty": r["qty"] or 0,
+            "amt": round(r["amt"] or 0.0, 2),
+            "cnt": r["cnt"] or 0,
+        })
+    return out
 
 
 def _migrate(conn: sqlite3.Connection) -> None:

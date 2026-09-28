@@ -693,6 +693,26 @@ class Handler(BaseHTTPRequestHandler):
             result = catalog.settle_daily_profit(date)
             return _json(self, result)
 
+        if path == "/api/catalog/sale-category" and self.command == "GET":
+            start = qs.get("start", [None])[0]
+            end = qs.get("end", [None])[0]
+            return _json(self, {"items": catalog.sale_category_summary(start, end)})
+
+        if path == "/api/catalog/sale-daily" and self.command == "GET":
+            start = qs.get("start", [None])[0]
+            end = qs.get("end", [None])[0]
+            limit = qs.get("limit", ["90"])[0]
+            return _json(self, {"items": catalog.sale_daily(start, end, int(limit))})
+
+        if path == "/api/catalog/sale-monthly" and self.command == "GET":
+            return _json(self, {"items": catalog.sale_monthly()})
+
+        if path == "/api/catalog/sale-sku" and self.command == "GET":
+            start = qs.get("start", [None])[0]
+            end = qs.get("end", [None])[0]
+            limit = qs.get("limit", ["500"])[0]
+            return _json(self, {"items": catalog.sale_sku_detail(start, end, int(limit))})
+
         if path == "/api/order-time-analysis" and self.command == "GET":
             shop_id = qs.get("shop_id", [None])[0]
             days = qs.get("days", [None])[0]
