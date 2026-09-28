@@ -13,7 +13,7 @@ import catalog
 
 NODE = "/mnt/d/Program Files/nodejs/node.exe"
 JS = r"C:\tmp\fetch_promo_finance.js"
-SHOP_CDP_PORT = {3: 9230, 5: 9232, 6: 9228}  # 1=闲时来登录态丢失(待恢复扫码)
+SHOP_CDP_PORT = {3: 9230, 5: 9232, 6: 9228, 1: 9222}  # 闲时来已恢复(9222)
 
 
 def main():

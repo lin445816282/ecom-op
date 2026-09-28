@@ -437,6 +437,22 @@ CREATE TABLE IF NOT EXISTS fixed_cost_params (
     note TEXT DEFAULT '',
     updated_at TEXT DEFAULT (datetime('now','localtime'))
 );
+
+CREATE TABLE IF NOT EXISTS daily_profit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    shop_id INTEGER NOT NULL,
+    stat_date TEXT NOT NULL,
+    net_income REAL DEFAULT 0,
+    refund_amount REAL DEFAULT 0,
+    promo_spend REAL DEFAULT 0,
+    goods_cost REAL DEFAULT 0,
+    freight_cost REAL DEFAULT 0,
+    gross_profit REAL DEFAULT 0,
+    order_count INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now','localtime')),
+    UNIQUE(shop_id, stat_date)
+);
+CREATE INDEX IF NOT EXISTS idx_daily_profit_date ON daily_profit(stat_date);
 """
 
 
@@ -513,6 +529,14 @@ def get_cost_params() -> dict:
         return {r["key"]: r["value"] for r in rows}
 
 
+def list_cost_params_full() -> list[dict]:
+    """读取固定成本参数完整信息（含 unit/note），供前端展示编辑。"""
+    with closing(_conn()) as c:
+        return [dict(r) for r in c.execute(
+            "SELECT key, value, unit, note, updated_at FROM fixed_cost_params ORDER BY key"
+        ).fetchall()]
+
+
 def calc_hook_cost(n_hooks: int, grade: str = "heavy") -> dict:
     """按固定参数计算挂钩类商品成本/重量/估算运费。
 
@@ -548,6 +572,164 @@ def calc_hook_cost(n_hooks: int, grade: str = "heavy") -> dict:
         "weight": round(weight, 3),
         "freight_est": freight,
     }
+
+
+def _parse_hook_spec(spec: str):
+    """从订单 spec 解析挂钩数量 + 款型。
+
+    spec 如 '经典黑,七钩 【加厚加粗】(2个装)' → (2, 'heavy')
+    返回 (n_hooks, grade)；解析不出默认 (1, 'heavy')。
+    """
+    import re
+    n_hooks = 1
+    grade = "heavy"
+    if not spec:
+        return n_hooks, grade
+    m = re.search(r"(\d+)\s*个装", spec)
+    if m:
+        n_hooks = int(m.group(1))
+    if "加厚加粗" not in spec and "加粗" not in spec:
+        grade = "light"
+    return n_hooks, grade
+
+
+def _hook_freight(weight: float):
+    """按重量档估算运费（与 calc_hook_cost 同口径）。"""
+    if weight <= 0.5:
+        return 2.5
+    if weight <= 1.0:
+        return 3.0
+    if weight <= 2.0:
+        return 4.2
+    if weight <= 3.0:
+        return 5.4
+    return 0.0
+
+
+def settle_daily_profit(stat_date: str) -> dict:
+    """结算某日各店盈利，写入 daily_profit 表（幂等覆盖）。
+
+    口径：
+      净收入 = 非退款单 seller_amount 合计（pay_time 当天）
+      退款   = 退款成功单 seller_amount 合计
+      推广   = promo_daily_bill flow_type=2 当天 amount 合计
+      成本   = 门后挂钩参数模型（spec 含「个装」才计，否则暂 0，铁艺工艺品待匹配进货价）
+      净利   = 净收入 - 推广 - 商品成本 - 运费
+    """
+    with closing(_conn()) as c:
+        p = {r["key"]: r["value"] for r in c.execute("SELECT key, value FROM fixed_cost_params").fetchall()}
+        hook_cost = p.get("hook_cost", 2.2)
+        hook_cost_light = p.get("hook_cost_light", 2.05)
+        box_cost = p.get("box_cost", 0.0)
+        labor_cost = p.get("labor_cost", 0.0)
+        hook_weight = p.get("hook_weight", 0.25)
+        box_weight = p.get("box_weight", 0.08)
+
+        order_rows = c.execute(
+            "SELECT shop_id, aftersale_status, spec, seller_amount FROM orders "
+            "WHERE pay_time LIKE ? AND seller_amount IS NOT NULL",
+            (stat_date + "%",),
+        ).fetchall()
+
+        income = {}   # shop_id -> 净收入
+        refund = {}   # shop_id -> 退款
+        gcost = {}    # shop_id -> 商品成本
+        fcost = {}    # shop_id -> 运费
+        cnt = {}      # shop_id -> 订单数
+        for r in order_rows:
+            sid = r["shop_id"]
+            amt = r["seller_amount"] or 0.0
+            cnt[sid] = cnt.get(sid, 0) + 1
+            if r["aftersale_status"] == "退款成功":
+                refund[sid] = refund.get(sid, 0.0) + amt
+                continue
+            income[sid] = income.get(sid, 0.0) + amt
+            spec = r["spec"] or ""
+            # 门后挂钩类（spec 含「个装」）才按参数模型计成本
+            if "个装" in spec:
+                n_hooks, grade = _parse_hook_spec(spec)
+                hc = hook_cost_light if grade == "light" else hook_cost
+                gcost[sid] = gcost.get(sid, 0.0) + (hc * n_hooks + box_cost + labor_cost)
+                w = hook_weight * n_hooks + box_weight
+                fcost[sid] = fcost.get(sid, 0.0) + _hook_freight(w)
+            # 非挂钩类（铁艺工艺品等）成本暂记 0，待匹配 supplier_products 进货价
+
+        spend = {}
+        for r in c.execute(
+            "SELECT shop_id, SUM(amount) s FROM promo_daily_bill "
+            "WHERE flow_type=2 AND flow_time LIKE ? GROUP BY shop_id",
+            (stat_date + "%",),
+        ).fetchall():
+            spend[r["shop_id"]] = r["s"] or 0.0
+
+        shop_ids = set(income) | set(spend) | set(refund)
+        results = []
+        for sid in shop_ids:
+            inc = round(income.get(sid, 0.0), 2)
+            ref = round(refund.get(sid, 0.0), 2)
+            spd = round(spend.get(sid, 0.0), 2)
+            gc = round(gcost.get(sid, 0.0), 2)
+            fc = round(fcost.get(sid, 0.0), 2)
+            net = round(inc - spd - gc - fc, 2)
+            c.execute(
+                "INSERT INTO daily_profit(shop_id, stat_date, net_income, refund_amount, "
+                "promo_spend, goods_cost, freight_cost, gross_profit, order_count) "
+                "VALUES(?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(shop_id, stat_date) DO UPDATE SET "
+                "net_income=excluded.net_income, refund_amount=excluded.refund_amount, "
+                "promo_spend=excluded.promo_spend, goods_cost=excluded.goods_cost, "
+                "freight_cost=excluded.freight_cost, gross_profit=excluded.gross_profit, "
+                "order_count=excluded.order_count",
+                (sid, stat_date, inc, ref, spd, gc, fc, net, cnt.get(sid, 0)),
+            )
+            results.append({
+                "shop_id": sid, "net_income": inc, "refund": ref, "spend": spd,
+                "goods_cost": gc, "freight_cost": fc, "net_profit": net,
+                "order_count": cnt.get(sid, 0),
+            })
+        c.commit()
+    return {"date": stat_date, "shops": results}
+
+
+def list_daily_profit(shop_id=None, start=None, end=None, limit=90) -> list[dict]:
+    """查询每日盈利，按日期倒序。"""
+    sql = ("SELECT dp.*, sh.name AS shop_name FROM daily_profit dp "
+           "LEFT JOIN shops sh ON sh.id=dp.shop_id WHERE 1=1")
+    args = []
+    if shop_id:
+        sql += " AND dp.shop_id=?"
+        args.append(shop_id)
+    if start:
+        sql += " AND dp.stat_date>=?"
+        args.append(start)
+    if end:
+        sql += " AND dp.stat_date<=?"
+        args.append(end)
+    sql += " ORDER BY dp.stat_date DESC, dp.shop_id ASC LIMIT ?"
+    args.append(limit)
+    with closing(_conn()) as c:
+        return [dict(r) for r in c.execute(sql, args).fetchall()]
+
+
+def update_cost_params(params: dict) -> dict:
+    """更新固定成本参数（前端可编辑）。params: {key: value}，只允许白名单 key。"""
+    allowed = {"hook_cost", "hook_cost_light", "box_cost", "labor_cost", "hook_weight", "box_weight"}
+    updated = {}
+    with closing(_conn()) as c:
+        for k, v in (params or {}).items():
+            if k not in allowed:
+                continue
+            try:
+                val = float(v)
+            except (TypeError, ValueError):
+                continue
+            c.execute(
+                "UPDATE fixed_cost_params SET value=?, updated_at=datetime('now','localtime') WHERE key=?",
+                (val, k),
+            )
+            updated[k] = val
+        c.commit()
+    return updated
 
 
 def _migrate(conn: sqlite3.Connection) -> None:

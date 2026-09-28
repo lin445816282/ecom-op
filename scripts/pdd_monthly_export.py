@@ -24,7 +24,7 @@ SHOP_ID = 3  # 默认如若月下
 CDP_PORT = 9230
 
 # 店铺映射：shop_id -> CDP 端口
-SHOP_CDP_PORT = {3: 9230, 5: 9232, 1: 9234, 6: 9228}
+SHOP_CDP_PORT = {3: 9230, 5: 9232, 1: 9222, 6: 9228}
 
 def last_month_range():
     """返回 (上月1日 00:00, 本月1日 00:00) 字符串，用于 pay_time 过滤。"""
@@ -61,11 +61,26 @@ def to_float(v):
     except Exception:
         return None
 
+def day_range(day=None):
+    """返回 (day 00:00:00, day 23:59:59) 字符串，用于 pay_time 过滤。day 默认昨天。"""
+    if day:
+        d = datetime.strptime(day, "%Y-%m-%d")
+    else:
+        d = datetime.now() - __import__("datetime").timedelta(days=1)
+    return d.strftime("%Y-%m-%d 00:00:00"), d.strftime("%Y-%m-%d 23:59:59")
+
+
 def main():
     shop_id = int(sys.argv[1]) if len(sys.argv) > 1 else SHOP_ID
     cdp_port = SHOP_CDP_PORT.get(shop_id, CDP_PORT)
-    start, end = last_month_range()
-    log = {"month_start": start, "month_end": end, "steps": []}
+    # 支持指定日期范围：argv[2]=start(argv[3]=end)，默认昨天
+    if len(sys.argv) > 2:
+        start, _ = day_range(sys.argv[2])
+        end_day = sys.argv[3] if len(sys.argv) > 3 else sys.argv[2]
+        _, end = day_range(end_day)
+    else:
+        start, end = day_range()
+    log = {"start": start, "end": end, "steps": []}
 
     # 1. 调 node 脚本导出（后台，等报表生成，最多 ~15 分钟）
     log["steps"].append("node 导出中")
@@ -115,8 +130,8 @@ def main():
             if len(line) < 16:
                 continue
             pay_time = clean(line[3])
-            # 过滤上月（pay_time 在上月范围内）
-            if not (start <= pay_time < end):
+            # 过滤指定日期范围（pay_time 在 [start, end] 内）
+            if not (start <= pay_time <= end):
                 continue
             rows.append({
                 "order_no": clean(line[0]),
@@ -183,8 +198,8 @@ def main():
     log["updated"] = updated
     log["shop_total"] = total
     print(json.dumps({
-        "ok": True, "month_start": start, "month_end": end,
-        "month_rows": len(rows), "inserted": inserted, "updated": updated,
+        "ok": True, "start": start, "end": end,
+        "rows": len(rows), "inserted": inserted, "updated": updated,
         "shop_total": total, "jobId": job_id,
     }, ensure_ascii=False))
 

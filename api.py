@@ -8,6 +8,7 @@ import os
 import sys
 import threading
 from urllib.parse import urlparse, parse_qs, quote
+from datetime import datetime, timedelta
 
 import data
 import catalog
@@ -665,7 +666,32 @@ class Handler(BaseHTTPRequestHandler):
             return _json(self, catalog.calc_hook_cost(n))
 
         if path == "/api/cost-params" and self.command == "GET":
-            return _json(self, {"params": catalog.get_cost_params()})
+            return _json(self, {"params": catalog.list_cost_params_full()})
+
+        if path == "/api/cost-params" and self.command == "POST":
+            item = self._read_body()
+            params = item.get("params") or {}
+            updated = catalog.update_cost_params(params)
+            return _json(self, {"ok": True, "updated": updated})
+
+        if path == "/api/catalog/daily-profit" and self.command == "GET":
+            shop_id = qs.get("shop_id", [None])[0]
+            start = qs.get("start", [None])[0]
+            end = qs.get("end", [None])[0]
+            limit = qs.get("limit", ["90"])[0]
+            rows = catalog.list_daily_profit(
+                int(shop_id) if shop_id else None,
+                start, end, int(limit),
+            )
+            return _json(self, {"items": rows})
+
+        if path == "/api/catalog/daily-profit/settle" and self.command == "POST":
+            item = self._read_body()
+            date = str(item.get("date") or "").strip()
+            if not date:
+                date = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+            result = catalog.settle_daily_profit(date)
+            return _json(self, result)
 
         if path == "/api/order-time-analysis" and self.command == "GET":
             shop_id = qs.get("shop_id", [None])[0]

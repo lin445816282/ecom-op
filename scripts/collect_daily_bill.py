@@ -9,7 +9,7 @@ import catalog
 
 NODE = "/mnt/d/Program Files/nodejs/node.exe"
 FETCH_JS = r"C:\tmp\fetch_daily_bill.js"
-SHOP_CDP_PORT = {3: 9230, 5: 9232, 6: 9228}  # 如若月下/嘉裕/欧世艺
+SHOP_CDP_PORT = {3: 9230, 5: 9232, 6: 9228, 1: 9222}  # 如若月下/嘉裕/欧世艺/闲时来
 
 def main():
     shop_id = int(sys.argv[1]) if len(sys.argv) > 1 else 3

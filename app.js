@@ -26,6 +26,7 @@ const VIEWS = {
   freight: {title:'运费结算', sub:'快递账单 + 订单匹配对账，三方比对（打单/订单/运费）预警。'},
   competitors: {title:'竞品监控', sub:'搜索同类商品，对比价格/销量/主图，人工确认竞品。'},
   promofinance: {title:'推广财务', sub:'各店推广账户余额 + 每日花费快照，余额告急预警。'},
+  profit: {title:'盈利看板', sub:'当日净利 = 净收入 − 推广 − 商品成本 − 运费，成本按固定参数模型核算。'},
 };
 
 // 运营指南分组（单一数据源：新增子模块只需在这里加一条，侧边栏子菜单 + 目录页自动生成）
@@ -552,6 +553,119 @@ function setView(view) {
   if (view === 'freight') renderFreightView();
   if (view === 'competitors') renderCompetitorsView();
   if (view === 'promofinance') renderPromoFinance();
+  if (view === 'profit') renderProfit();
+}
+
+// 盈利看板：当日净利 = 净收入 − 推广 − 商品成本 − 运费
+async function renderProfit() {
+  const el = $('#view-profit');
+  const ym = (v) => (v == null || Number.isNaN(Number(v))) ? '—' : '¥' + Number(v).toFixed(2);
+  const sign = (v) => { v = Number(v) || 0; return (v >= 0 ? '' : '−') + '¥' + Math.abs(v).toFixed(2); };
+  el.innerHTML = '<div style="padding:24px;color:#666">加载中…</div>';
+  let items = [], params = [];
+  try {
+    const [resp, paramResp] = await Promise.all([
+      api('/api/catalog/daily-profit?limit=90'),
+      api('/api/cost-params'),
+    ]);
+    items = (resp && resp.items) || [];
+    params = (paramResp && paramResp.params) || [];
+  } catch (e) { items = []; params = []; }
+
+  // 按日期汇总各店净利
+  const byDate = {};
+  items.forEach(r => {
+    if (!byDate[r.stat_date]) byDate[r.stat_date] = { profit: 0 };
+    byDate[r.stat_date].profit += (r.gross_profit || 0);
+  });
+  const dates = Object.keys(byDate).sort().reverse();
+  const sum = (arr) => arr.reduce((s, d) => s + (byDate[d].profit || 0), 0);
+  const card = (label, val) => `
+    <div style="flex:1;min-width:120px;background:#f8fafc;border-radius:12px;padding:16px">
+      <div style="color:#64748b;font-size:12px">${label}</div>
+      <div style="font-size:24px;font-weight:700;margin-top:6px;color:${val >= 0 ? '#0f766e' : '#dc2626'}">${sign(val)}</div>
+    </div>`;
+
+  let html = '<div style="padding:16px 20px">';
+  html += `<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px">
+    ${card('今日净利', dates[0] ? byDate[dates[0]].profit : 0)}
+    ${card('昨日净利', dates[1] ? byDate[dates[1]].profit : 0)}
+    ${card('近7天净利', sum(dates.slice(0, 7)))}
+  </div>`;
+  html += `<div style="display:flex;gap:10px;margin-bottom:16px;align-items:center">
+    <button onclick="settleProfit()" style="background:#0f766e;color:#fff;border:none;padding:8px 16px;border-radius:8px;cursor:pointer;font-size:13px">🔄 结算昨天</button>
+    <span style="color:#94a3b8;font-size:12px">每天 20:30 订单采完后自动结算前一天</span>
+  </div>`;
+
+  if (!items.length) {
+    html += '<div style="padding:32px;color:#999;text-align:center">暂无盈利数据。<br>点「结算昨天」生成，或等每日 20:30 自动结算。</div>';
+  } else {
+    html += `<table style="width:100%;border-collapse:collapse;font-size:12px">
+      <tr style="color:#94a3b8;text-align:left">
+        <th style="padding:8px 6px;font-weight:500">日期</th>
+        <th style="padding:8px 6px;font-weight:500">店铺</th>
+        <th style="padding:8px 6px;font-weight:500;text-align:right">净收入</th>
+        <th style="padding:8px 6px;font-weight:500;text-align:right">退款</th>
+        <th style="padding:8px 6px;font-weight:500;text-align:right">推广</th>
+        <th style="padding:8px 6px;font-weight:500;text-align:right">成本</th>
+        <th style="padding:8px 6px;font-weight:500;text-align:right">运费</th>
+        <th style="padding:8px 6px;font-weight:500;text-align:right">净利</th>
+        <th style="padding:8px 6px;font-weight:500;text-align:right">单数</th>
+      </tr>
+      ${items.map(r => `
+        <tr style="border-top:1px solid #f1f5f9">
+          <td style="padding:7px 6px;color:#475569">${r.stat_date}</td>
+          <td style="padding:7px 6px">${r.shop_name || ('店' + r.shop_id)}</td>
+          <td style="padding:7px 6px;text-align:right">${ym(r.net_income)}</td>
+          <td style="padding:7px 6px;text-align:right;color:#dc2626">${r.refund_amount ? '¥' + Number(r.refund_amount).toFixed(2) : '—'}</td>
+          <td style="padding:7px 6px;text-align:right;color:#ea580c">${ym(r.promo_spend)}</td>
+          <td style="padding:7px 6px;text-align:right">${ym(r.goods_cost)}</td>
+          <td style="padding:7px 6px;text-align:right">${ym(r.freight_cost)}</td>
+          <td style="padding:7px 6px;text-align:right;font-weight:700;color:${(r.gross_profit || 0) >= 0 ? '#0f766e' : '#dc2626'}">${sign(r.gross_profit)}</td>
+          <td style="padding:7px 6px;text-align:right;color:#64748b">${r.order_count}</td>
+        </tr>`).join('')}
+    </table>`;
+  }
+
+  html += `<div class="panel" style="margin-top:20px;padding:16px 18px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <b style="font-size:15px">⚙️ 固定成本参数（门后挂钩成本模型）</b>
+      <button onclick="saveCostParams()" style="background:#2563eb;color:#fff;border:none;padding:7px 14px;border-radius:8px;cursor:pointer;font-size:13px">保存参数</button>
+    </div>
+    <div style="color:#94a3b8;font-size:12px;margin-bottom:12px">单件成本 = 挂钩单价 × 个装数 + 纸箱 + 人工；运费按重量档估算</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:10px">
+      ${params.map(p => `
+        <div style="background:#f8fafc;border-radius:8px;padding:10px 12px">
+          <div style="font-size:12px;color:#475569;font-weight:600">${p.note || p.key}</div>
+          <div style="display:flex;align-items:center;gap:6px;margin-top:6px">
+            <input data-cost-key="${p.key}" type="number" step="0.01" value="${p.value}" style="width:80px;padding:5px 8px;border:1px solid #e2e8f0;border-radius:6px;font-size:13px">
+            <span style="color:#94a3b8;font-size:11px">${p.unit || ''}</span>
+          </div>
+        </div>`).join('')}
+    </div>
+  </div>`;
+
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+async function settleProfit() {
+  toast('结算中…');
+  try {
+    await api('/api/catalog/daily-profit/settle', 'POST', { date: '' });
+    toast('结算完成');
+    renderProfit();
+  } catch (e) { toast('结算失败：' + e.message); }
+}
+
+async function saveCostParams() {
+  const params = {};
+  $$('input[data-cost-key]').forEach(i => params[i.dataset.costKey] = parseFloat(i.value));
+  try {
+    await api('/api/cost-params', 'POST', { params });
+    toast('参数已保存');
+    renderProfit();
+  } catch (e) { toast('保存失败：' + e.message); }
 }
 
 // 推广财务：各店余额 + 每日花费快照 + 余额告警
