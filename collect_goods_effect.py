@@ -24,7 +24,7 @@ DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "cata
 
 SHOP_ID = 1  # 闲时来工艺（默认）
 
-SHOP_CDP_PORT = {5: 9232, 3: 9230, 1: 9234, 6: 9228}  # 嘉裕=9232 / 如若月下=9230 / 闲时来=9234 / 欧世艺=9228
+SHOP_CDP_PORT = {5: 9232, 3: 9230, 1: 9222, 6: 9228}  # 嘉裕=9232 / 如若月下=9230 / 闲时来=9222(edge-cdp-xs) / 欧世艺=9228
 
 FIELD_MAP = {
     "goodsId": "platform_product_id",

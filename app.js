@@ -28,6 +28,7 @@ const VIEWS = {
   promofinance: {title:'推广财务', sub:'各店推广账户余额 + 每日花费快照，余额告急预警。'},
   profit: {title:'盈利看板', sub:'当日净利 = 净收入 − 推广 − 商品成本 − 运费，成本按固定参数模型核算。'},
   sale: {title:'销售看板', sub:'成交订单 SKU → 品类归类，每日/每月销量与金额汇总。'},
+  errors: {title:'错误处理', sub:'上架/采集/发布踩过的坑，对应处理技能 + 出现次数，遇到一次点一次。'},
 };
 
 // 运营指南分组（单一数据源：新增子模块只需在这里加一条，侧边栏子菜单 + 目录页自动生成）
@@ -556,6 +557,88 @@ function setView(view) {
   if (view === 'promofinance') renderPromoFinance();
   if (view === 'profit') renderProfit();
   if (view === 'sale') renderSale();
+  if (view === 'errors') renderErrors();
+}
+
+// 错误处理：错误知识库（错误类型 → 处理技能 + 出现次数，遇到一次点一次）
+async function renderErrors() {
+  const el = $('#view-errors');
+  el.innerHTML = '<div style="padding:24px;color:#666">加载中…</div>';
+  let items = [];
+  try {
+    const resp = await api('/api/errors');
+    items = (resp && resp.items) || [];
+  } catch (e) { items = []; }
+
+  const total = items.reduce((s, it) => s + (Number(it.count) || 0), 0);
+  const rows = items.map(it => `
+    <div style="border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin-bottom:12px;background:#fff">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
+        <div style="flex:1">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <span style="font-weight:700;font-size:15px">${esc(it.error_type)}</span>
+            ${it.skill_name ? `<span style="background:#eef2ff;color:#4f46e5;border-radius:6px;padding:2px 8px;font-size:12px">🛠 ${esc(it.skill_name)}</span>` : ''}
+          </div>
+          ${it.description ? `<div style="color:#64748b;font-size:13px;margin-top:6px">现象：${esc(it.description)}</div>` : ''}
+          ${it.solution ? `<div style="color:#0f766e;font-size:13px;margin-top:4px">方案：${esc(it.solution)}</div>` : ''}
+          <div style="color:#94a3b8;font-size:12px;margin-top:6px">首见 ${it.first_seen || '—'} · 最近 ${it.last_seen || '—'}</div>
+        </div>
+        <div style="text-align:center;min-width:76px">
+          <div style="font-size:28px;font-weight:800;color:${Number(it.count) > 0 ? '#dc2626' : '#94a3b8'}">${it.count || 0}</div>
+          <div style="font-size:12px;color:#94a3b8">次</div>
+          <button class="btn" data-hit="${it.id}" style="margin-top:6px;font-size:12px;padding:4px 10px">+1 记录</button>
+        </div>
+      </div>
+    </div>
+  `).join('');
+
+  el.innerHTML = `
+    <div style="padding:20px;max-width:1000px">
+      <div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap">
+        <div style="flex:1;min-width:140px;background:#f8fafc;border-radius:12px;padding:14px">
+          <div style="color:#64748b;font-size:12px">错误类型数</div>
+          <div style="font-size:24px;font-weight:700;margin-top:4px">${items.length}</div>
+        </div>
+        <div style="flex:1;min-width:140px;background:#f8fafc;border-radius:12px;padding:14px">
+          <div style="color:#64748b;font-size:12px">累计出现次数</div>
+          <div style="font-size:24px;font-weight:700;margin-top:4px;color:#dc2626">${total}</div>
+        </div>
+        <button class="btn primary" id="err-add-btn" style="align-self:center">＋ 新增错误类型</button>
+      </div>
+      <div id="err-add-form" hidden style="border:1px dashed #cbd5e1;border-radius:12px;padding:16px;margin-bottom:16px;background:#f8fafc">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <input id="err-type" placeholder="错误类型（如：图片带logo被驳回）" style="padding:8px;border:1px solid #cbd5e1;border-radius:8px">
+          <input id="err-skill" placeholder="对应处理技能名（如：pdd-goods-publish-cdp）" style="padding:8px;border:1px solid #cbd5e1;border-radius:8px">
+          <input id="err-desc" placeholder="现象描述" style="padding:8px;border:1px solid #cbd5e1;border-radius:8px;grid-column:1/-1">
+          <input id="err-solution" placeholder="处理方案" style="padding:8px;border:1px solid #cbd5e1;border-radius:8px;grid-column:1/-1">
+        </div>
+        <div style="margin-top:10px;display:flex;gap:8px">
+          <button class="btn primary" id="err-save-btn">保存</button>
+          <button class="btn" id="err-cancel-btn">取消</button>
+        </div>
+      </div>
+      <div id="err-list">${rows || '<div class="empty">暂无错误记录，点右上角「新增错误类型」录入第一条。</div>'}</div>
+    </div>
+  `;
+
+  $('#err-add-btn').onclick = () => { $('#err-add-form').hidden = false; };
+  $('#err-cancel-btn').onclick = () => { $('#err-add-form').hidden = true; };
+  $('#err-save-btn').onclick = async () => {
+    const error_type = $('#err-type').value.trim();
+    if (!error_type) { toast('请填错误类型'); return; }
+    const body = {
+      error_type,
+      skill_name: $('#err-skill').value.trim(),
+      description: $('#err-desc').value.trim(),
+      solution: $('#err-solution').value.trim(),
+    };
+    const resp = await api('/api/errors', 'POST', body);
+    if (resp && resp.ok) { toast('已保存'); renderErrors(); } else { toast((resp && resp.error) || '保存失败'); }
+  };
+  $$('#err-list [data-hit]').forEach(btn => btn.onclick = async () => {
+    const resp = await api('/api/errors', 'POST', { action: 'hit', id: Number(btn.dataset.hit) });
+    if (resp && resp.ok) { toast('已记录 +1'); renderErrors(); } else { toast('记录失败'); }
+  });
 }
 
 // 盈利看板：当日净利 = 净收入 − 推广 − 商品成本 − 运费

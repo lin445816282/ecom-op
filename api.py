@@ -108,6 +108,29 @@ class Handler(BaseHTTPRequestHandler):
                 return _json(self, {"ok": True})
             return _json(self, {"error": "口令错误"}, 401)
 
+        # 错误知识库
+        if path == "/api/errors" and self.command == "GET":
+            return _json(self, {"items": catalog.query_errors()})
+
+        if path == "/api/errors" and self.command == "POST":
+            item = self._read_body()
+            action = str(item.get("action") or "").strip()
+            if action == "hit":
+                rec = catalog.hit_error(int(item.get("id") or 0))
+                if rec:
+                    return _json(self, {"ok": True, "item": rec})
+                return _json(self, {"ok": False, "error": "记录不存在"})
+            error_type = str(item.get("error_type") or "").strip()
+            if not error_type:
+                return _json(self, {"ok": False, "error": "错误类型不能为空"})
+            rec = catalog.add_error(
+                error_type,
+                str(item.get("description") or ""),
+                str(item.get("skill_name") or ""),
+                str(item.get("solution") or ""),
+            )
+            return _json(self, {"ok": True, "item": rec})
+
         # 产品
         if path == "/api/products" and self.command == "GET":
             items = [data.enrich_product(data.Product.from_dict(p)) for p in data.load_products()]

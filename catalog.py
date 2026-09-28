@@ -453,6 +453,18 @@ CREATE TABLE IF NOT EXISTS daily_profit (
     UNIQUE(shop_id, stat_date)
 );
 CREATE INDEX IF NOT EXISTS idx_daily_profit_date ON daily_profit(stat_date);
+
+CREATE TABLE IF NOT EXISTS error_knowledge (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    error_type TEXT NOT NULL UNIQUE,
+    description TEXT DEFAULT '',
+    skill_name TEXT DEFAULT '',
+    solution TEXT DEFAULT '',
+    count INTEGER DEFAULT 0,
+    first_seen TEXT DEFAULT '',
+    last_seen TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+);
 """
 
 
@@ -463,6 +475,47 @@ def _conn() -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA busy_timeout = 5000")
     return conn
+
+
+def query_errors() -> list[dict]:
+    """错误知识库列表，按出现次数降序。"""
+    with closing(_conn()) as c:
+        rows = c.execute(
+            "SELECT * FROM error_knowledge ORDER BY count DESC, id DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def add_error(error_type: str, description: str = "", skill_name: str = "",
+              solution: str = "") -> dict:
+    """新增错误类型（幂等：已存在则返回现有记录，不重复插入）。"""
+    with closing(_conn()) as c:
+        c.execute(
+            "INSERT OR IGNORE INTO error_knowledge "
+            "(error_type, description, skill_name, solution, first_seen, last_seen) "
+            "VALUES (?,?,?,?,datetime('now','localtime'),datetime('now','localtime'))",
+            (error_type.strip(), description, skill_name, solution),
+        )
+        c.commit()
+        row = c.execute(
+            "SELECT * FROM error_knowledge WHERE error_type=?", (error_type.strip(),)
+        ).fetchone()
+        return dict(row) if row else {}
+
+
+def hit_error(error_id: int) -> dict:
+    """记录一次错误出现：count+1，更新最近出现时间。"""
+    with closing(_conn()) as c:
+        c.execute(
+            "UPDATE error_knowledge SET count=count+1, "
+            "last_seen=datetime('now','localtime') WHERE id=?",
+            (error_id,),
+        )
+        c.commit()
+        row = c.execute(
+            "SELECT * FROM error_knowledge WHERE id=?", (error_id,)
+        ).fetchone()
+        return dict(row) if row else {}
 
 
 def init_db() -> None:
