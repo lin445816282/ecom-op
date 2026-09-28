@@ -681,7 +681,7 @@ async function renderSale() {
   const el = $('#view-sale');
   const ym = (v) => (v == null || Number.isNaN(Number(v))) ? 0 : Number(v);
   el.innerHTML = '<div style="padding:24px;color:#666">加载中…</div>';
-  let cats = [], monthly = [], skus = [], daily = [];
+  let cats = [], monthly = [], skus = [], daily = [], serverToday = '';
   try {
     const [catResp, monthlyResp, skuResp, dailyResp] = await Promise.all([
       api('/api/catalog/sale-category'),
@@ -693,12 +693,12 @@ async function renderSale() {
     monthly = (monthlyResp && monthlyResp.items) || [];
     skus = (skuResp && skuResp.items) || [];
     daily = (dailyResp && dailyResp.items) || [];
-  } catch (e) { cats = []; monthly = []; skus = []; daily = []; }
+    serverToday = (catResp && catResp.server_today) || '';
+  } catch (e) { cats = []; monthly = []; skus = []; daily = []; serverToday = ''; }
+  const curMonth = (serverToday || '').slice(0, 7);
 
   const totalAmt = cats.reduce((s, c) => s + ym(c.amt), 0);
   const totalQty = cats.reduce((s, c) => s + ym(c.qty), 0);
-  const maxAmt = Math.max(1, ...cats.map(c => ym(c.amt)));
-  const COLOR = ['#2563eb', '#0f766e', '#ea580c', '#7c3aed', '#dc2626', '#0891b2', '#ca8a04', '#16a34a', '#64748b', '#db2777'];
 
   // 汇总卡
   let html = '<div style="padding:16px 20px">';
@@ -708,38 +708,13 @@ async function renderSale() {
     <div style="flex:1;min-width:110px;background:#f8fafc;border-radius:12px;padding:14px"><div style="color:#64748b;font-size:12px">品类数</div><div style="font-size:22px;font-weight:700;margin-top:4px">${cats.length}</div></div>
   </div>`;
 
-  // 品类分布（条形图 + 表格）
+  // 品类分布（条形图 + 表格，日期可选，默认当月）
   html += `<div class="panel" style="padding:16px 18px;margin-bottom:14px">
-    <b style="font-size:15px">🏷️ 品类分布</b>
-    <div style="margin-top:12px">${cats.map((c, i) => {
-      const pct = totalAmt ? (ym(c.amt) / totalAmt * 100) : 0;
-      const color = COLOR[i % COLOR.length];
-      return `<div style="margin-bottom:10px">
-        <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:4px;margin-bottom:4px">
-          <span style="font-size:13px;color:#475569;font-weight:600"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color};margin-right:6px"></span>${c.category}</span>
-          <span style="font-size:12px;color:#64748b">¥${ym(c.amt).toFixed(0)} · ${c.qty}件 · ${pct.toFixed(0)}%</span>
-        </div>
-        <div style="background:#f1f5f9;border-radius:6px;height:16px;overflow:hidden">
-          <div style="height:100%;width:${pct}%;background:${color};border-radius:6px;min-width:2px"></div>
-        </div>
-      </div>`;
-    }).join('')}</div>
-    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:8px;min-width:520px">
-      <tr style="color:#94a3b8;text-align:left">
-        <th style="padding:6px 4px;font-weight:500">品类</th><th style="padding:6px 4px;font-weight:500;text-align:right">销量(件)</th>
-        <th style="padding:6px 4px;font-weight:500;text-align:right">成交额</th><th style="padding:6px 4px;font-weight:500;text-align:right">单数</th>
-        <th style="padding:6px 4px;font-weight:500;text-align:right">商品数</th><th style="padding:6px 4px;font-weight:500;text-align:right">占比</th>
-      </tr>
-      ${cats.map((c, i) => `<tr style="border-top:1px solid #f1f5f9">
-        <td style="padding:6px 4px"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${COLOR[i % COLOR.length]};margin-right:6px"></span>${c.category}</td>
-        <td style="padding:6px 4px;text-align:right">${c.qty}</td>
-        <td style="padding:6px 4px;text-align:right;font-weight:600">¥${ym(c.amt).toFixed(2)}</td>
-        <td style="padding:6px 4px;text-align:right;color:#64748b">${c.cnt}</td>
-        <td style="padding:6px 4px;text-align:right;color:#64748b">${c.products}</td>
-        <td style="padding:6px 4px;text-align:right;color:#64748b">${totalAmt ? (ym(c.amt)/totalAmt*100).toFixed(1) : 0}%</td>
-      </tr>`).join('')}
-    </table>
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+      <b style="font-size:15px">🏷️ 品类分布</b>
+      <input type="month" id="sale-cat-month" value="${curMonth}" style="border:1px solid #e2e8f0;border-radius:8px;padding:6px 10px;font-size:13px;color:#475569;background:#fff;max-width:150px" onchange="loadCategoryDist(this.value)">
     </div>
+    <div id="sale-cat-body" style="margin-top:12px"><div style="padding:16px;color:#94a3b8;text-align:center">加载中…</div></div>
   </div>`;
 
   // 每日明细（可折叠，数据量较大）
@@ -803,7 +778,67 @@ async function renderSale() {
 
   html += '</div>';
   el.innerHTML = html;
+  loadCategoryDist(curMonth); // 品类分布默认加载当月
 }
+
+// 品类分布颜色（renderSale 与 categoryDistBody 共用）
+const SALE_COLOR = ['#2563eb', '#0f766e', '#ea580c', '#7c3aed', '#dc2626', '#0891b2', '#ca8a04', '#16a34a', '#64748b', '#db2777'];
+
+// 品类分布主体（条形图 + 表格）
+function categoryDistBody(cats) {
+  const ym = (v) => (v == null || Number.isNaN(Number(v))) ? 0 : Number(v);
+  if (!cats || !cats.length) return '<div style="padding:24px;color:#94a3b8;text-align:center">该月份暂无成交数据</div>';
+  const totalAmt = cats.reduce((s, c) => s + ym(c.amt), 0);
+  return `
+    <div>${cats.map((c, i) => {
+      const pct = totalAmt ? (ym(c.amt) / totalAmt * 100) : 0;
+      const color = SALE_COLOR[i % SALE_COLOR.length];
+      return `<div style="margin-bottom:10px">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:4px;margin-bottom:4px">
+          <span style="font-size:13px;color:#475569;font-weight:600"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color};margin-right:6px"></span>${c.category}</span>
+          <span style="font-size:12px;color:#64748b">¥${ym(c.amt).toFixed(0)} · ${c.qty}件 · ${pct.toFixed(0)}%</span>
+        </div>
+        <div style="background:#f1f5f9;border-radius:6px;height:16px;overflow:hidden">
+          <div style="height:100%;width:${pct}%;background:${color};border-radius:6px;min-width:2px"></div>
+        </div>
+      </div>`;
+    }).join('')}</div>
+    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:8px;min-width:520px">
+      <tr style="color:#94a3b8;text-align:left">
+        <th style="padding:6px 4px;font-weight:500">品类</th><th style="padding:6px 4px;font-weight:500;text-align:right">销量(件)</th>
+        <th style="padding:6px 4px;font-weight:500;text-align:right">成交额</th><th style="padding:6px 4px;font-weight:500;text-align:right">单数</th>
+        <th style="padding:6px 4px;font-weight:500;text-align:right">商品数</th><th style="padding:6px 4px;font-weight:500;text-align:right">占比</th>
+      </tr>
+      ${cats.map((c, i) => `<tr style="border-top:1px solid #f1f5f9">
+        <td style="padding:6px 4px"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${SALE_COLOR[i % SALE_COLOR.length]};margin-right:6px"></span>${c.category}</td>
+        <td style="padding:6px 4px;text-align:right">${c.qty}</td>
+        <td style="padding:6px 4px;text-align:right;font-weight:600">¥${ym(c.amt).toFixed(2)}</td>
+        <td style="padding:6px 4px;text-align:right;color:#64748b">${c.cnt}</td>
+        <td style="padding:6px 4px;text-align:right;color:#64748b">${c.products}</td>
+        <td style="padding:6px 4px;text-align:right;color:#64748b">${totalAmt ? (ym(c.amt)/totalAmt*100).toFixed(1) : 0}%</td>
+      </tr>`).join('')}
+    </table>
+    </div>`;
+}
+
+// 品类分布切换月份：重查该月 start~end
+window.loadCategoryDist = async function(ymStr) {
+  if (!ymStr) return;
+  const [y, m] = ymStr.split('-').map(Number);
+  const start = ymStr + '-01';
+  const lastDay = new Date(y, m, 0).getDate(); // new Date(y, m, 0) = 当月最后一天（本地时间）
+  const end = ymStr + '-' + String(lastDay).padStart(2, '0');
+  const body = $('#sale-cat-body');
+  if (!body) return;
+  body.innerHTML = '<div style="padding:16px;color:#94a3b8;text-align:center">加载中…</div>';
+  try {
+    const resp = await api(`/api/catalog/sale-category?start=${start}&end=${end}`);
+    const cats = (resp && resp.items) || [];
+    body.innerHTML = categoryDistBody(cats);
+  } catch (e) {
+    body.innerHTML = '<div style="padding:16px;color:#dc2626;text-align:center">加载失败：' + esc(e.message || e) + '</div>';
+  }
+};
 
 // 推广财务：各店余额 + 每日花费快照 + 余额告警
 // 把合并的账单月份（如「2026年02/03/04/05/06/07/08月」）展开成逐月行
