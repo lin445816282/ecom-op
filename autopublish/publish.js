@@ -316,11 +316,18 @@ async function fillByType(c, selector, text){
   const submit=await ev(c,`(()=>{const btn=[...document.querySelectorAll('button')].find(b=>(b.textContent||'').trim().includes('提交并上架'));if(btn){btn.scrollIntoView({block:'center'});btn.click();return 'ok';}return 'no submit btn'})()`);
   log('  提交按钮:', submit);
   if(submit==='ok'){
-    let finalUrl='';
-    for(let i=0;i<40;i++){ await sleep(1000); finalUrl=await ev(c,'location.href'); if(/\/success|goods_add\/success|goods\/list/.test(finalUrl)) break; }
+    let finalUrl=''; let successFlag=false;
+    for(let i=0;i<120;i++){
+      await sleep(1000);
+      finalUrl=await ev(c,'location.href');
+      if(/\/success|goods_add\/success|goods\/list/.test(finalUrl)){ successFlag=true; break; }
+      // 拼多多提交后跳 success 页可能 >40s，额外检测页面「提交成功」文案兜底
+      const t=await ev(c,'document.body.innerText');
+      if(t && /提交成功|发布成功/.test(t)){ successFlag=true; break; }
+    }
     log('  提交结果 URL:', finalUrl);
-    if(/\/success/.test(finalUrl)){ const m=finalUrl.match(/goods_id=(\d+)/); log('✅ 上架成功，商品ID:', m?m[1]:'未知'); log('RESULT_SUCCESS goods_id='+(m?m[1]:'')); }
-    else log('⚠️ 提交后未跳转 success，请检查页面（可能已成功跳商品列表，或需人工确认）');
+    if(successFlag){ const m=finalUrl.match(/goods_id=(\d+)/); log('✅ 上架成功，商品ID:', m?m[1]:'未知'); log('RESULT_SUCCESS goods_id='+(m?m[1]:'')); }
+    else log('⚠️ 提交后 120 秒未确认成功，请人工检查页面');
   } else {
     log('⚠️ 未找到提交按钮，请人工检查页面');
   }
