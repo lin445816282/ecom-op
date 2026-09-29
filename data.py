@@ -2328,19 +2328,23 @@ if __name__ == "__main__":
 
 
 def calc_pricing(cost: float, profit_rate: float = 0.2, roi: float = 2.0,
+                 aftersale_rate: float = 0.05, freight: float = 3.0,
                  danmai_mult: float = 1.5, ref_mult: float = 1.2) -> dict:
-    """固定定价公式：倍率 = 1/(1-利润率-1/投产比)。
+    """固定定价公式：成本 = 进价 + 运费，售价 = 成本 ÷ (1 − 利润率 − 1/投产比 − 售后率)。
 
-    售价 = 成本 ÷ (1 − 利润率 − 1/投产比)
+    售价的构成（占售价比例）：
       - 1/投产比 = 广告费占售价比例（投产比2 → 广告费占50%）
-      - 利润率20% + 广告费50% → 成本占30% → 倍率 1/0.3 ≈ 3.33
+      - 利润率 = 目标毛利率
+      - 售后率 = 售后损耗占售价比例（退款/退货/仅退款吃掉的比例）
+      - 剩余 = 成本（进价+运费）占售价比例
     拼单价 = 成本 × 倍率；单买价 = 拼单价 × 单买倍数；参考价 = 单买价 × 参考倍数
     """
-    denom = 1.0 - profit_rate - 1.0 / roi
+    total_cost = cost + freight  # 成本价 = 进价 + 每单运费
+    denom = 1.0 - profit_rate - 1.0 / roi - aftersale_rate
     if denom <= 0.05:
-        denom = 0.05  # 防除零/负倍率（利润率+广告费率过高的兜底）
+        denom = 0.05  # 防除零/负倍率（利润率+广告费率+售后率过高的兜底）
     k = 1.0 / denom
-    pdd = round(cost * k, 1)
+    pdd = round(total_cost * k, 1)
     danmai = round(pdd * danmai_mult, 1)
     ref = round(danmai * ref_mult, 1)
     return {"pdd": pdd, "danmai": danmai, "refPrice": ref}
@@ -2361,6 +2365,8 @@ def ai_generate_publish_config(product: dict, pricing: dict = None) -> dict:
     pricing = pricing or {}
     profit_rate = float(pricing.get("profit_rate", 0.2))
     roi = float(pricing.get("roi", 2.0))
+    aftersale_rate = float(pricing.get("aftersale_rate", 0.05))
+    freight = float(pricing.get("freight", 3.0))
     danmai_mult = float(pricing.get("danmai_mult", 1.5))
     ref_mult = float(pricing.get("ref_mult", 1.2))
     title = (product.get("title") or "").strip()
@@ -2454,7 +2460,7 @@ def ai_generate_publish_config(product: dict, pricing: dict = None) -> dict:
             cost = float(c or 0)
         if cost <= 0:
             continue
-        p = calc_pricing(cost, profit_rate, roi, danmai_mult, ref_mult)
+        p = calc_pricing(cost, profit_rate, roi, aftersale_rate, freight, danmai_mult, ref_mult)
         new_pb[str(spec2_val)] = {"pdd": p["pdd"], "danmai": p["danmai"]}
         max_ref = max(max_ref, p["refPrice"])
     if not new_pb:

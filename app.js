@@ -663,9 +663,11 @@ async function renderAutopublish() {
           <button class="btn primary" id="ap-start-btn" style="padding:11px 22px;font-size:14px">开始上架</button>
         </div>
         <div style="display:flex;gap:14px;align-items:center;margin-top:12px;flex-wrap:wrap;font-size:13px;color:#475569">
-          <span style="font-weight:600;color:#334155">定价：拼单价 = 进价 ÷ (1 − 利润率 − 1÷投产比)</span>
+          <span style="font-weight:600;color:#334155">定价：拼单价 = (进价+运费) ÷ (1 − 利润率 − 1÷投产比 − 售后率)</span>
           <label style="display:flex;align-items:center;gap:5px">利润率 <input id="ap-profit" type="number" value="20" step="1" min="1" max="90" style="width:56px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px">%</label>
           <label style="display:flex;align-items:center;gap:5px">投产比 <input id="ap-roi" type="number" value="2" step="0.1" min="1.1" style="width:56px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px"></label>
+          <label style="display:flex;align-items:center;gap:5px">售后率 <input id="ap-aftersale" type="number" value="5" step="1" min="0" max="50" style="width:56px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px">%</label>
+          <label style="display:flex;align-items:center;gap:5px">运费 <input id="ap-freight" type="number" value="3" step="0.5" min="0" style="width:56px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px">元</label>
           <label style="display:flex;align-items:center;gap:5px">单买倍数 <input id="ap-danmai" type="number" value="1.5" step="0.1" min="1" style="width:56px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px"></label>
           <span id="ap-price-preview" style="color:#2563eb;font-size:12px;font-weight:600"></span>
         </div>
@@ -681,13 +683,22 @@ async function renderAutopublish() {
   const updatePricePreview = () => {
     const profit = (Number($('#ap-profit').value) || 20) / 100;
     const roi = Number($('#ap-roi').value) || 2;
+    const aftersale = (Number($('#ap-aftersale').value) || 5) / 100;
+    const freight = Number($('#ap-freight').value) || 3;
     const danmaiMult = Number($('#ap-danmai').value) || 1.5;
-    const denom = 1 - profit - 1 / roi;
+    const denom = 1 - profit - 1 / roi - aftersale;
     const k = denom > 0.05 ? (1 / denom) : 0;
     const el = $('#ap-price-preview');
-    if (el) el.textContent = k > 0 ? `→ 倍率 ${k.toFixed(2)}（进价1元 → 拼单价${k.toFixed(2)}元）` : '⚠️ 利润率+1/投产比 ≥ 1，无法定价';
+    if (el) {
+      if (k > 0) {
+        const sample = ((1 + freight) * k).toFixed(1);
+        el.textContent = `→ 倍率 ${k.toFixed(2)}（进价1元+运费${freight}元 → 拼单价${sample}元）`;
+      } else {
+        el.textContent = '⚠️ 利润率+1/投产比+售后率 ≥ 1，无法定价';
+      }
+    }
   };
-  ['ap-profit', 'ap-roi', 'ap-danmai'].forEach(id => {
+  ['ap-profit', 'ap-roi', 'ap-aftersale', 'ap-freight', 'ap-danmai'].forEach(id => {
     const inp = $('#' + id);
     if (inp) inp.oninput = updatePricePreview;
   });
@@ -700,6 +711,8 @@ async function renderAutopublish() {
     const pricing = {
       profit_rate: (Number($('#ap-profit').value) || 20) / 100,
       roi: Number($('#ap-roi').value) || 2,
+      aftersale_rate: (Number($('#ap-aftersale').value) || 5) / 100,
+      freight: Number($('#ap-freight').value) || 3,
       danmai_mult: Number($('#ap-danmai').value) || 1.5,
     };
     $('#ap-start-btn').disabled = true;
