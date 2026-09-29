@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 
 import data
 import catalog
+import import_freight
 
 PORT = 8765
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -864,6 +865,38 @@ class Handler(BaseHTTPRequestHandler):
                 item.get("shop_ids") or "",
                 item.get("freight_account") or "",
             )})
+
+        if path == "/api/freight/import" and self.command == "POST":
+            body = self._read_body()
+            b64 = (body.get("data") or "").strip()
+            if not b64:
+                return _json(self, {"ok": False, "error": "缺少文件数据"}, 400)
+            import base64
+            import tempfile
+            try:
+                raw = base64.b64decode(b64)
+            except Exception:
+                return _json(self, {"ok": False, "error": "文件数据无效（base64 解码失败）"}, 400)
+            tmp_path = None
+            try:
+                fd, tmp_path = tempfile.mkstemp(suffix=".xlsx")
+                with os.fdopen(fd, "wb") as f:
+                    f.write(raw)
+                rows = import_freight.parse_zt_bill(tmp_path)
+            except ValueError as e:
+                return _json(self, {"ok": False, "error": str(e)}, 400)
+            except Exception as e:
+                return _json(self, {"ok": False, "error": "解析失败：" + str(e)}, 400)
+            finally:
+                if tmp_path and os.path.exists(tmp_path):
+                    try:
+                        os.remove(tmp_path)
+                    except OSError:
+                        pass
+            if not rows:
+                return _json(self, {"ok": False, "error": "未解析到运费明细（请确认是中通账单 xlsx，明细 sheet 含「运单号」列）"}, 400)
+            res = catalog.import_freight(rows)
+            return _json(self, {"ok": True, **res})
 
         if path.startswith("/api/pack-records/") and self.command == "DELETE":
             rid = path.split("/")[-1]

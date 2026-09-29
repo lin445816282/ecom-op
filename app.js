@@ -2163,7 +2163,7 @@ async function loadFreight(month, shop) {
 function renderFreightPanel(freightEl) {
   const fr = catalogCache.freight;
   if (!fr || fr.total <= 0) {
-    freightEl.innerHTML = '<div class="empty">暂无运费账单。用 import_freight.py 导入快递账单 xlsx。</div>';
+    freightEl.innerHTML = '<div class="empty">暂无运费账单。<div style="margin-top:10px"><button class="btn sm primary" onclick="importFreightBill()">⬆ 导入中通账单 xlsx</button></div></div>';
     return;
   }
   const months = (fr.monthly || []).map(m => m.ym);
@@ -2247,6 +2247,7 @@ function renderFreightPanel(freightEl) {
     </div>
     ${unmatched > 0 ? `<div class="callout">⚠️ 还有 ${unmatched} 单运费未匹配到订单（多为对应月份订单尚未导入）。补导订单后点「🔁 重新匹配」。</div>` : `<div class="callout" style="border-color:var(--green)">✅ 全部运费已匹配订单</div>`}
     <div style="display:flex;gap:8px;margin:10px 0 14px;flex-wrap:wrap">
+      <button class="btn sm" data-freight-import>⬆ 导入账单</button>
       <button class="btn sm" data-freight-rematch>🔁 重新匹配</button>
       <button class="btn sm" data-freight-export>⬇ 导出运费</button>
     </div>
@@ -2271,6 +2272,7 @@ function renderFreightPanel(freightEl) {
     ${cmpHTML}`;
   freightEl.querySelector('[data-freight-month]').onchange = e => loadFreight(e.target.value, catalogCache.freightShop);
   freightEl.querySelector('[data-freight-shop]').onchange = e => loadFreight(catalogCache.freightMonth, e.target.value);
+  freightEl.querySelector('[data-freight-import]').onclick = () => importFreightBill();
   freightEl.querySelector('[data-freight-rematch]').onclick = async () => {
     try {
       const r = await api('/api/catalog/freight/match', 'POST');
@@ -2282,6 +2284,36 @@ function renderFreightPanel(freightEl) {
   freightEl.querySelector('[data-freight-export]').onclick = () => {
     window.open(BASE + '/api/catalog/export?type=freight', '_blank');
   };
+}
+
+async function importFreightBill() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  input.onchange = async () => {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    let b64;
+    try {
+      b64 = await new Promise((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve(String(fr.result).split(',')[1] || '');
+        fr.onerror = () => reject(new Error('文件读取失败'));
+        fr.readAsDataURL(file);
+      });
+    } catch (e) { toast(e.message); return; }
+    toast('⏳ 解析账单中…');
+    try {
+      const r = await api('/api/freight/import', 'POST', { data: b64 });
+      if (r.ok) {
+        toast(`导入成功：${r.imported} 单（跳过 ${r.skipped}），自动匹配 ${r.matched} 单`);
+        await renderFreightView();
+      } else {
+        toast('导入失败：' + (r.error || '未知'));
+      }
+    } catch (e) { toast(e.message); }
+  };
+  input.click();
 }
 
 
