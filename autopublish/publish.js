@@ -249,6 +249,33 @@ async function fillByType(c, selector, text){
     filledRows++;
   }
   log('  已填', filledRows, '行 / 共', totalSku, '行');
+  // 补填：首行库存常因「滚动到底→scrollIntoView回滚」焦点丢失而漏填，检查所有行补填空的库存/价格单元格
+  for(let pass=0; pass<3; pass++){
+    const emptyCells = await ev(c, `(()=>{
+      const inps=[...document.querySelectorAll('input[placeholder="请输入"]')];
+      const out=[];
+      for(let i=0;i<inps.length;i++){
+        if(i%4===3) continue; // 跳过规格编码列
+        if(!inps[i].value) out.push(i);
+      }
+      return JSON.stringify(out);
+    })()`);
+    let empties=[];
+    try{ empties=JSON.parse(emptyCells||'[]'); }catch(e){}
+    if(!empties.length) break;
+    for(const idx of empties){
+      const row = Math.floor(idx/4);
+      const col = idx%4;
+      const pr = skuRows[row] ? skuRows[row].price : {pdd:0,danmai:0};
+      const val = col===0 ? String(cfg.stock) : col===1 ? String(pr.pdd) : String(pr.danmai);
+      if(!val) continue;
+      await ev(c,`(()=>{const inp=[...document.querySelectorAll('input[placeholder="请输入"]')][${idx}];if(!inp)return 'no';inp.scrollIntoView({block:'center'});inp.click();inp.focus();return 'ok'})()`);
+      await sleep(400);
+      await c.send('Input.insertText',{text:val});
+      await sleep(300);
+    }
+    log('  补填', empties.length, '个空单元格');
+  }
 
   // ===== Step 6: 上传规格预览图（逐个，每次找第一个未上传行） =====
   log('[6/8] 上传规格预览图');
