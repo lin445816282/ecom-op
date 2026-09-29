@@ -104,26 +104,35 @@ async function fillByType(c, selector, text){
     await sleep(6000);
     await fillByType(c, 'input[placeholder="请输入关键词搜索分类"]', cfg.categoryKeyword);
     await sleep(2500);
-    // 优先「最近使用的分类」（choose-category），其次搜索结果
+    // 模糊匹配类目：精确 → 前两级前缀+最后级关键词 → 前两级前缀 → 最后级关键词
     const sel=await ev(c,`(()=>{
       const want=${JSON.stringify(cfg.categoryPath)};
-      // 1. 最近使用的分类
-      let el=[...document.querySelectorAll('.choose-category')].find(e=>(e.textContent||'').trim().includes(want));
-      // 2. 搜索项
-      if(!el) el=[...document.querySelectorAll('[class*="searchItem"]')].find(e=>(e.textContent||'').trim()===want);
-      // 3. 兜底：全页文本精确匹配
-      if(!el) el=[...document.querySelectorAll('div,li,span,a')].find(e=>(e.textContent||'').trim()===want);
+      const parts = want.split(' > ');
+      const prefix = parts.length >= 2 ? parts.slice(0,2).join(' > ') : want;
+      const lastWord = parts[parts.length-1] || '';
+      const cands = [...document.querySelectorAll('.choose-category,[class*="searchItem"]')];
+      const norm = e => (e.textContent||'').trim();
+      // 1. 精确匹配完整路径
+      let el = cands.find(e=>norm(e)===want);
+      // 2. 前两级前缀 + 最后级关键词包含
+      if(!el) el = cands.find(e=>{const t=norm(e); return t.startsWith(prefix) && t.includes(lastWord);});
+      // 3. 前两级前缀（取第一个，拼多多搜索结果按相关度排序）
+      if(!el) el = cands.find(e=>norm(e).startsWith(prefix));
+      // 4. 最后级关键词包含
+      if(!el) el = cands.find(e=>norm(e).includes(lastWord));
       if(el){ el.scrollIntoView({block:'center'}); el.click(); return 'ok'; }
       return 'no category';
     })()`);
     log('  类目选择:', sel);
+    if(sel!=='ok'){ log('❌ 类目未匹配，终止（类目路径与拼多多实际不一致，需人工确认）'); c.ws.close(); process.exit(1); }
     await sleep(2000);
     const confirm=await ev(c,`(()=>{const btn=[...document.querySelectorAll('button')].find(b=>(b.textContent||'').trim()==='确认发布该类商品');if(btn){btn.click();return 'ok';}return 'no confirm'})()`);
     log('  类目确认:', confirm);
+    if(confirm!=='ok'){ log('❌ 类目确认按钮未找到，终止'); c.ws.close(); process.exit(1); }
     await sleep(6000);
     const href=await ev(c,'location.href');
     log('  发布页:', href);
-    if(!href || !/goods_add/.test(href)){ log('⚠️ 类目选择未成功跳转发布页'); }
+    if(!href || !/goods_add\/index/.test(href)){ log('❌ 未跳转发布页，终止'); c.ws.close(); process.exit(1); }
   }
 
   // ===== 当前页面标题/URL =====
@@ -189,52 +198,68 @@ async function fillByType(c, selector, text){
     log(`  规格${si+1}[${spec.type}]: 填 ${filled}/${spec.values.length}`);
   }
 
+  // ===== 构造 SKU 行（统一 1 维 / 2 维规格） =====
+  const specsArr = cfg.specs || [];
+  const skuRows = [];
+  if(specsArr.length <= 1){
+    // 1 维规格：每个规格值是独立 SKU 行，价格和预览图都按该值取
+    const spec = specsArr[0] || {values: []};
+    for(const v of spec.values){
+      const price = cfg.priceBySpec2[v] || {pdd: 0, danmai: 0};
+      const img = cfg.previewImages[v] || cfg.images[0];
+      skuRows.push({price, img});
+    }
+  } else {
+    // 2 维规格：笛卡尔积，价格按规格2值，预览图按规格1值
+    const spec1 = specsArr[0].values, spec2 = specsArr[1].values;
+    for(const v1 of spec1){
+      for(const v2 of spec2){
+        const price = cfg.priceBySpec2[v2] || {pdd: 0, danmai: 0};
+        const img = cfg.previewImages[v1] || cfg.images[0];
+        skuRows.push({price, img});
+      }
+    }
+  }
+  const totalSku = skuRows.length;
+  log('  SKU 共', totalSku, '行（', specsArr.length, '维规格）');
+
   // ===== Step 5: 填价格库存（x 坐标精确匹配列） =====
   log('[5/8] 填价格库存');
   await ev(c,`window.scrollTo(0, document.body.scrollHeight)`);
   await sleep(2000);
-  const spec1=cfg.specs[0].values, spec2=cfg.specs[1].values;
-  const totalRows=spec1.length*spec2.length;
   // 每行 4 个「请输入」：库存(x~605)/拼单价(x~709)/单买价(x~877)/规格编码(x~1131)
   let filledRows=0;
-  for(const v1 of spec1){
-    for(const v2 of spec2){
-      const price=cfg.priceBySpec2[v2] || {pdd:0, danmai:0};
-      const rowVals=[String(cfg.stock), String(price.pdd), String(price.danmai)];
-      // 定位当前行的 3 个输入（按 y 坐标分组，取未填的行的前3个「请输入」）
-      const baseIdx = filledRows*4;
-      for(let col=0; col<3; col++){
-        const gidx = baseIdx + col;
-        const f=await ev(c,`(()=>{const inps=[...document.querySelectorAll('input[placeholder="请输入"]')];const inp=inps[${gidx}];if(!inp)return 'no';inp.scrollIntoView({block:'center'});inp.click();inp.focus();return 'ok'})()`);
-        if(f==='ok'){ await sleep(200); await c.send('Input.insertText',{text:rowVals[col]}); await sleep(150); }
-        else log(`  ⚠️ 行${filledRows} col${col} 无输入框`);
-      }
-      filledRows++;
+  for(let i=0; i<skuRows.length; i++){
+    const price = skuRows[i].price;
+    const rowVals=[String(cfg.stock), String(price.pdd), String(price.danmai)];
+    const baseIdx = filledRows*4;
+    for(let col=0; col<3; col++){
+      const gidx = baseIdx + col;
+      const f=await ev(c,`(()=>{const inps=[...document.querySelectorAll('input[placeholder="请输入"]')];const inp=inps[${gidx}];if(!inp)return 'no';inp.scrollIntoView({block:'center'});inp.click();inp.focus();return 'ok'})()`);
+      if(f==='ok'){ await sleep(200); await c.send('Input.insertText',{text:rowVals[col]}); await sleep(150); }
+      else log(`  ⚠️ 行${filledRows} col${col} 无输入框`);
     }
+    filledRows++;
   }
-  log('  已填', filledRows, '行 / 共', totalRows, '行');
+  log('  已填', filledRows, '行 / 共', totalSku, '行');
 
   // ===== Step 6: 上传规格预览图（逐个，每次找第一个未上传行） =====
   log('[6/8] 上传规格预览图');
   await ev(c,`window.scrollTo(0, document.body.scrollHeight)`);
   await sleep(1500);
-  const totalSku = spec1.length * spec2.length;
   let k=0;
-  for(const v1 of spec1){
-    const img=cfg.previewImages[v1]||cfg.images[0];
-    for(const v2 of spec2){
-      if(k>=totalSku) break;
-      // 找第一个含 file input 的 goods-sku-img（即当前未上传的行）
-      const found=await ev(c,`(()=>{const imgs=[...document.querySelectorAll('.goods-sku-img')];const t=imgs.find(e=>e.querySelector('input[type="file"]'));if(!t)return 'no empty';t.scrollIntoView({block:'center'});return 'ok'})()`);
-      if(found!=='ok'){ log('  ⚠️ 第'+(k+1)+'行无未上传槽位（可能已传满）'); break; }
-      await sleep(400);
-      const doc3=await c.send('DOM.getDocument',{depth:3});
-      const qfi=await c.send('DOM.querySelector',{nodeId:doc3.root.nodeId, selector:'.goods-sku-img input[type="file"]'});
-      if(!qfi || !qfi.nodeId){ log('  ⚠️ 定位 file input 失败'); break; }
-      await c.send('DOM.setFileInputFiles',{nodeId:qfi.nodeId, files:[img]});
-      await sleep(800);
-      k++;
-    }
+  for(const row of skuRows){
+    if(k>=totalSku) break;
+    // 找第一个含 file input 的 goods-sku-img（即当前未上传的行）
+    const found=await ev(c,`(()=>{const imgs=[...document.querySelectorAll('.goods-sku-img')];const t=imgs.find(e=>e.querySelector('input[type="file"]'));if(!t)return 'no empty';t.scrollIntoView({block:'center'});return 'ok'})()`);
+    if(found!=='ok'){ log('  ⚠️ 第'+(k+1)+'行无未上传槽位（可能已传满）'); break; }
+    await sleep(400);
+    const doc3=await c.send('DOM.getDocument',{depth:3});
+    const qfi=await c.send('DOM.querySelector',{nodeId:doc3.root.nodeId, selector:'.goods-sku-img input[type="file"]'});
+    if(!qfi || !qfi.nodeId){ log('  ⚠️ 定位 file input 失败'); break; }
+    await c.send('DOM.setFileInputFiles',{nodeId:qfi.nodeId, files:[row.img]});
+    await sleep(800);
+    k++;
   }
   log('  预览图已传', k, '张 / 共', totalSku, '张');
 
