@@ -659,7 +659,7 @@ async function renderAutopublish() {
           <select id="ap-shop" style="padding:11px 12px;border:1px solid #cbd5e1;border-radius:10px;font-size:14px;background:#fff">
             <option value="5">嘉裕工艺品(9232)</option>
             <option value="3">如若月下(9230)</option>
-            <option value="1">闲时来(9222)</option>
+            <option value="1">闲时来(9234)</option>
             <option value="6">欧世艺(9228)</option>
           </select>
           <button class="btn primary" id="ap-start-btn" style="padding:11px 22px;font-size:14px">开始上架</button>

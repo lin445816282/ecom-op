@@ -19,7 +19,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROMOTION_HISTORY_PATH = os.path.expanduser("~/.hermes/pdd_promotion_history.json")
 
 # 店铺 → 拼多多 CDP 端口（Edge 独立 profile，详见 pdd-promotion-cdp skill）
-SHOP_CDP_PORT = {5: 9232, 3: 9230, 1: 9222, 6: 9228}
+# 端口对齐 launch_4shops.ps1：9232=嘉裕, 9230=如若月下, 9234=闲时来, 9228=欧世艺
+SHOP_CDP_PORT = {5: 9232, 3: 9230, 1: 9234, 6: 9228}
 NODE_EXE = "/mnt/d/Program Files/nodejs/node.exe"
 PDD_SET_TITLE_JS = r"C:\tmp\pdd_set_titles.js"
 # 一键上架：执行层脚本目录（WSL 路径 / Windows 路径，node.exe 只能吃 Windows 路径）
@@ -1045,6 +1046,9 @@ class Handler(BaseHTTPRequestHandler):
             if calc is None:
                 return _json(self, {"ok": False, "error": "未匹配到报价单地区"}, 400)
             return _json(self, {"ok": True, **calc})
+
+        if path == "/api/freight/rebuild-weights" and self.command == "POST":
+            return _json(self, {"ok": True, **catalog.rebuild_sku_weights()})
 
         if path == "/api/catalog/suppliers" and self.command == "GET":
             return _json(self, {"items": catalog.list_suppliers()})
