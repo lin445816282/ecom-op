@@ -1382,6 +1382,75 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/published-goods/image" and self.command == "GET":
             return self._serve_pdd_image(qs.get("path", [""])[0])
 
+        # ------------------------- AI老板经营台账（独立记账，不混现有系统） -------------------------
+        if path == "/api/aiboss" and self.command == "GET":
+            return _json(self, {
+                "items": catalog.list_ai_boss_items(),
+                "orders": catalog.list_ai_boss_orders(),
+                "summary": catalog.ai_boss_summary(),
+            })
+
+        if path == "/api/aiboss/items" and self.command == "POST":
+            item = self._read_body()
+            title = str(item.get("title") or "").strip()
+            if not title:
+                return _json(self, {"error": "请填商品标题"}, 400)
+            r = catalog.add_ai_boss_item(
+                title=title,
+                source_url=str(item.get("source_url") or "").strip(),
+                cost=float(item.get("cost") or 0),
+                sale_price=float(item.get("sale_price") or 0),
+                note=str(item.get("note") or "").strip(),
+            )
+            return _json(self, {"ok": True, "item": r})
+
+        if path.startswith("/api/aiboss/items/") and self.command == "POST":
+            try:
+                item_id = int(path.rstrip("/").rsplit("/", 1)[-1])
+            except ValueError:
+                return _json(self, {"error": "非法 id"}, 400)
+            item = self._read_body()
+            action = str(item.get("_action") or "update")
+            if action == "delete":
+                catalog.delete_ai_boss_item(item_id)
+                return _json(self, {"ok": True})
+            fields = {}
+            for k in ("title", "source_url", "cost", "sale_price", "status", "note"):
+                if k in item:
+                    fields[k] = item[k]
+            r = catalog.update_ai_boss_item(item_id, **fields)
+            return _json(self, {"ok": True, "item": r})
+
+        if path == "/api/aiboss/orders" and self.command == "POST":
+            item = self._read_body()
+            title = str(item.get("title") or "").strip()
+            if not title:
+                return _json(self, {"error": "请填商品标题"}, 400)
+            r = catalog.add_ai_boss_order(
+                item_id=item.get("item_id"),
+                title=title,
+                qty=int(item.get("qty") or 1),
+                cost=float(item.get("cost") or 0),
+                sale_price=float(item.get("sale_price") or 0),
+                freight=float(item.get("freight") or 0),
+                note=str(item.get("note") or "").strip(),
+            )
+            return _json(self, {"ok": True, "order": r})
+
+        if path.startswith("/api/aiboss/orders/") and self.command == "POST":
+            # 填单号 = 真实发货（profit 已在出单时由后端算好，这里只记单号+改状态）
+            parts = path.rstrip("/").split("/")
+            try:
+                order_id = int(parts[-1])
+            except ValueError:
+                return _json(self, {"error": "非法 id"}, 400)
+            item = self._read_body()
+            tracking_no = str(item.get("tracking_no") or "").strip()
+            if not tracking_no:
+                return _json(self, {"error": "请填单号"}, 400)
+            r = catalog.fill_ai_boss_tracking(order_id, tracking_no)
+            return _json(self, {"ok": True, "order": r})
+
         # 静态页面
         if path in ("/", "/index.html") and self.command == "GET":
             return self._serve_file("index.html", "text/html; charset=utf-8")

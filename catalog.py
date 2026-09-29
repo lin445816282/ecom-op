@@ -527,6 +527,34 @@ CREATE TABLE IF NOT EXISTS published_goods (
 );
 CREATE INDEX IF NOT EXISTS idx_published_goods_status ON published_goods(status);
 CREATE INDEX IF NOT EXISTS idx_published_goods_shop ON published_goods(shop_id);
+
+CREATE TABLE IF NOT EXISTS ai_boss_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    source_url TEXT DEFAULT '',
+    cost REAL DEFAULT 0,
+    sale_price REAL DEFAULT 0,
+    status TEXT DEFAULT 'planning',
+    note TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_ai_boss_items_status ON ai_boss_items(status);
+
+CREATE TABLE IF NOT EXISTS ai_boss_orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id INTEGER,
+    title TEXT NOT NULL,
+    qty INTEGER DEFAULT 1,
+    cost REAL DEFAULT 0,
+    sale_price REAL DEFAULT 0,
+    freight REAL DEFAULT 0,
+    profit REAL DEFAULT 0,
+    tracking_no TEXT DEFAULT '',
+    status TEXT DEFAULT 'pending',
+    note TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_ai_boss_orders_status ON ai_boss_orders(status);
 """
 
 
@@ -4898,4 +4926,111 @@ def list_buyer_reviews(goods_id: str = None) -> list[dict]:
                     d[k] = []
             out.append(d)
         return out
+
+
+# ===================== AI老板经营台账（独立记账，不混现有系统） =====================
+
+def list_ai_boss_items(status: str = None) -> list[dict]:
+    with closing(_conn()) as c:
+        if status:
+            rows = c.execute("SELECT * FROM ai_boss_items WHERE status=? ORDER BY id DESC", (status,)).fetchall()
+        else:
+            rows = c.execute("SELECT * FROM ai_boss_items ORDER BY id DESC").fetchall()
+        return [dict(r) for r in rows]
+
+
+def add_ai_boss_item(title: str, source_url: str = "", cost: float = 0, sale_price: float = 0, note: str = "") -> dict:
+    with closing(_conn()) as c:
+        cur = c.execute(
+            "INSERT INTO ai_boss_items(title, source_url, cost, sale_price, note) VALUES(?,?,?,?,?)",
+            (title, source_url, cost, sale_price, note),
+        )
+        c.commit()
+        row = c.execute("SELECT * FROM ai_boss_items WHERE id=?", (cur.lastrowid,)).fetchone()
+        return dict(row) if row else {}
+
+
+def update_ai_boss_item(item_id: int, **fields) -> dict:
+    allowed = {"title", "source_url", "cost", "sale_price", "status", "note"}
+    sets, vals = [], []
+    for k, v in fields.items():
+        if k in allowed:
+            sets.append(f"{k}=?")
+            vals.append(v)
+    if not sets:
+        return {}
+    with closing(_conn()) as c:
+        c.execute(f"UPDATE ai_boss_items SET {', '.join(sets)} WHERE id=?", vals + [item_id])
+        c.commit()
+        row = c.execute("SELECT * FROM ai_boss_items WHERE id=?", (item_id,)).fetchone()
+        return dict(row) if row else {}
+
+
+def delete_ai_boss_item(item_id: int) -> int:
+    with closing(_conn()) as c:
+        c.execute("DELETE FROM ai_boss_items WHERE id=?", (item_id,))
+        c.commit()
+    return 1
+
+
+def list_ai_boss_orders(status: str = None) -> list[dict]:
+    with closing(_conn()) as c:
+        if status:
+            rows = c.execute("SELECT * FROM ai_boss_orders WHERE status=? ORDER BY id DESC", (status,)).fetchall()
+        else:
+            rows = c.execute("SELECT * FROM ai_boss_orders ORDER BY id DESC").fetchall()
+        return [dict(r) for r in rows]
+
+
+def add_ai_boss_order(item_id, title, qty=1, cost=0, sale_price=0, freight=0, note="") -> dict:
+    """出单：profit 单件利润 = sale - cost - freight，由后端如实计算，禁止前端/调用方虚报。"""
+    profit = round(sale_price - cost - freight, 2)
+    with closing(_conn()) as c:
+        cur = c.execute(
+            "INSERT INTO ai_boss_orders(item_id, title, qty, cost, sale_price, freight, profit, note) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            (item_id, title, qty, cost, sale_price, freight, profit, note),
+        )
+        c.commit()
+        row = c.execute("SELECT * FROM ai_boss_orders WHERE id=?", (cur.lastrowid,)).fetchone()
+        return dict(row) if row else {}
+
+
+def fill_ai_boss_tracking(order_id: int, tracking_no: str) -> dict:
+    """填单号 = 真实发货，status → shipped；利润只在 shipped 后计入汇总。"""
+    with closing(_conn()) as c:
+        c.execute(
+            "UPDATE ai_boss_orders SET tracking_no=?, status='shipped' WHERE id=?",
+            (tracking_no, order_id),
+        )
+        c.commit()
+        row = c.execute("SELECT * FROM ai_boss_orders WHERE id=?", (order_id,)).fetchone()
+        return dict(row) if row else {}
+
+
+def ai_boss_summary() -> dict:
+    """经营总览：利润只统计已发货(shipped)订单，从 0 起算，不虚报。"""
+    with closing(_conn()) as c:
+        item_count = c.execute("SELECT COUNT(*) FROM ai_boss_items").fetchone()[0]
+        order_count = c.execute("SELECT COUNT(*) FROM ai_boss_orders").fetchone()[0]
+        shipped_count = c.execute("SELECT COUNT(*) FROM ai_boss_orders WHERE status='shipped'").fetchone()[0]
+        pending_count = c.execute("SELECT COUNT(*) FROM ai_boss_orders WHERE status='pending'").fetchone()[0]
+        shipped_profit = c.execute(
+            "SELECT COALESCE(SUM(profit*qty), 0) FROM ai_boss_orders WHERE status='shipped'"
+        ).fetchone()[0]
+        pending_profit = c.execute(
+            "SELECT COALESCE(SUM(profit*qty), 0) FROM ai_boss_orders WHERE status='pending'"
+        ).fetchone()[0]
+        shipped_qty = c.execute(
+            "SELECT COALESCE(SUM(qty), 0) FROM ai_boss_orders WHERE status='shipped'"
+        ).fetchone()[0]
+        return {
+            "item_count": item_count,
+            "order_count": order_count,
+            "shipped_count": shipped_count,
+            "pending_count": pending_count,
+            "shipped_profit": round(shipped_profit, 2),
+            "pending_profit": round(pending_profit, 2),
+            "shipped_qty": shipped_qty,
+        }
 

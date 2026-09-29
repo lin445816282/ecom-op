@@ -31,6 +31,7 @@ const VIEWS = {
   errors: {title:'错误处理', sub:'上架/采集/发布踩过的坑，对应处理技能 + 出现次数，遇到一次点一次。'},
   autopublish: {title:'一键上架', sub:'输入 1688 链接 → 自动抓取 → AI 生成配置 → CDP 上架到拼多多。'},
   publishedgoods: {title:'上架列表', sub:'已上架商品台账：主图/标题/SKU价格/店铺/类目/状态，一键上架成功后自动归档。'},
+  aiboss: {title:'AI老板', sub:'AI 自主经营台账：选品 → 出单 → 用户下单填单号 → 独立利润记账，从 0 起算，不虚报。'},
 };
 
 // 运营指南分组（单一数据源：新增子模块只需在这里加一条，侧边栏子菜单 + 目录页自动生成）
@@ -562,6 +563,7 @@ function setView(view) {
   if (view === 'errors') renderErrors();
   if (view === 'autopublish') renderAutopublish();
   if (view === 'publishedgoods') renderPublishedGoods();
+  if (view === 'aiboss') renderAiBoss();
 }
 
 // 错误处理：错误知识库（错误类型 → 处理技能 + 出现次数，遇到一次点一次）
@@ -6547,6 +6549,165 @@ async function titleOptDelete(optId) {
 
 function titleOptOpenLink(platformProductId) {
   window.open('https://mobile.yangkeduo.com/goods.html?goods_id=' + platformProductId, '_blank');
+}
+
+// ===================== AI老板经营台账（独立记账，从 0 起算，不虚报） =====================
+let _bossData = { items: [], orders: [] };
+
+async function renderAiBoss() {
+  const el = $('#view-aiboss');
+  if (!el) return;
+  let data = { items: [], orders: [], summary: {} };
+  try { data = await api('/api/aiboss'); } catch (e) { data = { items: [], orders: [], summary: {} }; }
+  const s = data.summary || {};
+  const items = data.items || [];
+  const orders = data.orders || [];
+  _bossData = { items, orders };
+
+  const itemRows = items.map(it => `
+    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin-bottom:8px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+      <div style="flex:1;min-width:160px">
+        <div style="font-weight:600;font-size:14px;color:#17203a">${esc(it.title)}</div>
+        ${it.source_url ? `<div style="color:#94a3b8;font-size:12px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:320px">${esc(it.source_url)}</div>` : ''}
+      </div>
+      <div style="font-size:13px;color:#475569">进价 <b>¥${fmt(it.cost)}</b></div>
+      <div style="font-size:13px;color:#475569">售价 <b style="color:#2563eb">¥${fmt(it.sale_price)}</b></div>
+      <div style="font-size:13px;color:#16a34a;font-weight:600">毛利 ¥${fmt(it.sale_price - it.cost)}</div>
+      <button class="btn primary" style="padding:6px 14px;font-size:12px" onclick="aiBossOrderFromItem(${it.id})">出单</button>
+      <button class="btn" style="padding:6px 12px;font-size:12px" onclick="aiBossDeleteItem(${it.id})">删</button>
+    </div>`).join('');
+
+  const orderRows = orders.map(o => {
+    const st = o.status === 'shipped'
+      ? '<span style="background:#f0fdf4;color:#16a34a;border-radius:6px;padding:2px 8px;font-size:11px;font-weight:600">已发货</span>'
+      : '<span style="background:#fef3c7;color:#b45309;border-radius:6px;padding:2px 8px;font-size:11px;font-weight:600">待发货</span>';
+    const tracking = o.status === 'shipped'
+      ? `<span style="font-size:12px;color:#64748b">📦 ${esc(o.tracking_no)}</span>`
+      : `<input class="boss-tracking" data-id="${o.id}" placeholder="填单号发货" style="width:130px;padding:6px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px"><button class="btn primary" style="padding:6px 12px;font-size:12px" onclick="aiBossFillTracking(${o.id})">发货</button>`;
+    return `
+    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin-bottom:8px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+      <div style="flex:1;min-width:140px">
+        <div style="font-weight:600;font-size:14px;color:#17203a">${esc(o.title)} <span style="color:#94a3b8;font-weight:400;font-size:12px">×${o.qty}</span></div>
+        <div style="color:#94a3b8;font-size:12px;margin-top:2px">${esc((o.created_at||'').slice(0,16))}</div>
+      </div>
+      <div style="font-size:12px;color:#475569">进价 ¥${fmt(o.cost)} → 售价 ¥${fmt(o.sale_price)}${o.freight ? ` · 运费 ¥${fmt(o.freight)}` : ''}</div>
+      <div style="font-size:13px;color:#16a34a;font-weight:700">单件 ¥${fmt(o.profit)} · 小计 ¥${fmt(o.profit * o.qty)}</div>
+      ${st}
+      ${tracking}
+    </div>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div style="padding:20px;max-width:1100px">
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">
+        <div style="flex:1;min-width:150px;background:linear-gradient(135deg,#16a34a,#15803d);border-radius:12px;padding:16px;color:#fff">
+          <div style="font-size:12px;opacity:.85">已实现利润（从 0 起算）</div>
+          <div style="font-size:26px;font-weight:700;margin-top:4px">¥${fmt(s.shipped_profit)}</div>
+          <div style="font-size:12px;opacity:.85;margin-top:2px">已发货 ${s.shipped_count} 单 · ${s.shipped_qty} 件</div>
+        </div>
+        <div style="flex:1;min-width:150px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:16px">
+          <div style="font-size:12px;color:#64748b">待发货（账面预期，未入账）</div>
+          <div style="font-size:26px;font-weight:700;margin-top:4px;color:#b45309">¥${fmt(s.pending_profit)}</div>
+          <div style="font-size:12px;color:#94a3b8;margin-top:2px">${s.pending_count} 单待发货</div>
+        </div>
+        <div style="flex:1;min-width:150px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:16px">
+          <div style="font-size:12px;color:#64748b">在售选品</div>
+          <div style="font-size:26px;font-weight:700;margin-top:4px;color:#17203a">${s.item_count}</div>
+          <div style="font-size:12px;color:#94a3b8;margin-top:2px">累计出单 ${s.order_count} 笔</div>
+        </div>
+      </div>
+
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin-bottom:16px">
+        <div style="font-weight:700;font-size:15px;margin-bottom:10px">📦 选品（AI老板决策）</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+          <input id="boss-item-title" placeholder="商品标题" style="flex:2;min-width:160px;padding:9px 12px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px">
+          <input id="boss-item-cost" type="number" placeholder="进价" style="flex:1;min-width:80px;padding:9px 12px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px">
+          <input id="boss-item-sale" type="number" placeholder="售价" style="flex:1;min-width:80px;padding:9px 12px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px">
+          <input id="boss-item-url" placeholder="1688链接(可选)" style="flex:2;min-width:160px;padding:9px 12px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px">
+          <button class="btn primary" style="padding:9px 18px;font-size:13px" onclick="aiBossAddItem()">加选品</button>
+        </div>
+        ${itemRows || '<div style="color:#94a3b8;font-size:13px">暂无选品，先加一个。</div>'}
+      </div>
+
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px">
+        <div style="font-weight:700;font-size:15px;margin-bottom:4px">🧾 出单记录（出单后你下单填单号，利润只算已发货）</div>
+        <div style="color:#94a3b8;font-size:12px;margin-bottom:10px">不虚报：待发货订单不计入「已实现利润」，填了单号才入账。</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+          <input id="boss-order-title" placeholder="商品标题" style="flex:2;min-width:140px;padding:9px 12px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px">
+          <input id="boss-order-qty" type="number" value="1" placeholder="数量" style="flex:1;min-width:60px;padding:9px 12px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px">
+          <input id="boss-order-cost" type="number" placeholder="进价" style="flex:1;min-width:80px;padding:9px 12px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px">
+          <input id="boss-order-sale" type="number" placeholder="售价" style="flex:1;min-width:80px;padding:9px 12px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px">
+          <input id="boss-order-freight" type="number" value="0" placeholder="运费" style="flex:1;min-width:70px;padding:9px 12px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px">
+          <button class="btn primary" style="padding:9px 18px;font-size:13px" onclick="aiBossAddOrder()">出单</button>
+        </div>
+        ${orderRows || '<div style="color:#94a3b8;font-size:13px">暂无订单。</div>'}
+      </div>
+    </div>
+  `;
+}
+
+async function aiBossAddItem() {
+  const title = $('#boss-item-title').value.trim();
+  if (!title) { toast('请填商品标题'); return; }
+  try {
+    await api('/api/aiboss/items', 'POST', {
+      title,
+      cost: Number($('#boss-item-cost').value) || 0,
+      sale_price: Number($('#boss-item-sale').value) || 0,
+      source_url: $('#boss-item-url').value.trim(),
+    });
+    toast('✅ 已加选品');
+    renderAiBoss();
+  } catch (e) { toast('❌ ' + e.message); }
+}
+
+async function aiBossDeleteItem(id) {
+  const ok = await confirmDialog('确定删除这个选品？（不影响已出单记录）', { title: '删除选品', confirmText: '删除' });
+  if (!ok) return;
+  try {
+    await api('/api/aiboss/items/' + id, 'POST', { _action: 'delete' });
+    toast('✅ 已删除');
+    renderAiBoss();
+  } catch (e) { toast('❌ ' + e.message); }
+}
+
+function aiBossOrderFromItem(id) {
+  const it = _bossData.items.find(x => x.id === id);
+  if (!it) return;
+  $('#boss-order-title').value = it.title;
+  $('#boss-order-cost').value = it.cost;
+  $('#boss-order-sale').value = it.sale_price;
+  $('#boss-order-qty').value = 1;
+  $('#boss-order-freight').value = 0;
+  $('#boss-order-title').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  toast('已填入出单表单，确认数量/运费后点「出单」');
+}
+
+async function aiBossAddOrder() {
+  const title = $('#boss-order-title').value.trim();
+  if (!title) { toast('请填商品标题'); return; }
+  try {
+    await api('/api/aiboss/orders', 'POST', {
+      title,
+      qty: Number($('#boss-order-qty').value) || 1,
+      cost: Number($('#boss-order-cost').value) || 0,
+      sale_price: Number($('#boss-order-sale').value) || 0,
+      freight: Number($('#boss-order-freight').value) || 0,
+    });
+    toast('✅ 已出单，等你下单填单号');
+    renderAiBoss();
+  } catch (e) { toast('❌ ' + e.message); }
+}
+
+async function aiBossFillTracking(id) {
+  const inp = document.querySelector(`.boss-tracking[data-id="${id}"]`);
+  const no = inp ? inp.value.trim() : '';
+  if (!no) { toast('请先填单号'); return; }
+  try {
+    await api('/api/aiboss/orders/' + id, 'POST', { tracking_no: no });
+    toast('✅ 已发货，利润入账');
+    renderAiBoss();
+  } catch (e) { toast('❌ ' + e.message); }
 }
 
 init();
