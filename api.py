@@ -1033,6 +1033,19 @@ class Handler(BaseHTTPRequestHandler):
             date = qs.get("date", [""])[0] or None
             return _json(self, {"items": catalog.list_freight_by_date(date)})
 
+        if path == "/api/freight/calc" and self.command == "GET":
+            province = qs.get("province", [""])[0] or ""
+            city = qs.get("city", [""])[0] or ""
+            weight_str = qs.get("weight", [""])[0] or ""
+            try:
+                weight = float(weight_str)
+            except ValueError:
+                return _json(self, {"error": "重量无效"}, 400)
+            calc = catalog.calc_freight(province, city, weight)
+            if calc is None:
+                return _json(self, {"ok": False, "error": "未匹配到报价单地区"}, 400)
+            return _json(self, {"ok": True, **calc})
+
         if path == "/api/catalog/suppliers" and self.command == "GET":
             return _json(self, {"items": catalog.list_suppliers()})
 
@@ -1662,6 +1675,44 @@ def _run_node_script(script_name: str, args: list, timeout: int = 180) -> dict:
     return {"ok": r.returncode == 0, "stdout": out, "stderr": err, "data": data}
 
 
+def _normalize_publish_images(outdir_wsl: str) -> int:
+    """规范化商品图尺寸，符合拼多多主图+商详要求：宽 480-1200、高 ≤1500，统一转 JPEG。
+
+    1688 抓图尺寸参差（400~1500+，且可能 WebP 存成 .jpg），不规范化会导致
+    「商详装修校验：请重新上传第N张图片（宽度应为480-1200px，高度应为1500px以内）」失败。
+    """
+    import glob
+    from PIL import Image
+    n = 0
+    for p in glob.glob(os.path.join(outdir_wsl, "img_*.jpg")):
+        try:
+            im = Image.open(p)
+            w, h = im.size
+            if w <= 0 or h <= 0:
+                continue
+            ratio = 1.0
+            if w > 1200:
+                ratio = 1200 / w
+            elif w < 480:
+                ratio = 480 / w
+            nw, nh = round(w * ratio), round(h * ratio)
+            if nh > 1500:
+                r2 = 1500 / nh
+                nw, nh = round(nw * r2), round(nh * r2)
+            need_resize = (nw, nh) != (w, h)
+            need_convert = (im.format or "").upper() not in ("JPEG", "JPG")
+            if need_resize or need_convert:
+                if need_convert or im.mode not in ("RGB", "L"):
+                    im = im.convert("RGB")
+                if need_resize:
+                    im = im.resize((nw, nh), Image.LANCZOS)
+                im.save(p, "JPEG", quality=90)
+            n += 1
+        except Exception:
+            pass
+    return n
+
+
 def _autopublish_bg(task_id: int, pricing: dict = None):
     """一键上架编排：scrape(1688抓取) → ai(data.ai_generate_publish_config) → publish(CDP上架)。
 
@@ -1708,6 +1759,13 @@ def _autopublish_bg(task_id: int, pricing: dict = None):
             product = json.load(f)
     except Exception:
         product = {}
+    # 规范化商品图尺寸（1688 抓图 400~1500+ 且可能 WebP，不规范化会导致商详校验失败）
+    try:
+        _n = _normalize_publish_images(outdir_wsl)
+        if _n:
+            catalog.append_autopublish_log(task_id, "scrape", "done", f"图片规范化 {_n} 张（宽480-1200/高≤1500/转JPEG）")
+    except Exception:
+        pass
     if not product.get("title"):
         product["title"] = d.get("title", "")
         product["images"] = d.get("images", [])
