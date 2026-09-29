@@ -675,6 +675,23 @@ async function renderAutopublish() {
         </div>
       </div>
 
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:18px;margin-bottom:16px">
+        <div style="font-weight:700;font-size:15px;margin-bottom:4px">📦 批量上架</div>
+        <div style="color:#64748b;font-size:13px;margin-bottom:12px">每行一个 1688 链接/口令，勾选目标店铺，一次批量上架到多家店铺（同店自动排队，不同店并行）。</div>
+        <textarea id="ap-batch-urls" rows="5" placeholder="每行一个链接/口令，可粘贴多个&#10;https://detail.1688.com/offer/xxxxx.html&#10;qr.1688.com/s/xxx" style="width:100%;padding:11px 14px;border:1px solid #cbd5e1;border-radius:10px;font-size:14px;box-sizing:border-box;resize:vertical;font-family:inherit;line-height:1.6"></textarea>
+        <div style="margin-top:12px;display:flex;gap:16px;flex-wrap:wrap;align-items:center">
+          <span style="font-size:13px;color:#475569;font-weight:600">目标店铺：</span>
+          <label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer"><input type="checkbox" class="ap-batch-shop" value="5" checked> 嘉裕</label>
+          <label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer"><input type="checkbox" class="ap-batch-shop" value="3" checked> 如若月下</label>
+          <label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer"><input type="checkbox" class="ap-batch-shop" value="1" checked> 闲时来</label>
+          <label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer"><input type="checkbox" class="ap-batch-shop" value="6" checked> 欧世艺</label>
+        </div>
+        <div style="margin-top:12px;display:flex;align-items:center">
+          <button class="btn primary" id="ap-batch-btn" style="padding:11px 22px;font-size:14px">开始批量上架</button>
+          <span style="color:#94a3b8;font-size:12px;margin-left:10px">定价复用上方参数</span>
+        </div>
+      </div>
+
       <div id="ap-current" style="margin-bottom:16px"></div>
       <div style="font-weight:700;font-size:14px;margin-bottom:10px;color:#334155">历史任务</div>
       <div id="ap-list"><div class="empty" style="color:#94a3b8">暂无任务，输入链接点「开始上架」。</div></div>
@@ -739,6 +756,39 @@ async function renderAutopublish() {
       toast(e.message);
       $('#ap-start-btn').disabled = false;
       $('#ap-start-btn').textContent = '开始上架';
+    }
+  };
+
+  // 批量上架：多行链接 × 多店铺，一次创建 url×shop 任务清单
+  $('#ap-batch-btn').onclick = async () => {
+    if ($('#ap-batch-btn').disabled) return;
+    const text = $('#ap-batch-urls').value.trim();
+    if (!text) { toast('请粘贴至少一个 1688 链接'); return; }
+    const shop_ids = [...document.querySelectorAll('.ap-batch-shop:checked')].map(c => Number(c.value));
+    if (!shop_ids.length) { toast('请至少勾选一个店铺'); return; }
+    const pricing = {
+      profit_rate: (Number($('#ap-profit').value) || 20) / 100,
+      roi: Number($('#ap-roi').value) || 2,
+      aftersale_rate: (Number($('#ap-aftersale').value) || 5) / 100,
+      freight: Number($('#ap-freight').value) || 3,
+      danmai_mult: Number($('#ap-danmai').value) || 1.5,
+    };
+    $('#ap-batch-btn').disabled = true;
+    $('#ap-batch-btn').textContent = '创建中…';
+    try {
+      const resp = await api('/api/autopublish/batch', 'POST', { text, shop_ids, pricing });
+      if (resp && resp.ok) {
+        $('#ap-batch-urls').value = '';
+        toast(`已创建 ${resp.count} 个任务（${resp.urls} 链接 × ${resp.shops} 店铺），自动上架中…`);
+        loadApList();
+      } else {
+        toast((resp && resp.error) || '批量创建失败');
+      }
+    } catch (e) {
+      toast(e.message);
+    } finally {
+      $('#ap-batch-btn').disabled = false;
+      $('#ap-batch-btn').textContent = '开始批量上架';
     }
   };
 

@@ -1302,18 +1302,9 @@ class Handler(BaseHTTPRequestHandler):
 
         # ------------------------- 一键上架 pipeline -------------------------
         if path == "/api/autopublish" and self.command == "POST":
-            import threading, re
+            import threading
             item = self._read_body()
-            url = str(item.get("url") or "").strip()
-            # 兼容：用户常粘贴 1688 分享口令整段文本（标题+口令+URL+淘口令尾巴），自动提取纯 URL
-            if url and not url.startswith(("http://", "https://")):
-                m = re.search(r'https?://[^\s\u4e00-\u9fff，。；！？、（）【】]+', url)
-                if m:
-                    url = m.group(0).rstrip('.,;:')
-                else:
-                    m2 = re.search(r'(qr\.1688\.com/s/[A-Za-z0-9]+|detail\.1688\.com/offer/\d+(?:\.html)?)', url)
-                    if m2:
-                        url = "https://" + m2.group(1)
+            url = _extract_1688_url(item.get("url"))
             shop_id = int(item.get("shop_id") or 5)
             pricing = item.get("pricing") or {}
             if not url:
@@ -1321,6 +1312,41 @@ class Handler(BaseHTTPRequestHandler):
             task = catalog.create_autopublish_task(url, shop_id)
             threading.Thread(target=_autopublish_bg, args=(task["id"], pricing), daemon=True).start()
             return _json(self, {"ok": True, "task": task})
+
+        if path == "/api/autopublish/batch" and self.command == "POST":
+            import threading
+            item = self._read_body()
+            # 支持两种输入：urls 数组 或 text 多行文本（每行一个链接/口令）
+            raw = item.get("urls") or []
+            if isinstance(raw, str):
+                raw = [raw]
+            text = str(item.get("text") or "").strip()
+            lines = list(raw) + [l for l in text.splitlines() if l.strip()]
+            shop_ids = item.get("shop_ids") or []
+            if isinstance(shop_ids, (int, str)):
+                shop_ids = [int(shop_ids)]
+            else:
+                shop_ids = [int(s) for s in shop_ids if str(s).isdigit()]
+            if not shop_ids:
+                shop_ids = [5]
+            pricing = item.get("pricing") or {}
+            # 逐行解析 URL（去重、保持顺序）
+            urls = []
+            for l in lines:
+                u = _extract_1688_url(l)
+                if u and u not in urls:
+                    urls.append(u)
+            if not urls:
+                return _json(self, {"error": "未识别到有效的 1688 链接"}, 400)
+            # 生成 url × shop 任务清单并逐个启动（并发控制靠 scrape/publish 锁，见 _SCRAPE_LOCK/_shop_lock）
+            tasks = []
+            for u in urls:
+                for sid in shop_ids:
+                    t = catalog.create_autopublish_task(u, sid)
+                    tasks.append(t)
+                    threading.Thread(target=_autopublish_bg, args=(t["id"], pricing), daemon=True).start()
+            return _json(self, {"ok": True, "tasks": tasks, "count": len(tasks),
+                                "urls": len(urls), "shops": len(shop_ids)})
 
         if path == "/api/autopublish" and self.command == "GET":
             limit = int(qs.get("limit", ["50"])[0] or 50)
@@ -1719,6 +1745,32 @@ def _normalize_publish_images(outdir_wsl: str) -> int:
     return n
 
 
+def _extract_1688_url(text: str) -> str:
+    """从 1688 分享口令/整段文本里提取纯 URL，失败返回空串。"""
+    import re
+    url = str(text or "").strip()
+    if not url:
+        return ""
+    if url.startswith(("http://", "https://")):
+        return url
+    m = re.search(r'https?://[^\s\u4e00-\u9fff，。；！？、（）【】]+', url)
+    if m:
+        return m.group(0).rstrip('.,;:')
+    m2 = re.search(r'(qr\.1688\.com/s/[A-Za-z0-9]+|detail\.1688\.com/offer/\d+(?:\.html)?)', url)
+    if m2:
+        return "https://" + m2.group(1)
+    return ""
+
+
+# 批量上架并发控制：scrape 全局串行（1688 抓取实例端口 9238 共享），publish 按店铺串行（店铺 CDP 端口独立）
+_SCRAPE_LOCK = threading.Lock()
+_SHOP_LOCKS = {}
+
+
+def _shop_lock(shop_id: int):
+    return _SHOP_LOCKS.setdefault(shop_id, threading.Lock())
+
+
 def _read_publish_progress(task_id: int) -> dict:
     """读取 publish.js 实时写进 config.publish.log 的细粒度进度。
 
@@ -1782,7 +1834,8 @@ def _autopublish_bg(task_id: int, pricing: dict = None):
     # ---- 环节1：1688 抓取（scrape.js 写 product.json + 图） ----
     catalog.append_autopublish_log(task_id, "scrape", "running", "开始抓取 1688 商品详情…")
     catalog.update_autopublish_task(task_id, status="crawling", stage="scrape")
-    res = _run_node_script("scrape.js", [url, outdir_win, str(CLIENT_1688_PORT)], timeout=120)
+    with _SCRAPE_LOCK:
+        res = _run_node_script("scrape.js", [url, outdir_win, str(CLIENT_1688_PORT)], timeout=120)
     if not res.get("data"):
         return _fail("scrape", res.get("error") or res.get("stderr") or "抓取失败（无数据）")
     d = res["data"]
@@ -1845,7 +1898,8 @@ def _autopublish_bg(task_id: int, pricing: dict = None):
     port = SHOP_CDP_PORT.get(shop_id)
     if not port:
         return _fail("publish", f"店铺 {shop_id} 未配置 CDP 端口")
-    res = _run_node_script("publish.js", [config_win, str(port)], timeout=300)
+    with _shop_lock(shop_id):
+        res = _run_node_script("publish.js", [config_win, str(port)], timeout=300)
     if not res.get("data") and not res.get("ok"):
         return _fail("publish", res.get("error") or res.get("stderr") or "上架失败")
     # publish.js 输出是进度日志（非 JSON），判断成功靠 stdout 里的 RESULT_SUCCESS 明确标记
