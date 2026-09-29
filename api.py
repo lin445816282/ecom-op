@@ -1592,7 +1592,8 @@ def _autopublish_bg(task_id: int):
         catalog.append_autopublish_log(task_id, stage, "failed", msg)
         catalog.update_autopublish_task(task_id, status="failed", error=msg)
         try:
-            catalog.hit_error_by_type(f"一键上架:{stage}")
+            # 把具体失败原因作为 description 塞进错误知识库，自动带根因线索
+            catalog.hit_error_by_type(f"一键上架:{stage}", description=msg[:300])
         except Exception:
             pass
 
@@ -1668,8 +1669,10 @@ def _autopublish_bg(task_id: int):
         catalog.append_autopublish_log(task_id, "publish", "done", f"✅ 上架成功，商品ID: {goods_id}")
     else:
         # 上架脚本跑完了但没成功标记，如实记 failed
-        last = (out.strip().splitlines() or [""])[-1][:200]
-        return _fail("publish", f"未确认上架成功（{last}）")
+        # 取 stdout 最后几行（去空行）作为失败线索，自动带进错误知识库 description
+        lines = [l.strip() for l in out.splitlines() if l.strip()]
+        tail = " | ".join(lines[-3:])[-280:] if lines else ""
+        return _fail("publish", f"未确认上架成功（{tail}）")
 
 
 def main():

@@ -540,7 +540,10 @@ def hit_error(error_id: int) -> dict:
 
 
 def hit_error_by_type(error_type: str, description: str = "") -> dict:
-    """按错误类型命中（不存在则自动创建），count+1。供编排流程自动记账。"""
+    """按错误类型命中（不存在则自动创建），count+1。供编排流程自动记账。
+
+    description 非空时同步更新（覆盖为最新失败线索），保证错误知识库始终带最近的根因摘要。
+    """
     with closing(_conn()) as c:
         c.execute(
             "INSERT OR IGNORE INTO error_knowledge "
@@ -548,6 +551,11 @@ def hit_error_by_type(error_type: str, description: str = "") -> dict:
             "VALUES (?,?,datetime('now','localtime'),datetime('now','localtime'))",
             (error_type.strip(), description),
         )
+        if description:
+            c.execute(
+                "UPDATE error_knowledge SET description=? WHERE error_type=?",
+                (description, error_type.strip()),
+            )
         c.execute(
             "UPDATE error_knowledge SET count=count+1, "
             "last_seen=datetime('now','localtime') WHERE error_type=?",
