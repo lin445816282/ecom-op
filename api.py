@@ -1350,7 +1350,12 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/autopublish" and self.command == "GET":
             limit = int(qs.get("limit", ["50"])[0] or 50)
-            return _json(self, {"items": catalog.list_autopublish_tasks(limit)})
+            items = catalog.list_autopublish_tasks(limit)
+            # 为 publishing 状态的任务附上实时细粒度进度，让批量列表直接显示每个任务当前步骤
+            for it in items:
+                if it.get("status") == "publishing":
+                    it["publish_progress"] = _read_publish_progress(it["id"])
+            return _json(self, {"items": items})
 
         if path.startswith("/api/autopublish/") and self.command == "GET":
             try:

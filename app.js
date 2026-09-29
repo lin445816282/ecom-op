@@ -886,6 +886,7 @@ async function loadApList() {
         <div style="color:#94a3b8;font-size:12px;margin-top:2px">${esc((t.source_url||'').slice(0,60))}</div>
       </div>
       <span style="background:#f1f5f9;border-radius:6px;padding:3px 10px;font-size:12px;color:#475569">${statusTag[t.status] || t.status}</span>
+      ${t.publish_progress && t.publish_progress.step ? `<span style="background:#e0f2fe;color:#0369a1;border-radius:6px;padding:3px 8px;font-size:11px;font-weight:600;white-space:nowrap">${esc(t.publish_progress.step_name)} ${t.publish_progress.step}/8</span>` : ''}
       ${t.pdd_goods_id ? `<span style="font-size:12px;color:#16a34a">${esc(t.pdd_goods_id)}</span>` : ''}
       <div style="color:#94a3b8;font-size:12px">${esc((t.created_at||'').slice(5,16))}</div>
     </div>
@@ -894,7 +895,7 @@ async function loadApList() {
 
 function startApListPolling() {
   if (window._apListTimer) clearInterval(window._apListTimer);
-  window._apListTimer = setInterval(() => { if (state.view === 'autopublish') loadApList(); }, 10000);
+  window._apListTimer = setInterval(() => { if (state.view === 'autopublish') loadApList(); }, 3000);
 }
 
 // 上架列表：已上架商品台账（存表 published_goods），一键上架成功后自动归档
