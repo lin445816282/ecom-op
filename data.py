@@ -2393,7 +2393,7 @@ def ai_generate_publish_config(product: dict, pricing: dict = None) -> dict:
         '  "previewImages": {"规格1的值":"对应主图索引(0-9，0表示第1张主图)"}\n'
         "}\n\n"
         "硬性规则：\n"
-        "1. 规格归纳：从页面文本的「颜色/款式/尺寸」等属性里提取规格。SKU 若超过 12 个，必须归纳合并成 ≤12 个（如 40 个复杂 SKU → 归纳成 3色×4款=12 个），specs 最多 2 维。\n"
+        "1. 规格归纳：从页面文本的「颜色/款式/尺寸」等属性里提取规格。**SKU 总数（各维 values 数量的乘积）必须 ≤12 个**。若原始规格（尤其「款式+数量」合并的复杂颜色属性）展开后超过 12 个，必须精简到核心组合——只保留最热门/最主流的 2-4 个款式图案 和 2-4 个数量/规格做精简笛卡尔积（如 3图案×3数量=9 个）。宁可 SKU 少而精，绝不全量展开成几十个。specs 最多 2 维。\n"
         "2. 进价提取：从页面文本的「¥」价格里识别每个规格2值对应的进价(cost)，填到 priceBySpec2 的 cost 字段。若各规格进价相同或无法区分，统一用最低「¥」价格。\n"
         "3. 规格类型名只能用：颜色/款式/尺寸/型号/材质/容量/器型/口味/色号。\n"
         "4. previewImages：规格1 每个值对应一张主图（用图片索引 0-9，第1张主图=0）。\n"
@@ -2435,6 +2435,24 @@ def ai_generate_publish_config(product: dict, pricing: dict = None) -> dict:
         cfg["title"] = title[:60]
     if not cfg.get("categoryKeyword"):
         cfg["categoryKeyword"] = "婚庆"
+    # SKU 精简兜底：笛卡尔积 >12 强制精简（AI 可能不遵守 ≤12，导致拼多多虚拟滚动填不完、提交失败）
+    _trim_note = ""
+    _specs = cfg.get("specs") or []
+    _sku_total = 1
+    for s in _specs:
+        _sku_total *= max(1, len(s.get("values") or []))
+    if _sku_total > 12:
+        if len(_specs) >= 2:
+            # 2维：规格1（款式图案）保留前4个，规格2（数量）保留前3个 → ≤12
+            _specs[0]["values"] = (_specs[0].get("values") or [])[:4]
+            _specs[1]["values"] = (_specs[1].get("values") or [])[:3]
+        elif _specs:
+            _specs[0]["values"] = (_specs[0].get("values") or [])[:12]
+        cfg["specs"] = _specs
+        _t = 1
+        for s in _specs:
+            _t *= max(1, len(s.get("values") or []))
+        _trim_note = f"SKU 由 {_sku_total} 精简到 {_t} 个"
     # images 用真实抓取的图片路径（AI 只给索引，这里映射回真实路径）
     cfg["images"] = images[:10]
     # previewImages：AI 给的是索引 0-9，映射成真实图片路径
@@ -2471,12 +2489,12 @@ def ai_generate_publish_config(product: dict, pricing: dict = None) -> dict:
         cfg["stock"] = 500
 
     # SKU 复杂度预警
-    warning = ""
+    warning = _trim_note
     specs = cfg.get("specs", [])
     total_sku = 1
     for s in specs:
         total_sku *= max(1, len(s.get("values") or []))
     if total_sku > 30:
-        warning = f"SKU 共 {total_sku} 个（>30），拼多多表格可能无法自动化填完，建议人工精简规格"
+        warning = (warning + "；" if warning else "") + f"SKU 共 {total_sku} 个（>30），拼多多表格可能无法自动化填完，建议人工精简规格"
 
     return {"config": cfg, "warning": warning, "error": None}

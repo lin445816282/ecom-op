@@ -53,10 +53,17 @@ async function fillByType(c, selector, text){
 (async()=>{
   log('启动，端口=' + PORT + '，config=' + CONFIG);
 
-  // ===== 连接：优先复用已存在的发布页（续填），否则新建干净 tab =====
-  // 注意：只匹配 goods_add/index（发布页），排除 goods_add/success（上架成功结果页）
+  // ===== 连接：总是新建干净 tab（关闭残留发布页，避免误复用上一个商品的脏草稿导致规格错乱） =====
+  // 注意：连续上架多个商品时，上一个商品的发布页(goods_add/index)还开着，续填会误复用导致规格类型错乱。
   let c = null;
-  let pubPage = await getPage(/goods_add\/index/);
+  // 清理残留发布页：导航走所有 goods_add/index（排除 success 结果页），让下方 getPage 找不到发布页
+  try{
+    const _stale = await get(`http://127.0.0.1:${PORT}/json`);
+    for(const _sp of (_stale||[]).filter(t=>t.type==='page' && /goods_add\/index/.test(t.url||''))){
+      try{ const _sc=await conn(_sp.webSocketDebuggerUrl); await _sc.send('Page.navigate',{url:'about:blank'}); _sc.ws.close(); log('已清理残留发布页 tab'); }catch(e){}
+    }
+  }catch(e){}
+  let pubPage = null;  // 强制新建，不续填
   if(pubPage){
     // 发布页已存在 → 续填模式
     try{

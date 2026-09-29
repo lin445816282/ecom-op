@@ -1242,9 +1242,18 @@ class Handler(BaseHTTPRequestHandler):
 
         # ------------------------- 一键上架 pipeline -------------------------
         if path == "/api/autopublish" and self.command == "POST":
-            import threading
+            import threading, re
             item = self._read_body()
             url = str(item.get("url") or "").strip()
+            # 兼容：用户常粘贴 1688 分享口令整段文本（标题+口令+URL+淘口令尾巴），自动提取纯 URL
+            if url and not url.startswith(("http://", "https://")):
+                m = re.search(r'https?://[^\s\u4e00-\u9fff，。；！？、（）【】]+', url)
+                if m:
+                    url = m.group(0).rstrip('.,;:')
+                else:
+                    m2 = re.search(r'(qr\.1688\.com/s/[A-Za-z0-9]+|detail\.1688\.com/offer/\d+(?:\.html)?)', url)
+                    if m2:
+                        url = "https://" + m2.group(1)
             shop_id = int(item.get("shop_id") or 5)
             pricing = item.get("pricing") or {}
             if not url:
