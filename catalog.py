@@ -283,6 +283,19 @@ CREATE TABLE IF NOT EXISTS freight_rate (
     created_at TEXT DEFAULT (datetime('now','localtime'))
 );
 
+CREATE TABLE IF NOT EXISTS sku_weight (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    platform_product_id TEXT NOT NULL,
+    spec TEXT NOT NULL,
+    quantity INTEGER DEFAULT 1,
+    weight REAL,
+    weight_q25 REAL,
+    weight_q75 REAL,
+    sample_count INTEGER DEFAULT 0,
+    updated_at TEXT DEFAULT (datetime('now','localtime')),
+    UNIQUE(platform_product_id, spec, quantity)
+);
+
 CREATE TABLE IF NOT EXISTS suppliers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT UNIQUE NOT NULL,
@@ -1818,15 +1831,18 @@ def list_freight(limit: int = 5000, unmatched_only: bool = False) -> list[dict]:
 
 
 def list_freight_by_date(date: str = None, limit: int = 1000) -> list[dict]:
-    """按发货日期查运费单明细（含订单规格/店铺），供差额记录弹框用。"""
+    """按发货日期查运费单明细（含订单规格/店铺/推断重量），供差额记录弹框用。"""
     with closing(_conn()) as c:
         sql = ("SELECT f.tracking_no, f.account_name, f.courier, f.ship_date, "
                "f.province, f.city, f.weight, f.freight_cost, f.bill_fee, "
                "f.extra_fee, f.total, f.matched, "
-               "o.spec, o.quantity, o.order_no, s.name AS shop_name "
+               "o.spec, o.quantity, o.order_no, o.platform_product_id, "
+               "s.name AS shop_name, sw.weight AS est_weight "
                "FROM freight f "
                "LEFT JOIN orders o ON o.order_no = f.matched_order_no "
-               "LEFT JOIN shops s ON s.id = f.matched_shop_id")
+               "LEFT JOIN shops s ON s.id = f.matched_shop_id "
+               "LEFT JOIN sku_weight sw ON sw.platform_product_id = o.platform_product_id "
+               "   AND sw.spec = o.spec AND sw.quantity = o.quantity")
         args = []
         if date:
             sql += " WHERE f.ship_date = ?"
@@ -1834,6 +1850,41 @@ def list_freight_by_date(date: str = None, limit: int = 1000) -> list[dict]:
         sql += " ORDER BY f.ship_date DESC LIMIT ?"
         args.append(limit)
         return [dict(r) for r in c.execute(sql, args).fetchall()]
+
+
+def rebuild_sku_weights() -> dict:
+    """从运费账单推断每个 SKU 的真实重量（中位数法，对算错/异常值鲁棒），落地 sku_weight 表。
+
+    返回 {groups, total_rows}。
+    """
+    from collections import defaultdict
+    with closing(_conn()) as c:
+        rows = c.execute(
+            "SELECT o.platform_product_id, o.spec, o.quantity, f.weight "
+            "FROM freight f JOIN orders o ON o.order_no = f.matched_order_no "
+            "WHERE f.weight IS NOT NULL AND o.spec != ''"
+        ).fetchall()
+        groups = defaultdict(list)
+        for r in rows:
+            groups[(r["platform_product_id"], r["spec"], r["quantity"])].append(r["weight"])
+        for (ppid, spec, qty), weights in groups.items():
+            w = sorted(weights)
+            n = len(w)
+            median = w[n // 2] if n % 2 else (w[n // 2 - 1] + w[n // 2]) / 2
+            q25 = w[int(n * 0.25)]
+            q75 = w[min(int(n * 0.75), n - 1)]
+            c.execute(
+                "INSERT INTO sku_weight(platform_product_id, spec, quantity, weight, "
+                "weight_q25, weight_q75, sample_count, updated_at) "
+                "VALUES(?,?,?,?,?,?,?,datetime('now','localtime')) "
+                "ON CONFLICT(platform_product_id, spec, quantity) DO UPDATE SET "
+                "weight=excluded.weight, weight_q25=excluded.weight_q25, "
+                "weight_q75=excluded.weight_q75, sample_count=excluded.sample_count, "
+                "updated_at=excluded.updated_at",
+                (ppid, spec, qty, round(median, 2), round(q25, 2), round(q75, 2), n),
+            )
+        c.commit()
+        return {"groups": len(groups), "total_rows": len(rows)}
 
 
 def freight_analysis(month: str = None, shop_id: int = None) -> dict:
@@ -2134,19 +2185,28 @@ def freight_compare(month: str = None) -> dict:
         ).fetchall()]
         rows = c.execute(
             "SELECT f.tracking_no, f.total AS actual, f.weight, f.province, f.city, "
-            "f.ship_date, o.order_no, o.spec FROM freight f "
-            "JOIN orders o ON o.order_no = f.matched_order_no " + where, args
+            "f.ship_date, o.order_no, o.spec, o.platform_product_id, "
+            "sw.weight AS est_weight "
+            "FROM freight f "
+            "JOIN orders o ON o.order_no = f.matched_order_no "
+            "LEFT JOIN sku_weight sw ON sw.platform_product_id = o.platform_product_id "
+            "   AND sw.spec = o.spec AND sw.quantity = o.quantity "
+            + where, args
         ).fetchall()
         items = []
-        match = over = under = big_count = 0
+        match = over = under = big_count = weight_wrong_count = 0
         for r in rows:
-            calc = calc_freight(r["province"], r["city"], r["weight"], rates)
+            # 优先用推断重量（真实重量），无推断则回退账单重量
+            w = r["est_weight"] if r["est_weight"] is not None else r["weight"]
+            calc = calc_freight(r["province"], r["city"], w, rates)
             if calc is None:
                 continue
             actual = r["actual"] or 0
             diff = round(actual - calc["total"], 2)
             status = "相符" if abs(diff) < 0.005 else ("多收" if diff > 0 else "少收")
             big = abs(diff) >= BIG_DIFF
+            weight_wrong = (r["est_weight"] is not None and r["weight"] is not None
+                            and abs(r["weight"] - r["est_weight"]) > 0.3)
             if status == "相符":
                 match += 1
             elif status == "多收":
@@ -2155,10 +2215,13 @@ def freight_compare(month: str = None) -> dict:
                 under += 1
             if big:
                 big_count += 1
+            if weight_wrong:
+                weight_wrong_count += 1
             items.append({
                 "tracking_no": r["tracking_no"], "order_no": r["order_no"],
                 "spec": r["spec"], "province": r["province"], "city": r["city"],
                 "ship_date": r["ship_date"], "weight": r["weight"],
+                "est_weight": r["est_weight"], "weight_wrong": weight_wrong,
                 "region_group": calc["region_group"],
                 "standard": calc["total"], "actual": actual, "diff": diff,
                 "status": status, "big": big,
@@ -2170,6 +2233,7 @@ def freight_compare(month: str = None) -> dict:
             "match": match, "over": over, "under": under,
             "over_amount": over_amount,
             "big_count": big_count, "big_diff": BIG_DIFF,
+            "weight_wrong_count": weight_wrong_count,
             "months": months,
             "items": items,
         }
