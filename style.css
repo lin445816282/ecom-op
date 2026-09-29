@@ -707,3 +707,27 @@ textarea { min-height: 72px; resize: vertical; }
   .flow-arrow { font-size: 18px; padding: 0 1px; }
 }
 
+/* 上架列表卡片：手机端自适应（主图+信息一行，价格换行横排） */
+@media (max-width: 640px) {
+  .pg-card { padding: 12px; }
+  .pg-card-top { flex-wrap: wrap; gap: 12px; }
+  .pg-img { width: 56px; height: 56px; }
+  .pg-price {
+    width: 100% !important;
+    min-width: 0 !important;
+    text-align: left !important;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+  .pg-price .pg-price-row {
+    display: flex;
+    gap: 16px;
+    align-items: baseline;
+    flex-wrap: wrap;
+    margin-top: 0 !important;
+  }
+  .pg-price .pg-price-row > div { white-space: nowrap; }
+}
+

@@ -849,14 +849,16 @@ async function renderPublishedGoods() {
   const totalSku = published.reduce((s, x) => s + (Number(x.sku_count) || 0), 0);
   let marginSum = 0, marginN = 0;
   for (const x of published) {
-    const cost = Number(x.cost_price), sale = Number(x.sale_price), fr = Number(x.freight) || 0;
+    const cost = (x.cost_price == null) ? null : Number(x.cost_price);
+    const sale = Number(x.sale_price), fr = Number(x.freight) || 0;
     if (sale > 0 && cost != null && !Number.isNaN(cost)) { marginSum += (sale - cost - fr) / sale; marginN++; }
   }
   const avgMargin = marginN ? (marginSum / marginN * 100).toFixed(1) + '%' : '—';
 
   const cards = items.map(x => {
     const sku = x.sku_details || [];
-    const cost = Number(x.cost_price), sale = Number(x.sale_price), danmai = Number(x.danmai_price), fr = Number(x.freight) || 0;
+    const cost = (x.cost_price == null) ? null : Number(x.cost_price);
+    const sale = Number(x.sale_price), danmai = Number(x.danmai_price), fr = Number(x.freight) || 0;
     const profit = (sale > 0 && cost != null && !Number.isNaN(cost)) ? (sale - cost - fr) : null;
     const margin = (profit != null && sale > 0) ? (profit / sale * 100).toFixed(1) + '%' : '—';
     const imgUrl = x.main_image ? ('/api/published-goods/image?path=' + encodeURIComponent(x.main_image)) : '';
@@ -869,12 +871,12 @@ async function renderPublishedGoods() {
         <td style="padding:5px 8px;text-align:right;color:#64748b">${s.danmai != null ? '¥' + fmt(s.danmai) : '—'}</td>
       </tr>`).join('');
     return `
-      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px;margin-bottom:10px">
-        <div style="display:flex;gap:14px;align-items:flex-start">
-          <div style="width:72px;height:72px;flex-shrink:0;background:#f1f5f9;border-radius:8px;overflow:hidden;display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:24px">
-            ${imgUrl ? `<img src="${imgUrl}" style="width:100%;height:100%;object-fit:cover" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><span style="display:none">📦</span>` : '📦'}
+      <div class="pg-card" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px;margin-bottom:10px">
+        <div class="pg-card-top" style="display:flex;gap:14px;align-items:flex-start">
+          <div class="pg-img" style="width:64px;height:64px;flex-shrink:0;background:#f1f5f9;border-radius:8px;overflow:hidden;display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:22px;${imgUrl ? 'cursor:zoom-in;' : ''}" ${imgUrl ? `onclick="showImageLightbox('${imgUrl}')"` : ''}>
+            ${imgUrl ? `<img src="${imgUrl}" style="width:100%;height:100%;object-fit:cover;display:block" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><span style="display:none">📦</span>` : '📦'}
           </div>
-          <div style="flex:1;min-width:0">
+          <div class="pg-info" style="flex:1;min-width:0">
             <div style="font-weight:700;font-size:14px;color:#17203a;line-height:1.4">${esc(x.ai_title || x.raw_title || '')}</div>
             ${x.raw_title && x.raw_title !== x.ai_title ? `<div style="color:#94a3b8;font-size:12px;margin-top:2px">原：${esc(x.raw_title)}</div>` : ''}
             <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px;font-size:12px;color:#64748b">
@@ -885,11 +887,11 @@ async function renderPublishedGoods() {
               ${sku.length ? `<span>📦 ${sku.length} SKU</span>` : ''}
             </div>
           </div>
-          <div style="text-align:right;flex-shrink:0;min-width:110px">
+          <div class="pg-price" style="text-align:right;flex-shrink:0;min-width:110px">
             ${x.status === 'published'
               ? '<span style="background:#f0fdf4;color:#16a34a;border-radius:6px;padding:3px 10px;font-size:12px;font-weight:600">✅ 已上架</span>'
               : '<span style="background:#fef2f2;color:#dc2626;border-radius:6px;padding:3px 10px;font-size:12px;font-weight:600">❌ 失败</span>'}
-            <div style="margin-top:8px;font-size:13px;color:#475569">
+            <div class="pg-price-row" style="margin-top:8px;font-size:13px;color:#475569">
               <div>成本 <b>${cost != null && !Number.isNaN(cost) ? '¥' + fmt(cost) : '—'}</b></div>
               <div>上架 <b style="color:#2563eb">${sale != null && !Number.isNaN(sale) ? '¥' + fmt(sale) : '—'}</b></div>
               <div style="color:#16a34a;font-weight:600">毛利 ${profit != null ? '¥' + fmt(profit) : '—'} <span style="color:#94a3b8;font-weight:400">${margin}</span></div>
@@ -2364,6 +2366,137 @@ async function showFreightOrderDetail(key) {
     ${row('标准运费', f.standard != null ? '¥' + fmt(f.standard) : '—')}
     ${row('差值', f.diff == null ? '—' : `<span style="${diffColor}">${diffTxt}</span>`)}
   `;
+}
+
+async function showFreightDiffDialog() {
+  let items = [];
+  let latestText = '';
+  const overlay = document.createElement('div');
+  overlay.className = 'freight-diff-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:999;display:flex;align-items:center;justify-content:center;padding:16px';
+  const box = document.createElement('div');
+  box.style.cssText = 'background:#fff;border-radius:16px;padding:16px;max-width:560px;width:100%;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.22)';
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+
+  box.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <div style="font-size:16px;font-weight:700;color:#17203a">📝 差额记录（差额&gt;5元）</div>
+      <button class="btn xs" onclick="this.closest('.freight-diff-overlay').remove()">✕</button>
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:10px;align-items:center">
+      <label style="font-size:13px;color:#4b5677;flex:0 0 auto">发货日期</label>
+      <input type="date" id="diff-date" style="flex:1;padding:6px 8px;border:1px solid #e4e7f1;border-radius:8px;font-size:13px">
+      <button class="btn sm primary" id="diff-load" style="flex:0 0 auto">加载</button>
+    </div>
+    <div style="font-size:11px;color:#8894ab;margin-bottom:8px">填「实际运费」自动算差额，差额&gt;5元的单自动纳入下方文本（可填「实际重量」用于记录）</div>
+    <div id="diff-list" style="flex:1;overflow-y:auto;min-height:120px;max-height:40vh"></div>
+    <div id="diff-output" style="margin-top:12px"></div>
+  `;
+
+  const defaultDate = catalogCache.serverToday || '';
+  box.querySelector('#diff-date').value = defaultDate;
+  const listEl = box.querySelector('#diff-list');
+  const outEl = box.querySelector('#diff-output');
+
+  const strip = n => parseFloat((n || 0).toFixed(2));
+
+  const recalc = () => {
+    const picks = [];
+    listEl.querySelectorAll('[data-diff-row]').forEach(row => {
+      const i = parseInt(row.dataset.diffRow, 10);
+      const it = items[i];
+      if (!it) return;
+      const fInp = row.querySelector('[data-diff-f]');
+      const wInp = row.querySelector('[data-diff-w]');
+      const dSpan = row.querySelector('[data-diff-d]');
+      const actualFee = parseFloat(fInp.value);
+      const actualWeight = parseFloat(wInp.value);
+      if (!isNaN(actualFee)) {
+        const total = it.total || 0;
+        const diff = total - actualFee;
+        dSpan.textContent = (diff > 0 ? '+' : '') + strip(diff) + '元';
+        dSpan.style.color = diff > 5 ? '#dc2626' : diff > 0 ? '#d97706' : '#16a34a';
+        if (diff > 5) picks.push({ it, actualFee, actualWeight });
+      } else {
+        dSpan.textContent = '';
+      }
+    });
+    if (!picks.length) {
+      latestText = '';
+      window.__freightDiffText = '';
+      outEl.innerHTML = '<div class="empty">暂无差额&gt;5元的单（填实际运费后自动生成）</div>';
+      return;
+    }
+    const lines = picks.map(p => {
+      const w = isNaN(p.actualWeight) ? (p.it.weight != null ? p.it.weight : '') : p.actualWeight;
+      return `${p.it.tracking_no}，${p.it.spec}，¥${(p.it.total || 0).toFixed(2)}，${p.it.province} ${p.it.city}，重量${w}，实际运费${strip(p.actualFee)}`;
+    });
+    const sumTotal = picks.reduce((s, p) => s + (p.it.total || 0), 0);
+    const sumFee = picks.reduce((s, p) => s + p.actualFee, 0);
+    const diffTotal = sumTotal - sumFee;
+    const totalExpr = picks.map(p => strip(p.it.total || 0)).join('+');
+    const feeExpr = picks.map(p => strip(p.actualFee)).join('-');
+    const sumLine = `${totalExpr}=${strip(sumTotal)}-${feeExpr}=${strip(diffTotal)}`;
+    latestText = [...lines, sumLine, `差额${strip(diffTotal)}元`].join('\n');
+    window.__freightDiffText = latestText;
+    outEl.innerHTML = `
+      <div style="font-size:13px;font-weight:700;color:#1e3a5f;margin-bottom:6px">已纳入 ${picks.length} 单（差额合计 <span style="color:#dc2626">${strip(diffTotal)}元</span>）</div>
+      <textarea readonly style="width:100%;height:140px;padding:8px;border:1px solid #e4e7f1;border-radius:8px;font-size:12px;line-height:1.6;font-family:monospace;box-sizing:border-box">${esc(latestText)}</textarea>
+      <button class="btn primary" style="width:100%;margin-top:8px" onclick="copyToClip(window.__freightDiffText || '', '差额记录')">📋 复制文本</button>
+    `;
+  };
+
+  const load = async () => {
+    window.__freightDiffText = '';
+    const date = box.querySelector('#diff-date').value;
+    listEl.innerHTML = '<div class="empty">加载中…</div>';
+    outEl.innerHTML = '';
+    try {
+      const d = await api('/api/freight/by-date' + (date ? '?date=' + encodeURIComponent(date) : ''));
+      items = d.items || [];
+    } catch (e) { listEl.innerHTML = '<div class="empty">❌ ' + esc(e.message) + '</div>'; return; }
+    if (!items.length) {
+      listEl.innerHTML = '<div class="empty">该日期暂无运费单</div>';
+      return;
+    }
+    listEl.innerHTML = items.map((it, i) => {
+      const w = it.weight != null ? it.weight : '';
+      return `
+        <div style="border:1px solid #e4e7f1;border-radius:10px;padding:8px 10px;margin-bottom:8px" data-diff-row="${i}">
+          <div style="font-size:12px;color:#4b5677;line-height:1.5">
+            <b style="color:#17203a">${esc(it.tracking_no || '')}</b> · ${esc(it.spec || '')}<br>
+            ¥<b style="color:#dc2626">${(it.total || 0).toFixed(2)}</b> · ${esc(it.province || '')} ${esc(it.city || '')} · 账单重量 ${w}kg
+          </div>
+          <div style="display:flex;gap:6px;margin-top:6px;align-items:center;flex-wrap:wrap">
+            <input data-diff-w="${i}" type="number" step="0.01" placeholder="实际重量kg" style="width:96px;padding:5px 6px;border:1px solid #e4e7f1;border-radius:6px;font-size:12px">
+            <input data-diff-f="${i}" type="number" step="0.01" placeholder="实际运费" style="width:96px;padding:5px 6px;border:1px solid #e4e7f1;border-radius:6px;font-size:12px">
+            <span data-diff-d="${i}" style="font-size:12px;font-weight:700"></span>
+          </div>
+        </div>`;
+    }).join('');
+    listEl.querySelectorAll('[data-diff-f]').forEach(inp => { inp.oninput = () => recalc(); });
+    listEl.querySelectorAll('[data-diff-w]').forEach(inp => {
+      inp.oninput = async () => {
+        const i = parseInt(inp.dataset.diffW, 10);
+        const it = items[i];
+        const w = parseFloat(inp.value);
+        if (it && !isNaN(w) && w > 0 && (it.province || it.city)) {
+          const fInp = inp.closest('[data-diff-row]').querySelector('[data-diff-f]');
+          try {
+            const c = await api('/api/freight/calc?province=' + encodeURIComponent(it.province || '') + '&city=' + encodeURIComponent(it.city || '') + '&weight=' + w);
+            if (c.ok && c.total != null) fInp.value = c.total;
+          } catch (e) { /* 静默，保留手动填 */ }
+        }
+        recalc();
+      };
+    });
+    recalc();
+  };
+
+  box.querySelector('#diff-load').onclick = load;
+  load();
 }
 
 function renderFreightPanel(freightEl) {
