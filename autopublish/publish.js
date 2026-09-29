@@ -327,4 +327,6 @@ async function fillByType(c, selector, text){
 
   // 保留 tab 供人工查看，不关闭
   c.ws.close();
+  // 显式退出：Node 原生 WebSocket close() 后底层 socket 可能残留，进程挂起会导致 subprocess 300s 超时误判「执行超时」
+  process.exit(0);
 })().catch(e=>{console.error('FATAL',e);process.exit(1)});
