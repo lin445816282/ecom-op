@@ -861,7 +861,7 @@ async function renderPublishedGoods() {
     const sale = Number(x.sale_price), danmai = Number(x.danmai_price), fr = Number(x.freight) || 0;
     const profit = (sale > 0 && cost != null && !Number.isNaN(cost)) ? (sale - cost - fr) : null;
     const margin = (profit != null && sale > 0) ? (profit / sale * 100).toFixed(1) + '%' : '—';
-    const imgUrl = x.main_image ? ('/api/published-goods/image?path=' + encodeURIComponent(x.main_image)) : '';
+    const imgUrl = x.main_image ? (BASE + '/api/published-goods/image?path=' + encodeURIComponent(x.main_image)) : '';
     const shopName = x.shop_name || PG_SHOP[x.shop_id] || (x.shop_id ? '店铺' + x.shop_id : '—');
     const skuRows = sku.map(s => `
       <tr style="border-top:1px solid #f1f5f9">
@@ -2023,7 +2023,7 @@ function renderProducts(editingProduct = null) {
 }
 
 /* ---------------- 商品库（平台 + 电商层级） ---------------- */
-const catalogCache = { tree: [], stats: {}, orders: [], analysis: null, filter: '', mods: [], modCounts: {}, goodsEffect: [], performance: null, perfAll: null, promoAnalysis: null, realRoi: null, promoShop: 'all', promoPeriod: 'all', lowStock: [], selection: null, freight: null, freightMatch: null, freightRate: [], freightCompare: null, freightCompareMonth: '', suppliers: [], supplierProducts: {}, freightMonth: '', freightShop: null, deleteMode: false, perfShop: null, perfRange: null, perfPreset: 'all', perfStatuses: [], orderStatuses: [], serverToday: '' };
+const catalogCache = { tree: [], stats: {}, orders: [], analysis: null, filter: '', mods: [], modCounts: {}, goodsEffect: [], performance: null, perfAll: null, promoAnalysis: null, realRoi: null, promoShop: 'all', promoPeriod: 'all', lowStock: [], selection: null, freight: null, freightMatch: null, freightMatchPage: 1, freightMatchPageSize: 20, freightRate: [], freightCompare: null, freightCompareMonth: '', suppliers: [], supplierProducts: {}, freightMonth: '', freightShop: null, deleteMode: false, perfShop: null, perfRange: null, perfPreset: 'all', perfStatuses: [], orderStatuses: [], serverToday: '' };
 
 // 日期工具：'YYYY-MM-DD' -> 本地 Date / Date -> 'YYYY-MM-DD'
 const dToObj = (s) => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
@@ -2390,20 +2390,23 @@ async function showFreightDiffDialog() {
       <input type="date" id="diff-date" style="flex:1;padding:6px 8px;border:1px solid #e4e7f1;border-radius:8px;font-size:13px">
       <button class="btn sm primary" id="diff-load" style="flex:0 0 auto">加载</button>
     </div>
-    <div style="font-size:11px;color:#8894ab;margin-bottom:8px">填「实际运费」自动算差额，差额&gt;5元的单自动纳入下方文本（可填「实际重量」用于记录）</div>
+    <div style="font-size:11px;color:#8894ab;margin-bottom:8px">填「实际重量」自动算运费；差额&gt;0 即算错会标注，&gt;5元的单自动纳入下方文本</div>
     <div id="diff-list" style="flex:1;overflow-y:auto;min-height:120px;max-height:40vh"></div>
-    <div id="diff-output" style="margin-top:12px"></div>
+    <div id="diff-stats" style="margin-top:8px"></div>
+    <div id="diff-output" style="margin-top:8px"></div>
   `;
 
   const defaultDate = catalogCache.serverToday || '';
   box.querySelector('#diff-date').value = defaultDate;
   const listEl = box.querySelector('#diff-list');
   const outEl = box.querySelector('#diff-output');
+  const statsEl = box.querySelector('#diff-stats');
 
   const strip = n => parseFloat((n || 0).toFixed(2));
 
   const recalc = () => {
     const picks = [];
+    let wrongCount = 0, bigCount = 0, wrongSum = 0;
     listEl.querySelectorAll('[data-diff-row]').forEach(row => {
       const i = parseInt(row.dataset.diffRow, 10);
       const it = items[i];
@@ -2416,13 +2419,31 @@ async function showFreightDiffDialog() {
       if (!isNaN(actualFee)) {
         const total = it.total || 0;
         const diff = total - actualFee;
-        dSpan.textContent = (diff > 0 ? '+' : '') + strip(diff) + '元';
-        dSpan.style.color = diff > 5 ? '#dc2626' : diff > 0 ? '#d97706' : '#16a34a';
-        if (diff > 5) picks.push({ it, actualFee, actualWeight });
+        if (diff > 5) {
+          dSpan.textContent = '+' + strip(diff) + '元 ⚠大额';
+          dSpan.style.color = '#dc2626';
+          dSpan.style.fontWeight = '700';
+          picks.push({ it, actualFee, actualWeight });
+          bigCount++; wrongCount++; wrongSum += diff;
+        } else if (diff > 0.005) {
+          dSpan.textContent = '+' + strip(diff) + '元 算错';
+          dSpan.style.color = '#ea580c';
+          dSpan.style.fontWeight = '700';
+          wrongCount++; wrongSum += diff;
+        } else if (diff < -0.005) {
+          dSpan.textContent = strip(diff) + '元 少收';
+          dSpan.style.color = '#16a34a';
+        } else {
+          dSpan.textContent = '相符';
+          dSpan.style.color = '#16a34a';
+        }
       } else {
         dSpan.textContent = '';
       }
     });
+    statsEl.innerHTML = wrongCount > 0
+      ? `<div style="font-size:12px;color:#4b5677;padding:8px 10px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px">⚠️ 本日 <b style="color:#ea580c">${wrongCount}</b> 单算错（多收 <b style="color:#ea580c">${strip(wrongSum)}</b> 元），其中 <b style="color:#dc2626">${bigCount}</b> 单差额&gt;5元已纳入文本</div>`
+      : '';
     if (!picks.length) {
       latestText = '';
       window.__freightDiffText = '';
@@ -2463,14 +2484,16 @@ async function showFreightDiffDialog() {
     }
     listEl.innerHTML = items.map((it, i) => {
       const w = it.weight != null ? it.weight : '';
+      const est = it.est_weight != null ? it.est_weight : '';
+      const estHint = est !== '' ? ` · 推断 <b style="color:#0ea5e9">${est}kg</b>` : '';
       return `
         <div style="border:1px solid #e4e7f1;border-radius:10px;padding:8px 10px;margin-bottom:8px" data-diff-row="${i}">
           <div style="font-size:12px;color:#4b5677;line-height:1.5">
             <b style="color:#17203a">${esc(it.tracking_no || '')}</b> · ${esc(it.spec || '')}<br>
-            ¥<b style="color:#dc2626">${(it.total || 0).toFixed(2)}</b> · ${esc(it.province || '')} ${esc(it.city || '')} · 账单重量 ${w}kg
+            ¥<b style="color:#dc2626">${(it.total || 0).toFixed(2)}</b> · ${esc(it.province || '')} ${esc(it.city || '')} · 账单重量 ${w}kg${estHint}
           </div>
           <div style="display:flex;gap:6px;margin-top:6px;align-items:center;flex-wrap:wrap">
-            <input data-diff-w="${i}" type="number" step="0.01" placeholder="实际重量kg" style="width:96px;padding:5px 6px;border:1px solid #e4e7f1;border-radius:6px;font-size:12px">
+            <input data-diff-w="${i}" type="number" step="0.01" value="${est}" placeholder="实际重量kg" style="width:96px;padding:5px 6px;border:1px solid #e4e7f1;border-radius:6px;font-size:12px">
             <input data-diff-f="${i}" type="number" step="0.01" placeholder="实际运费" style="width:96px;padding:5px 6px;border:1px solid #e4e7f1;border-radius:6px;font-size:12px">
             <span data-diff-d="${i}" style="font-size:12px;font-weight:700"></span>
           </div>
@@ -2491,6 +2514,10 @@ async function showFreightDiffDialog() {
         }
         recalc();
       };
+    });
+    // 预填了推断重量的单，自动算一次运费（无需手动触发）
+    listEl.querySelectorAll('[data-diff-w]').forEach(inp => {
+      if (inp.value && parseFloat(inp.value) > 0) inp.oninput();
     });
     recalc();
   };
@@ -2525,12 +2552,29 @@ function renderFreightPanel(freightEl) {
   const unmatched = fr.total - fr.matched;
   const fm = catalogCache.freightMatch;
   const anomalies = (fm && fm.anomalies) || [];
-  const matchHTML = anomalies.length
+  const maTotal = anomalies.length;
+  const maPageSize = catalogCache.freightMatchPageSize || 20;
+  const maTotalPages = Math.max(1, Math.ceil(maTotal / maPageSize));
+  let maPage = catalogCache.freightMatchPage || 1;
+  if (maPage > maTotalPages) maPage = maTotalPages;
+  catalogCache.freightMatchPage = maPage;
+  const maStart = (maPage - 1) * maPageSize;
+  const maItems = anomalies.slice(maStart, maStart + maPageSize);
+  const matchHTML = maTotal
     ? `
     <div class="callout" style="margin-bottom:10px">共 ${fm.total_groups} 组「相同 SKU+数量」，其中 ${fm.anomaly_total} 单运费偏离标准（多为重量差异）。</div>
+    <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
+      <span style="font-size:12px;color:#4b5677">每页</span>
+      <select data-match-page-size style="padding:4px 8px;border:1px solid #e4e7f1;border-radius:6px;font-size:12px">
+        ${[20, 50, 200].map(n => `<option value="${n}" ${maPageSize === n ? 'selected' : ''}>${n}</option>`).join('')}
+      </select>
+      <button class="btn xs" data-match-prev ${maPage <= 1 ? 'disabled' : ''} style="${maPage <= 1 ? 'opacity:.4;pointer-events:none' : ''}">‹ 上一页</button>
+      <span style="font-size:12px;color:#4b5677">${maPage} / ${maTotalPages} 页（共 ${maTotal} 条）</span>
+      <button class="btn xs" data-match-next ${maPage >= maTotalPages ? 'disabled' : ''} style="${maPage >= maTotalPages ? 'opacity:.4;pointer-events:none' : ''}">下一页 ›</button>
+    </div>
     <div class="table-wrap"><table>
       <thead><tr><th>店铺</th><th>订单号</th><th>数量</th><th>规格</th><th>标准运费</th><th>实际运费</th><th>差值</th><th>重量</th><th>目的地</th></tr></thead>
-      <tbody>${anomalies.slice(0, 30).map(a => `
+      <tbody>${maItems.map(a => `
         <tr>
           <td>${esc(a.shop_name || '—')}</td>
           <td><a href="javascript:;" style="color:#1d4ed8;font-weight:600;text-decoration:none" onclick="showFreightOrderDetail('${esc(a.tracking_no || a.order_no)}')" title="点击查看完整订单 + 运费信息">${esc((a.order_no || '').slice(0, 10))}${(a.order_no || '').length > 10 ? '…' : ''}</a></td>
@@ -2542,8 +2586,7 @@ function renderFreightPanel(freightEl) {
           <td>${a.weight != null ? a.weight + 'kg' : '—'}</td>
           <td>${esc(a.province)}${esc(a.city)}</td>
         </tr>`).join('')}
-      </tbody></table></div>
-    ${fm.anomaly_total > 30 ? `<div class="orders-more">仅显示前 30 条，共 ${fm.anomaly_total} 条异常单</div>` : ''}`
+      </tbody></table></div>`
     : '<div class="empty">暂无异常运费（所有匹配单运费一致）</div>';
   const rates = catalogCache.freightRate || [];
   const rateHTML = rates.length ? rates.map(r => `
@@ -2568,13 +2611,14 @@ function renderFreightPanel(freightEl) {
       <div class="perf-card"><div class="p-label">少收</div><div class="p-value">${cmp.under}</div></div>
       <div class="perf-card"><div class="p-label">多收总额</div><div class="p-value" style="color:var(--red)">¥${fmt(cmp.over_amount)}</div></div>
       <div class="perf-card"><div class="p-label">⚠大误差(≥${bigDiff}元)</div><div class="p-value" style="color:var(--red)">${cmp.big_count || 0}</div></div>
+      <div class="perf-card"><div class="p-label">⚠重量算错</div><div class="p-value" style="color:#ea580c">${cmp.weight_wrong_count || 0}</div></div>
     </div>
     <div class="table-wrap"><table>
-      <thead><tr><th>规格</th><th>重量</th><th>标准</th><th>实际</th><th>差</th><th>目的地</th></tr></thead>
+      <thead><tr><th>规格</th><th>重量(账单→推断)</th><th>标准</th><th>实际</th><th>差</th><th>目的地</th></tr></thead>
       <tbody>${cmp.items.slice(0, 20).map(x => `
         <tr style="${x.big ? 'background:#fff1f0;' : ''}">
           <td title="${esc(x.spec)}">${esc((x.spec || '').slice(0, 14))}${(x.spec || '').length > 14 ? '…' : ''}</td>
-          <td>${x.weight}kg</td>
+          <td>${x.est_weight != null && Math.abs(x.est_weight - x.weight) > 0.05 ? `${x.weight}→<b style="color:#ea580c">${x.est_weight}</b>kg` : `${x.weight}kg`}</td>
           <td>¥${fmt(x.standard)}</td>
           <td>¥${fmt(x.actual)}</td>
           <td class="${x.diff > 0 ? 'stock-low' : ''}" style="${x.big ? 'font-weight:700;' : ''}">${x.big ? '⚠' : ''}${x.diff > 0 ? '+' : ''}${fmt(x.diff)}</td>
@@ -2621,6 +2665,12 @@ function renderFreightPanel(freightEl) {
   freightEl.querySelector('[data-freight-shop]').onchange = e => loadFreight(catalogCache.freightMonth, e.target.value);
   freightEl.querySelector('[data-freight-import]').onclick = () => importFreightBill();
   freightEl.querySelector('[data-freight-diff]').onclick = () => showFreightDiffDialog();
+  const maPsEl = freightEl.querySelector('[data-match-page-size]');
+  if (maPsEl) maPsEl.onchange = e => { catalogCache.freightMatchPageSize = parseInt(e.target.value, 10); catalogCache.freightMatchPage = 1; renderFreightPanel(freightEl); };
+  const maPrevEl = freightEl.querySelector('[data-match-prev]');
+  if (maPrevEl) maPrevEl.onclick = () => { catalogCache.freightMatchPage = Math.max(1, (catalogCache.freightMatchPage || 1) - 1); renderFreightPanel(freightEl); };
+  const maNextEl = freightEl.querySelector('[data-match-next]');
+  if (maNextEl) maNextEl.onclick = () => { catalogCache.freightMatchPage = (catalogCache.freightMatchPage || 1) + 1; renderFreightPanel(freightEl); };
   const cmpMonthEl = freightEl.querySelector('[data-freight-compare-month]');
   if (cmpMonthEl) cmpMonthEl.onchange = e => loadFreightCompare(e.target.value);
   freightEl.querySelector('[data-freight-rematch]').onclick = async () => {
