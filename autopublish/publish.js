@@ -185,15 +185,17 @@ async function fillByType(c, selector, text){
       await sleep(2000);
       await ev(c,`(()=>{const inp=document.querySelector('input[placeholder="${ph}"]');if(inp){inp.scrollIntoView({block:'center'});inp.click();return 'ok'}return 'no'})()`);
       await sleep(2000);
-      // 选规格类型（下拉面板）
-      await ev(c,`(()=>{const panel=document.querySelector('[class*="dropdownPanel"],[class*="dropdown-panel"]');if(!panel)return 'no panel';const items=[...panel.querySelectorAll('*')].filter(e=>(e.textContent||'').trim()===${JSON.stringify(spec.type)}&&e.children.length===0);if(items.length){items[items.length-1].click();return 'ok';}return 'no ${spec.type}'})()`);
+      // 选规格类型（下拉选项：直接找文本匹配的可见叶子，不依赖面板 class —— 不同类目面板 class 名不同）
+      const selType=await ev(c,`(()=>{const items=[...document.querySelectorAll('*')].filter(e=>(e.textContent||'').trim()===${JSON.stringify(spec.type)}&&e.children.length===0&&e.getBoundingClientRect().width>0&&e.getBoundingClientRect().height>0);if(items.length){items[items.length-1].click();return 'ok';}return 'no ${spec.type}'})()`);
       await sleep(1500);
-      log(`  已添加规格类型${si+1}: ${spec.type}`);
+      // 验证规格类型是否真选上（value 应等于 spec.type）
+      const selVal = await ev(c, `(()=>{const i=document.querySelector('input[placeholder="${ph}"]');return i?i.value:''})()`);
+      log(`  已添加规格类型${si+1}: ${spec.type} [${selType}, value=${selVal}]`);
     }
     // 填规格值（幂等：只填空 input）
     let filled=0;
     for(const v of spec.values){
-      const f=await ev(c,`(()=>{const inps=[...document.querySelectorAll('input[placeholder="请输入规格名称"]')].filter(i=>!i.value);const inp=inps.sort((a,b)=>b.getBoundingClientRect().y-a.getBoundingClientRect().y)[0];if(!inp)return 'no empty';inp.scrollIntoView({block:'center'});inp.click();inp.focus();return 'ok'})()`);
+      const f=await ev(c,`(()=>{const inps=[...document.querySelectorAll('input')].filter(i=>!i.value && (/请输入规格名称/.test(i.placeholder||'') || /^自定义/.test(i.placeholder||'')));const inp=inps.sort((a,b)=>b.getBoundingClientRect().y-a.getBoundingClientRect().y)[0];if(!inp)return 'no empty';inp.scrollIntoView({block:'center'});inp.click();inp.focus();return 'ok'})()`);
       if(f!=='ok'){ log(`  ⚠️ 规格值[${v}] 无空位`); continue; }
       await sleep(300);
       await c.send('Input.insertText',{text:v});
