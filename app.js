@@ -705,6 +705,7 @@ async function renderAutopublish() {
   updatePricePreview();
 
   $('#ap-start-btn').onclick = async () => {
+    if ($('#ap-start-btn').disabled) return;  // 双保险：禁用时忽略点击，防重复提交
     const url = $('#ap-url').value.trim();
     if (!url) { toast('请先粘贴 1688 链接'); return; }
     const shop_id = Number($('#ap-shop').value) || 5;
@@ -716,17 +717,27 @@ async function renderAutopublish() {
       danmai_mult: Number($('#ap-danmai').value) || 1.5,
     };
     $('#ap-start-btn').disabled = true;
-    $('#ap-start-btn').textContent = '已提交…';
+    $('#ap-start-btn').textContent = '提交中…';
     try {
       const resp = await api('/api/autopublish', 'POST', { url, shop_id, pricing });
       if (resp && resp.task && resp.task.id) {
-        toast('任务已启动');
         $('#ap-url').value = '';
         startApPolling(resp.task.id);
-      } else { toast((resp && resp.error) || '提交失败'); }
-    } catch (e) { toast(e.message); }
-    $('#ap-start-btn').disabled = false;
-    $('#ap-start-btn').textContent = '开始上架';
+        toast(`任务 #${resp.task.id} 已启动，自动上架中…`);
+        // 滚动到任务卡片，让用户直接看到实时进度
+        const cur = $('#ap-current');
+        if (cur) cur.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        // 按钮保持禁用，任务结束(published/failed)后在 startApPolling 里恢复
+      } else {
+        toast((resp && resp.error) || '提交失败');
+        $('#ap-start-btn').disabled = false;
+        $('#ap-start-btn').textContent = '开始上架';
+      }
+    } catch (e) {
+      toast(e.message);
+      $('#ap-start-btn').disabled = false;
+      $('#ap-start-btn').textContent = '开始上架';
+    }
   };
 
   await loadApList();
@@ -742,7 +753,12 @@ function startApPolling(taskId) {
     try {
       const t = await api(`/api/autopublish/${taskId}`);
       renderApCurrent(t);
-      if (['published', 'failed'].includes(t.status)) { clearInterval(apTimer); apTimer = null; loadApList(); }
+      if (['published', 'failed'].includes(t.status)) {
+        clearInterval(apTimer); apTimer = null; loadApList();
+        // 任务结束，恢复「开始上架」按钮
+        const btn = $('#ap-start-btn');
+        if (btn) { btn.disabled = false; btn.textContent = '开始上架'; }
+      }
     } catch (e) {}
   };
   poll();

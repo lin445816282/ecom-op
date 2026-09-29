@@ -109,24 +109,25 @@ async function fillByType(c, selector, text){
     log('[1/8] 选类目: ' + cfg.categoryPath);
     await c.send('Page.navigate',{url:'https://mms.pinduoduo.com/goods/category'});
     await sleep(6000);
-    await fillByType(c, 'input[placeholder="请输入关键词搜索分类"]', cfg.categoryKeyword);
+    // 搜索关键词优化：优先用 categoryPath 第二级（具体品类词如"仿真花"），大类词（家居/婚庆）太宽泛搜不准
+    const _parts = (cfg.categoryPath||'').split(' > ');
+    let searchKw = cfg.categoryKeyword;
+    if(_parts.length >= 2 && _parts[1] && _parts[1].length >= 2){ searchKw = _parts[1]; }
+    await fillByType(c, 'input[placeholder="请输入关键词搜索分类"]', searchKw);
     await sleep(2500);
-    // 模糊匹配类目：精确 → 前两级前缀+最后级关键词 → 前两级前缀 → 最后级关键词
+    // 模糊匹配类目：精确 → 中间级词命中最后级 → 中间级词包含 → 最后级词包含 → AI关键词包含
     const sel=await ev(c,`(()=>{
       const want=${JSON.stringify(cfg.categoryPath)};
       const parts = want.split(' > ');
-      const prefix = parts.length >= 2 ? parts.slice(0,2).join(' > ') : want;
       const lastWord = parts[parts.length-1] || '';
+      const midWord = parts.length>=2 ? parts[1] : lastWord;
       const cands = [...document.querySelectorAll('.choose-category,[class*="searchItem"]')];
       const norm = e => (e.textContent||'').trim();
-      // 1. 精确匹配完整路径
       let el = cands.find(e=>norm(e)===want);
-      // 2. 前两级前缀 + 最后级关键词包含
-      if(!el) el = cands.find(e=>{const t=norm(e); return t.startsWith(prefix) && t.includes(lastWord);});
-      // 3. 前两级前缀（取第一个，拼多多搜索结果按相关度排序）
-      if(!el) el = cands.find(e=>norm(e).startsWith(prefix));
-      // 4. 最后级关键词包含
-      if(!el) el = cands.find(e=>norm(e).includes(lastWord));
+      if(!el && midWord) el = cands.find(e=>{const lp=norm(e).split(' > ').pop(); return lp===midWord || lp.includes(midWord);});
+      if(!el && midWord) el = cands.find(e=>norm(e).includes(midWord));
+      if(!el && lastWord) el = cands.find(e=>norm(e).includes(lastWord));
+      if(!el) el = cands.find(e=>norm(e).includes(${JSON.stringify(cfg.categoryKeyword)}));
       if(el){ el.scrollIntoView({block:'center'}); el.click(); return 'ok'; }
       return 'no category';
     })()`);
