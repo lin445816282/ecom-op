@@ -326,7 +326,7 @@ async function fillByType(c, selector, text){
       if(t && /提交成功|发布成功/.test(t)){ successFlag=true; break; }
     }
     log('  提交结果 URL:', finalUrl);
-    if(successFlag){ const m=finalUrl.match(/goods_id=(\d+)/); log('✅ 上架成功，商品ID:', m?m[1]:'未知'); log('RESULT_SUCCESS goods_id='+(m?m[1]:'')); }
+    if(successFlag){ const m=finalUrl.match(/goods_id=(\d+)/); log('✅ 已提交待审核，商品ID:', m?m[1]:'未知'); log('RESULT_SUBMITTED goods_id='+(m?m[1]:'')); }
     else log('⚠️ 提交后 120 秒未确认成功，请人工检查页面');
   } else {
     log('⚠️ 未找到提交按钮，请人工检查页面');

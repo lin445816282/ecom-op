@@ -1348,6 +1348,50 @@ class Handler(BaseHTTPRequestHandler):
             return _json(self, {"ok": True, "tasks": tasks, "count": len(tasks),
                                 "urls": len(urls), "shops": len(shop_ids)})
 
+        if path == "/api/autopublish/verify" and self.command == "POST":
+            # 回查 submitted（已提交待审核）商品在拼多多后台的真实状态，更新为 published/draft/failed
+            item = self._read_body()
+            shop_id = int(item.get("shop_id") or 1)
+            port = SHOP_CDP_PORT.get(shop_id)
+            if not port:
+                return _json(self, {"error": f"店铺 {shop_id} 未配置 CDP 端口"}, 400)
+            tasks = catalog.list_autopublish_tasks(300)
+            pending = [t for t in tasks if t.get("shop_id") == shop_id
+                       and t.get("status") in ("submitted", "published", "draft")
+                       and t.get("pdd_goods_id")]
+            ids = [str(t["pdd_goods_id"]) for t in pending]
+            if not ids:
+                return _json(self, {"ok": True, "verified": 0, "message": "无待回查商品"})
+            res = _run_node_script("verify_publish.js", [str(port), ",".join(ids)], timeout=150)
+            statuses = (res.get("data") or {}).get("statuses") or {}
+            verified = 0
+            changed = []
+            for t in pending:
+                gid = str(t["pdd_goods_id"])
+                real = statuses.get(gid)
+                if not real:
+                    continue
+                verified += 1
+                if real == "published":
+                    if t.get("status") != "published":
+                        catalog.update_autopublish_task(t["id"], status="published")
+                        catalog.save_published_good(goods_id=gid, status="published", remark="回查确认在售")
+                        changed.append({"goods_id": gid, "from": t["status"], "to": "published"})
+                elif real == "draft":
+                    if t.get("status") != "draft":
+                        catalog.update_autopublish_task(t["id"], status="draft")
+                        catalog.save_published_good(goods_id=gid, status="draft", remark="回查确认草稿")
+                        changed.append({"goods_id": gid, "from": t["status"], "to": "draft"})
+                else:  # offshelf / soldout / rejected / missing
+                    if t.get("status") != "failed":
+                        catalog.update_autopublish_task(t["id"], status="failed",
+                                                         error=f"回查确认未上架({real})")
+                        catalog.save_published_good(goods_id=gid, status="failed",
+                                                     remark=f"回查确认未上架({real})")
+                        changed.append({"goods_id": gid, "from": t["status"], "to": f"failed({real})"})
+            return _json(self, {"ok": True, "verified": verified, "changed": changed,
+                                "statuses": statuses})
+
         if path == "/api/autopublish" and self.command == "GET":
             limit = int(qs.get("limit", ["50"])[0] or 50)
             items = catalog.list_autopublish_tasks(limit)
@@ -2009,14 +2053,14 @@ def _autopublish_bg(task_id: int, pricing: dict = None):
         "freight": _pr.get("freight"),
         "stock": cfg.get("stock"),
     }
-    if "RESULT_SUCCESS" in out:
-        m = __import__("re").search(r"RESULT_SUCCESS goods_id=(\d+)", out)
+    if "RESULT_SUBMITTED" in out:
+        m = __import__("re").search(r"RESULT_SUBMITTED goods_id=(\d+)", out)
         goods_id = m.group(1) if m else ""
-        catalog.update_autopublish_task(task_id, status="published", pdd_goods_id=goods_id)
-        catalog.append_autopublish_log(task_id, "publish", "done", f"✅ 上架成功，商品ID: {goods_id}")
+        catalog.update_autopublish_task(task_id, status="submitted", pdd_goods_id=goods_id)
+        catalog.append_autopublish_log(task_id, "publish", "done", f"✅ 已提交待审核，商品ID: {goods_id}")
         try:
-            catalog.save_published_good(**{**_base, "goods_id": goods_id, "status": "published",
-                "published_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "remark": ""})
+            catalog.save_published_good(**{**_base, "goods_id": goods_id, "status": "submitted",
+                "published_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "remark": "已提交待审核"})
         except Exception as e:
             catalog.append_autopublish_log(task_id, "publish", "done", f"⚠️ 写入上架列表失败:{e}")
     else:
