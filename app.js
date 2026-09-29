@@ -1900,7 +1900,7 @@ function renderProducts(editingProduct = null) {
 }
 
 /* ---------------- 商品库（平台 + 电商层级） ---------------- */
-const catalogCache = { tree: [], stats: {}, orders: [], analysis: null, filter: '', mods: [], modCounts: {}, goodsEffect: [], performance: null, perfAll: null, promoAnalysis: null, realRoi: null, promoShop: 'all', promoPeriod: 'all', lowStock: [], selection: null, freight: null, freightMatch: null, freightRate: [], freightCompare: null, suppliers: [], supplierProducts: {}, freightMonth: '', freightShop: null, deleteMode: false, perfShop: null, perfRange: null, perfPreset: 'all', perfStatuses: [], orderStatuses: [], serverToday: '' };
+const catalogCache = { tree: [], stats: {}, orders: [], analysis: null, filter: '', mods: [], modCounts: {}, goodsEffect: [], performance: null, perfAll: null, promoAnalysis: null, realRoi: null, promoShop: 'all', promoPeriod: 'all', lowStock: [], selection: null, freight: null, freightMatch: null, freightRate: [], freightCompare: null, freightCompareMonth: '', suppliers: [], supplierProducts: {}, freightMonth: '', freightShop: null, deleteMode: false, perfShop: null, perfRange: null, perfPreset: 'all', perfStatuses: [], orderStatuses: [], serverToday: '' };
 
 // 日期工具：'YYYY-MM-DD' -> 本地 Date / Date -> 'YYYY-MM-DD'
 const dToObj = (s) => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
@@ -2160,6 +2160,16 @@ async function loadFreight(month, shop) {
   if (freightEl) renderFreightPanel(freightEl);
 }
 
+async function loadFreightCompare(month) {
+  catalogCache.freightCompareMonth = month || '';
+  const qs = month ? '?month=' + encodeURIComponent(month) : '';
+  try {
+    catalogCache.freightCompare = await api('/api/catalog/freight-compare' + qs);
+  } catch (e) { toast(e.message); return; }
+  const freightEl = $('#freight-panel');
+  if (freightEl) renderFreightPanel(freightEl);
+}
+
 function renderFreightPanel(freightEl) {
   const fr = catalogCache.freight;
   if (!fr || fr.total <= 0) {
@@ -2215,6 +2225,9 @@ function renderFreightPanel(freightEl) {
           <td>${r.add_price}</td>
         </tr>`).join('') : '';
   const cmp = catalogCache.freightCompare;
+  const cmpMonths = (cmp && cmp.months) || [];
+  const cmpMonthSel = cmpMonths.length ? `<select data-freight-compare-month style="margin-left:8px;padding:3px 8px;border:1px solid #e4e7f1;border-radius:6px;font-size:12px;font-weight:400;color:#4b5677"><option value="">全部月份</option>${cmpMonths.map(m => `<option value="${m}" ${catalogCache.freightCompareMonth === m ? 'selected' : ''}>${m}</option>`).join('')}</select>` : '';
+  const bigDiff = cmp && cmp.big_diff != null ? cmp.big_diff : 1;
   const cmpHTML = cmp && cmp.total_compared > 0 ? `
     <div class="perf-summary" style="margin-bottom:12px">
       <div class="perf-card"><div class="p-label">已对账</div><div class="p-value">${cmp.total_compared}</div></div>
@@ -2222,20 +2235,21 @@ function renderFreightPanel(freightEl) {
       <div class="perf-card"><div class="p-label">多收</div><div class="p-value" style="color:var(--red)">${cmp.over}</div></div>
       <div class="perf-card"><div class="p-label">少收</div><div class="p-value">${cmp.under}</div></div>
       <div class="perf-card"><div class="p-label">多收总额</div><div class="p-value" style="color:var(--red)">¥${fmt(cmp.over_amount)}</div></div>
+      <div class="perf-card"><div class="p-label">⚠大误差(≥${bigDiff}元)</div><div class="p-value" style="color:var(--red)">${cmp.big_count || 0}</div></div>
     </div>
     <div class="table-wrap"><table>
       <thead><tr><th>规格</th><th>重量</th><th>标准</th><th>实际</th><th>差</th><th>目的地</th></tr></thead>
       <tbody>${cmp.items.slice(0, 20).map(x => `
-        <tr>
+        <tr style="${x.big ? 'background:#fff1f0;' : ''}">
           <td title="${esc(x.spec)}">${esc((x.spec || '').slice(0, 14))}${(x.spec || '').length > 14 ? '…' : ''}</td>
           <td>${x.weight}kg</td>
           <td>¥${fmt(x.standard)}</td>
           <td>¥${fmt(x.actual)}</td>
-          <td class="${x.diff > 0 ? 'stock-low' : ''}">${x.diff > 0 ? '+' : ''}${fmt(x.diff)}</td>
+          <td class="${x.diff > 0 ? 'stock-low' : ''}" style="${x.big ? 'font-weight:700;' : ''}">${x.big ? '⚠' : ''}${x.diff > 0 ? '+' : ''}${fmt(x.diff)}</td>
           <td>${esc(x.province)}</td>
         </tr>`).join('')}
       </tbody></table></div>
-    ${cmp.items.length > 20 ? `<div class="orders-more">仅显示前 20 条，共 ${cmp.items.length} 条</div>` : ''}`
+    ${cmp.items.length > 20 ? `<div class="orders-more">仅显示前 20 条（按误差降序），共 ${cmp.items.length} 条</div>` : ''}`
     : '<div class="empty">暂无对账数据（需匹配订单且有重量）</div>';
   freightEl.innerHTML = filterBar + `
     <div class="perf-summary" style="margin-bottom:14px">
@@ -2268,11 +2282,13 @@ function renderFreightPanel(freightEl) {
       <tbody>${rateHTML}</tbody></table></div>
     <div class="perf-hint" style="margin:6px 0 0">附加票费：北京+1.5 / 上海+1 / 深圳·海南+0.5；「/」=该区间走首重+续重</div>
     <hr style="margin:16px 0;border:none;border-top:1px solid var(--line)">
-    <h4 style="margin:0 0 8px">💰 自动对账 <span class="perf-hint">实际运费 vs 报价单标准</span></h4>
+    <h4 style="margin:0 0 8px">💰 自动对账 <span class="perf-hint">实际运费 vs 报价单标准</span>${cmpMonthSel}</h4>
     ${cmpHTML}`;
   freightEl.querySelector('[data-freight-month]').onchange = e => loadFreight(e.target.value, catalogCache.freightShop);
   freightEl.querySelector('[data-freight-shop]').onchange = e => loadFreight(catalogCache.freightMonth, e.target.value);
   freightEl.querySelector('[data-freight-import]').onclick = () => importFreightBill();
+  const cmpMonthEl = freightEl.querySelector('[data-freight-compare-month]');
+  if (cmpMonthEl) cmpMonthEl.onchange = e => loadFreightCompare(e.target.value);
   freightEl.querySelector('[data-freight-rematch]').onclick = async () => {
     try {
       const r = await api('/api/catalog/freight/match', 'POST');
@@ -2332,11 +2348,12 @@ async function renderFreightView() {
   const el = $('#view-freight');
   el.innerHTML = '<div class="empty"><div class="big">🚚</div>加载中…</div>';
   try {
+    const cmpQs = catalogCache.freightCompareMonth ? '?month=' + encodeURIComponent(catalogCache.freightCompareMonth) : '';
     const [freightResp, matchResp, rateResp, compareResp, threeResp, mappingResp, treeResp] = await Promise.all([
       api('/api/catalog/freight'),
       api('/api/catalog/freight/match-analysis'),
       api('/api/catalog/freight-rate'),
-      api('/api/catalog/freight-compare'),
+      api('/api/catalog/freight-compare' + cmpQs),
       api('/api/freight/three-way'),
       api('/api/freight/mapping'),
       api('/api/catalog/tree'),

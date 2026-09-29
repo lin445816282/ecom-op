@@ -1926,18 +1926,32 @@ def calc_freight(province: str, city: str, weight: float, rates=None) -> dict:
     }
 
 
-def freight_compare() -> dict:
-    """自动对账：实际运费 vs 报价单标准，标多收/少收/相符。"""
+def freight_compare(month: str = None) -> dict:
+    """自动对账：实际运费 vs 报价单标准，标多收/少收/相符，大误差单独标记。
+
+    month: 可选，按月份（substr(ship_date,1,7)）筛选。
+    返回 {total_compared, match, over, under, over_amount, big_count, big_diff,
+          months, items}；items 每项含 big 标记（|diff| >= big_diff）。
+    """
+    BIG_DIFF = 1.0  # 大误差阈值：实际与标准相差 ≥1 元
     with closing(_conn()) as c:
         rates = list_freight_rate()
+        where = "WHERE f.matched = 1 AND f.weight IS NOT NULL"
+        args = []
+        if month:
+            where += " AND substr(f.ship_date,1,7) = ?"
+            args.append(month)
+        months = [r["ym"] for r in c.execute(
+            "SELECT DISTINCT substr(f.ship_date,1,7) AS ym FROM freight f "
+            "WHERE f.matched = 1 AND f.weight IS NOT NULL ORDER BY ym"
+        ).fetchall()]
         rows = c.execute(
             "SELECT f.tracking_no, f.total AS actual, f.weight, f.province, f.city, "
-            "o.order_no, o.spec FROM freight f "
-            "JOIN orders o ON o.order_no = f.matched_order_no "
-            "WHERE f.matched = 1 AND f.weight IS NOT NULL"
+            "f.ship_date, o.order_no, o.spec FROM freight f "
+            "JOIN orders o ON o.order_no = f.matched_order_no " + where, args
         ).fetchall()
         items = []
-        match = over = under = 0
+        match = over = under = big_count = 0
         for r in rows:
             calc = calc_freight(r["province"], r["city"], r["weight"], rates)
             if calc is None:
@@ -1945,24 +1959,31 @@ def freight_compare() -> dict:
             actual = r["actual"] or 0
             diff = round(actual - calc["total"], 2)
             status = "相符" if abs(diff) < 0.005 else ("多收" if diff > 0 else "少收")
+            big = abs(diff) >= BIG_DIFF
             if status == "相符":
                 match += 1
             elif status == "多收":
                 over += 1
             else:
                 under += 1
+            if big:
+                big_count += 1
             items.append({
                 "tracking_no": r["tracking_no"], "order_no": r["order_no"],
                 "spec": r["spec"], "province": r["province"], "city": r["city"],
-                "weight": r["weight"], "region_group": calc["region_group"],
-                "standard": calc["total"], "actual": actual, "diff": diff, "status": status,
+                "ship_date": r["ship_date"], "weight": r["weight"],
+                "region_group": calc["region_group"],
+                "standard": calc["total"], "actual": actual, "diff": diff,
+                "status": status, "big": big,
             })
-        items.sort(key=lambda x: -x["diff"])
+        items.sort(key=lambda x: -abs(x["diff"]))
         over_amount = round(sum(x["diff"] for x in items if x["status"] == "多收"), 2)
         return {
             "total_compared": len(items),
             "match": match, "over": over, "under": under,
             "over_amount": over_amount,
+            "big_count": big_count, "big_diff": BIG_DIFF,
+            "months": months,
             "items": items,
         }
 

@@ -1021,7 +1021,8 @@ class Handler(BaseHTTPRequestHandler):
             return _json(self, {"items": catalog.list_freight_rate()})
 
         if path == "/api/catalog/freight-compare" and self.command == "GET":
-            return _json(self, catalog.freight_compare())
+            month = qs.get("month", [""])[0] or None
+            return _json(self, catalog.freight_compare(month))
 
         if path == "/api/catalog/suppliers" and self.command == "GET":
             return _json(self, {"items": catalog.list_suppliers()})
