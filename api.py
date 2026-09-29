@@ -1658,10 +1658,11 @@ def _autopublish_bg(task_id: int):
     res = _run_node_script("publish.js", [config_win, str(port)], timeout=300)
     if not res.get("data") and not res.get("ok"):
         return _fail("publish", res.get("error") or res.get("stderr") or "上架失败")
-    # publish.js 输出是进度日志（非 JSON），判断成功靠 stdout 里的 success 标记
+    # publish.js 输出是进度日志（非 JSON），判断成功靠 stdout 里的 RESULT_SUCCESS 明确标记
+    # 不能用 "/success" 或 "上架成功" 宽松匹配：续填模式的日志里含 URL ".../success?goods_id=xxx" 会误判
     out = res.get("stdout", "")
-    if "上架成功" in out or "/success" in out:
-        m = __import__("re").search(r"goods_id=(\d+)", out)
+    if "RESULT_SUCCESS" in out:
+        m = __import__("re").search(r"RESULT_SUCCESS goods_id=(\d+)", out)
         goods_id = m.group(1) if m else ""
         catalog.update_autopublish_task(task_id, status="published", pdd_goods_id=goods_id)
         catalog.append_autopublish_log(task_id, "publish", "done", f"✅ 上架成功，商品ID: {goods_id}")

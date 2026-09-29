@@ -640,9 +640,9 @@ def append_autopublish_log(task_id: int, stage: str, status: str, msg: str) -> N
             "ts": datetime.now().strftime("%H:%M:%S"),
         })
         c.execute(
-            "UPDATE autopublish_tasks SET log=?, stage=?, status=?, "
+            "UPDATE autopublish_tasks SET log=?, stage=?, "
             "updated_at=datetime('now','localtime') WHERE id=?",
-            (json.dumps(logs, ensure_ascii=False), stage, status, task_id),
+            (json.dumps(logs, ensure_ascii=False), stage, task_id),
         )
         c.commit()
 
