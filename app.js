@@ -785,6 +785,24 @@ function renderApCurrent(t) {
     </div>`;
   }).join('');
   const statusTag = { queued:'排队中', crawling:'抓取中', ai:'AI配置中', publishing:'上架中', published:'✅ 已上架', failed:'❌ 失败' }[t.status] || t.status;
+  // publish 阶段实时细粒度进度（后端读 config.publish.log 解析出的 [N/8] 步骤）
+  const pp = t.publish_progress;
+  let ppHtml = '';
+  if (pp && pp.step) {
+    const pct = Math.round(pp.step / 8 * 100);
+    const ppLines = (pp.lines || []).map(l => esc(l)).join('<br>');
+    ppHtml = `
+    <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:10px;padding:12px;margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div style="font-weight:700;font-size:14px;color:#0369a1">🔄 正在${esc(pp.step_name)}</div>
+        <div style="font-size:12px;color:#0284c7;font-weight:600">${pp.step}/8</div>
+      </div>
+      <div style="height:6px;background:#e0f2fe;border-radius:3px;overflow:hidden">
+        <div style="height:100%;width:${pct}%;background:linear-gradient(90deg,#0284c7,#38bdf8);border-radius:3px;transition:width .5s"></div>
+      </div>
+      ${ppLines ? `<div style="margin-top:8px;font-size:11px;color:#475569;font-family:ui-monospace,monospace;line-height:1.7;max-height:120px;overflow-y:auto">${ppLines}</div>` : ''}
+    </div>`;
+  }
   el.innerHTML = `
     <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:18px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
@@ -794,6 +812,7 @@ function renderApCurrent(t) {
       ${t.ai_title ? `<div style="background:#f0f9ff;border-radius:8px;padding:10px;margin-bottom:10px;font-size:13px;color:#075985">AI 标题：${esc(t.ai_title)}</div>` : ''}
       ${t.pdd_goods_id ? `<div style="background:#f0fdf4;border-radius:8px;padding:10px;margin-bottom:10px;font-size:13px;color:#166534">商品ID：${esc(t.pdd_goods_id)}</div>` : ''}
       ${t.error ? `<div style="background:#fef2f2;border-radius:8px;padding:10px;margin-bottom:10px;font-size:13px;color:#b91c1c">${esc(t.error)}</div>` : ''}
+      ${ppHtml}
       ${steps || '<div style="color:#94a3b8">等待启动…</div>'}
     </div>
   `;

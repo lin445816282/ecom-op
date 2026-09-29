@@ -1337,6 +1337,8 @@ class Handler(BaseHTTPRequestHandler):
             task["log"] = json.loads(task.get("log") or "[]")
             task["skus"] = json.loads(task.get("skus") or "[]")
             task["images"] = json.loads(task.get("images") or "[]")
+            # publish 阶段的实时细粒度进度（publish.js 写进 config.publish.log 的 [N/8] 步骤）
+            task["publish_progress"] = _read_publish_progress(task_id)
             return _json(self, task)
 
         if path == "/api/published-goods" and self.command == "GET":
@@ -1715,6 +1717,36 @@ def _normalize_publish_images(outdir_wsl: str) -> int:
         except Exception:
             pass
     return n
+
+
+def _read_publish_progress(task_id: int) -> dict:
+    """读取 publish.js 实时写进 config.publish.log 的细粒度进度。
+
+    publish.js 每步 log('[N/8] xxx') 同时 append 到 config.publish.log（Windows 路径
+    C:\\tmp\\pdd-publish\\task_{id}\\config.publish.log，WSL 读 /mnt/c/...）。publish 阶段
+    subprocess.run 阻塞执行，前端轮询任务详情时靠这个文件拿到「正在上传主图 [2/8]」级别的实时进度。
+    """
+    import re
+    STEP_NAMES = {
+        1: "选类目", 2: "上传主图", 3: "填标题", 4: "填规格",
+        5: "填价格库存", 6: "上传规格预览图", 7: "填参考价", 8: "提交",
+    }
+    log_path = f"/mnt/c/tmp/pdd-publish/task_{task_id}/config.publish.log"
+    try:
+        with open(log_path, encoding="utf-8", errors="replace") as f:
+            lines = [l.rstrip("\n").rstrip("\r") for l in f.readlines()]
+    except Exception:
+        return {"step": None, "step_name": "", "lines": []}
+    step = None
+    for l in lines:
+        m = re.search(r"\[(\d)/8\]", l)
+        if m:
+            step = int(m.group(1))
+    return {
+        "step": step,
+        "step_name": STEP_NAMES.get(step, ""),
+        "lines": lines[-8:],
+    }
 
 
 def _autopublish_bg(task_id: int, pricing: dict = None):
