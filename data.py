@@ -2484,7 +2484,7 @@ def ai_generate_publish_config(product: dict, pricing: dict = None) -> dict:
         if cost <= 0:
             continue
         p = calc_pricing(cost, profit_rate, roi, aftersale_rate, freight, danmai_mult, ref_mult)
-        new_pb[str(spec2_val)] = {"pdd": p["pdd"], "danmai": p["danmai"]}
+        new_pb[str(spec2_val)] = {"cost": cost, "pdd": p["pdd"], "danmai": p["danmai"]}
         max_ref = max(max_ref, p["refPrice"])
     if not new_pb:
         return {"config": None, "warning": "", "error": "进价解析失败（cost 非法）"}

@@ -486,6 +486,34 @@ CREATE TABLE IF NOT EXISTS autopublish_tasks (
     updated_at TEXT DEFAULT (datetime('now','localtime'))
 );
 CREATE INDEX IF NOT EXISTS idx_autopublish_status ON autopublish_tasks(status);
+
+CREATE TABLE IF NOT EXISTS published_goods (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER,
+    goods_id TEXT DEFAULT '',
+    main_image TEXT DEFAULT '',
+    source_url TEXT DEFAULT '',
+    raw_title TEXT DEFAULT '',
+    ai_title TEXT DEFAULT '',
+    category TEXT DEFAULT '',
+    shop_id INTEGER DEFAULT 5,
+    shop_name TEXT DEFAULT '',
+    sku_count INTEGER DEFAULT 0,
+    sku_details TEXT DEFAULT '[]',
+    cost_price REAL,
+    sale_price REAL,
+    danmai_price REAL,
+    ref_price REAL,
+    profit_rate REAL,
+    freight REAL,
+    stock INTEGER,
+    status TEXT DEFAULT 'published',
+    published_at TEXT DEFAULT '',
+    remark TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_published_goods_status ON published_goods(status);
+CREATE INDEX IF NOT EXISTS idx_published_goods_shop ON published_goods(shop_id);
 """
 
 
@@ -653,6 +681,79 @@ def append_autopublish_log(task_id: int, stage: str, status: str, msg: str) -> N
             (json.dumps(logs, ensure_ascii=False), stage, task_id),
         )
         c.commit()
+
+
+def get_shop_name(shop_id: int) -> str:
+    """查店铺名，找不到返回空串。"""
+    if not shop_id:
+        return ""
+    with closing(_conn()) as c:
+        row = c.execute("SELECT name FROM shops WHERE id=?", (shop_id,)).fetchone()
+        return row["name"] if row else ""
+
+
+def save_published_good(**fields) -> dict:
+    """写入/更新上架商品记录（按 task_id + goods_id 幂等，已存在则更新）。"""
+    allowed = {
+        "task_id", "goods_id", "main_image", "source_url", "raw_title",
+        "ai_title", "category", "shop_id", "shop_name", "sku_count",
+        "sku_details", "cost_price", "sale_price", "danmai_price", "ref_price",
+        "profit_rate", "freight", "stock", "status", "published_at", "remark",
+    }
+    data = {k: v for k, v in fields.items() if k in allowed}
+    if not data:
+        return {}
+    if "sku_details" in data and not isinstance(data["sku_details"], str):
+        data["sku_details"] = json.dumps(data["sku_details"], ensure_ascii=False)
+    goods_id = str(data.get("goods_id") or "")
+    with closing(_conn()) as c:
+        row = None
+        if goods_id:
+            # 成功：按 goods_id 幂等（同一商品只留一条）
+            row = c.execute(
+                "SELECT id FROM published_goods WHERE goods_id=?", (goods_id,)
+            ).fetchone()
+        elif data.get("task_id"):
+            # 失败（无 goods_id）：按 task_id 幂等（同一任务只留一条失败记录）
+            row = c.execute(
+                "SELECT id FROM published_goods WHERE task_id=? AND goods_id=''",
+                (data.get("task_id"),),
+            ).fetchone()
+        if row:
+            sets = ", ".join(f"{k}=?" for k in data)
+            c.execute(
+                f"UPDATE published_goods SET {sets} WHERE id=?",
+                list(data.values()) + [row["id"]],
+            )
+            c.commit()
+            return dict(c.execute("SELECT * FROM published_goods WHERE id=?", (row["id"],)).fetchone())
+        cols = ", ".join(data.keys())
+        phs = ", ".join("?" for _ in data)
+        cur = c.execute(f"INSERT INTO published_goods({cols}) VALUES({phs})", list(data.values()))
+        c.commit()
+        return dict(c.execute("SELECT * FROM published_goods WHERE id=?", (cur.lastrowid,)).fetchone())
+
+
+def list_published_goods(shop_id: int = None, status: str = None, limit: int = 300) -> list[dict]:
+    """上架商品列表，可按店铺/状态筛选；sku_details 解析成数组返回。"""
+    sql = "SELECT * FROM published_goods WHERE 1=1"
+    args = []
+    if shop_id:
+        sql += " AND shop_id=?"
+        args.append(shop_id)
+    if status:
+        sql += " AND status=?"
+        args.append(status)
+    sql += " ORDER BY id DESC LIMIT ?"
+    args.append(limit)
+    with closing(_conn()) as c:
+        rows = [dict(r) for r in c.execute(sql, args).fetchall()]
+    for r in rows:
+        try:
+            r["sku_details"] = json.loads(r.get("sku_details") or "[]")
+        except Exception:
+            r["sku_details"] = []
+    return rows
 
 
 def init_db() -> None:
@@ -1716,6 +1817,25 @@ def list_freight(limit: int = 5000, unmatched_only: bool = False) -> list[dict]:
         return [dict(r) for r in c.execute(sql, (limit,)).fetchall()]
 
 
+def list_freight_by_date(date: str = None, limit: int = 1000) -> list[dict]:
+    """按发货日期查运费单明细（含订单规格/店铺），供差额记录弹框用。"""
+    with closing(_conn()) as c:
+        sql = ("SELECT f.tracking_no, f.account_name, f.courier, f.ship_date, "
+               "f.province, f.city, f.weight, f.freight_cost, f.bill_fee, "
+               "f.extra_fee, f.total, f.matched, "
+               "o.spec, o.quantity, o.order_no, s.name AS shop_name "
+               "FROM freight f "
+               "LEFT JOIN orders o ON o.order_no = f.matched_order_no "
+               "LEFT JOIN shops s ON s.id = f.matched_shop_id")
+        args = []
+        if date:
+            sql += " WHERE f.ship_date = ?"
+            args.append(date)
+        sql += " ORDER BY f.ship_date DESC LIMIT ?"
+        args.append(limit)
+        return [dict(r) for r in c.execute(sql, args).fetchall()]
+
+
 def freight_analysis(month: str = None, shop_id: int = None) -> dict:
     """运费账单分析：汇总 + 匹配率 + 月度趋势 + 目的地 + 快递公司。
     month: 按月筛选（YYYY-MM）；shop_id: 按匹配到的店铺筛选。"""
@@ -1788,8 +1908,10 @@ def freight_match_analysis(month: str = None, shop_id: int = None) -> dict:
             args.append(shop_id)
         rows = c.execute(
             "SELECT f.tracking_no, f.total, f.weight, f.province, f.city, "
-            "o.platform_product_id, o.spec, o.quantity, o.order_no "
+            "o.platform_product_id, o.spec, o.quantity, o.order_no, "
+            "s.name AS shop_name "
             "FROM freight f JOIN orders o ON o.order_no = f.matched_order_no "
+            "LEFT JOIN shops s ON s.id = f.matched_shop_id "
             "WHERE " + " AND ".join(w),
             tuple(args),
         ).fetchall()
@@ -1809,6 +1931,7 @@ def freight_match_analysis(month: str = None, shop_id: int = None) -> dict:
                 anomalies.append({
                     "tracking_no": it["tracking_no"],
                     "order_no": it["order_no"],
+                    "shop_name": it["shop_name"],
                     "platform_product_id": ppid,
                     "spec": spec,
                     "quantity": it["quantity"],
@@ -1836,6 +1959,70 @@ def freight_match_analysis(month: str = None, shop_id: int = None) -> dict:
             "anomaly_total": len(anomalies),
             "groups": group_summary,
             "anomalies": anomalies,
+        }
+
+
+def freight_order_detail(order_no: str = None, tracking_no: str = None) -> dict:
+    """单个订单完整信息 + 运费信息（匹配分析列表点击订单号弹框用）。
+
+    按 tracking_no（优先）或 order_no 定位，返回 {found, order, freight}。
+    """
+    with closing(_conn()) as c:
+        where = "f.tracking_no = ?"
+        arg = tracking_no
+        if not tracking_no:
+            where = "f.matched_order_no = ?"
+            arg = order_no
+        row = c.execute(
+            "SELECT o.order_no, o.status, o.quantity, o.pay_time, o.confirm_time, "
+            "o.spec, o.buyer_amount, o.seller_amount, o.district, o.platform_product_id, "
+            "o.province, o.city, "
+            "s.name AS shop_name, "
+            "f.tracking_no, f.account_name, f.courier, f.ship_date, "
+            "f.province AS f_province, f.city AS f_city, f.weight, f.freight_cost, "
+            "f.bill_fee, f.extra_fee, f.total "
+            "FROM freight f "
+            "LEFT JOIN orders o ON o.order_no = f.matched_order_no "
+            "LEFT JOIN shops s ON s.id = f.matched_shop_id "
+            "WHERE " + where,
+            (arg,),
+        ).fetchone()
+        if not row:
+            return {"found": False}
+        std = calc_freight(row["f_province"], row["f_city"], row["weight"])
+        return {
+            "found": True,
+            "order": {
+                "order_no": row["order_no"],
+                "shop_name": row["shop_name"] or "",
+                "status": row["status"] or "",
+                "quantity": row["quantity"],
+                "spec": row["spec"] or "",
+                "platform_product_id": row["platform_product_id"] or "",
+                "buyer_amount": row["buyer_amount"],
+                "seller_amount": row["seller_amount"],
+                "pay_time": row["pay_time"] or "",
+                "confirm_time": row["confirm_time"] or "",
+                "province": row["province"] or "",
+                "city": row["city"] or "",
+                "district": row["district"] or "",
+                "courier": row["courier"] or "",
+            },
+            "freight": {
+                "tracking_no": row["tracking_no"],
+                "account_name": row["account_name"] or "",
+                "courier": row["courier"] or "",
+                "ship_date": row["ship_date"] or "",
+                "province": row["f_province"] or "",
+                "city": row["f_city"] or "",
+                "weight": row["weight"],
+                "freight_cost": row["freight_cost"],
+                "bill_fee": row["bill_fee"],
+                "extra_fee": row["extra_fee"],
+                "total": row["total"],
+                "standard": std["total"] if std else None,
+                "diff": round((row["total"] or 0) - std["total"], 2) if std else None,
+            },
         }
 
 

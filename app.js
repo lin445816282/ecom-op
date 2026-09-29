@@ -30,6 +30,7 @@ const VIEWS = {
   sale: {title:'销售看板', sub:'成交订单 SKU → 品类归类，每日/每月销量与金额汇总。'},
   errors: {title:'错误处理', sub:'上架/采集/发布踩过的坑，对应处理技能 + 出现次数，遇到一次点一次。'},
   autopublish: {title:'一键上架', sub:'输入 1688 链接 → 自动抓取 → AI 生成配置 → CDP 上架到拼多多。'},
+  publishedgoods: {title:'上架列表', sub:'已上架商品台账：主图/标题/SKU价格/店铺/类目/状态，一键上架成功后自动归档。'},
 };
 
 // 运营指南分组（单一数据源：新增子模块只需在这里加一条，侧边栏子菜单 + 目录页自动生成）
@@ -560,6 +561,7 @@ function setView(view) {
   if (view === 'sale') renderSale();
   if (view === 'errors') renderErrors();
   if (view === 'autopublish') renderAutopublish();
+  if (view === 'publishedgoods') renderPublishedGoods();
 }
 
 // 错误处理：错误知识库（错误类型 → 处理技能 + 出现次数，遇到一次点一次）
@@ -824,6 +826,125 @@ async function loadApList() {
 function startApListPolling() {
   if (window._apListTimer) clearInterval(window._apListTimer);
   window._apListTimer = setInterval(() => { if (state.view === 'autopublish') loadApList(); }, 10000);
+}
+
+// 上架列表：已上架商品台账（存表 published_goods），一键上架成功后自动归档
+const PG_SHOP = {5:'嘉裕工艺品', 3:'如若月下', 1:'闲时来工艺', 6:'欧世艺'};
+const pgFilter = { shop_id: '', status: '' };
+
+async function renderPublishedGoods() {
+  const el = $('#view-publishedgoods');
+  el.innerHTML = '<div style="padding:24px;color:#666">加载中…</div>';
+  let items = [];
+  try {
+    const qs = [];
+    if (pgFilter.shop_id) qs.push('shop_id=' + pgFilter.shop_id);
+    if (pgFilter.status) qs.push('status=' + pgFilter.status);
+    const resp = await api('/api/published-goods' + (qs.length ? '?' + qs.join('&') : ''));
+    items = (resp && resp.items) || [];
+  } catch (e) { items = []; }
+
+  const published = items.filter(x => x.status === 'published');
+  const failed = items.filter(x => x.status === 'failed');
+  const totalSku = published.reduce((s, x) => s + (Number(x.sku_count) || 0), 0);
+  let marginSum = 0, marginN = 0;
+  for (const x of published) {
+    const cost = Number(x.cost_price), sale = Number(x.sale_price), fr = Number(x.freight) || 0;
+    if (sale > 0 && cost != null && !Number.isNaN(cost)) { marginSum += (sale - cost - fr) / sale; marginN++; }
+  }
+  const avgMargin = marginN ? (marginSum / marginN * 100).toFixed(1) + '%' : '—';
+
+  const cards = items.map(x => {
+    const sku = x.sku_details || [];
+    const cost = Number(x.cost_price), sale = Number(x.sale_price), danmai = Number(x.danmai_price), fr = Number(x.freight) || 0;
+    const profit = (sale > 0 && cost != null && !Number.isNaN(cost)) ? (sale - cost - fr) : null;
+    const margin = (profit != null && sale > 0) ? (profit / sale * 100).toFixed(1) + '%' : '—';
+    const imgUrl = x.main_image ? ('/api/published-goods/image?path=' + encodeURIComponent(x.main_image)) : '';
+    const shopName = x.shop_name || PG_SHOP[x.shop_id] || (x.shop_id ? '店铺' + x.shop_id : '—');
+    const skuRows = sku.map(s => `
+      <tr style="border-top:1px solid #f1f5f9">
+        <td style="padding:5px 8px">${esc(s.name || '')}</td>
+        <td style="padding:5px 8px;text-align:right;color:#64748b">${s.cost != null ? '¥' + fmt(s.cost) : '—'}</td>
+        <td style="padding:5px 8px;text-align:right;font-weight:600">${s.pdd != null ? '¥' + fmt(s.pdd) : '—'}</td>
+        <td style="padding:5px 8px;text-align:right;color:#64748b">${s.danmai != null ? '¥' + fmt(s.danmai) : '—'}</td>
+      </tr>`).join('');
+    return `
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px;margin-bottom:10px">
+        <div style="display:flex;gap:14px;align-items:flex-start">
+          <div style="width:72px;height:72px;flex-shrink:0;background:#f1f5f9;border-radius:8px;overflow:hidden;display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:24px">
+            ${imgUrl ? `<img src="${imgUrl}" style="width:100%;height:100%;object-fit:cover" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><span style="display:none">📦</span>` : '📦'}
+          </div>
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:700;font-size:14px;color:#17203a;line-height:1.4">${esc(x.ai_title || x.raw_title || '')}</div>
+            ${x.raw_title && x.raw_title !== x.ai_title ? `<div style="color:#94a3b8;font-size:12px;margin-top:2px">原：${esc(x.raw_title)}</div>` : ''}
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px;font-size:12px;color:#64748b">
+              <span>🗂 ${esc(x.category || '—')}</span>
+              <span>🏪 ${esc(shopName)}</span>
+              <span>🕒 ${esc((x.published_at || x.created_at || '').slice(0, 16))}</span>
+              ${x.goods_id ? `<span>🆔 ${esc(x.goods_id)}</span>` : ''}
+              ${sku.length ? `<span>📦 ${sku.length} SKU</span>` : ''}
+            </div>
+          </div>
+          <div style="text-align:right;flex-shrink:0;min-width:110px">
+            ${x.status === 'published'
+              ? '<span style="background:#f0fdf4;color:#16a34a;border-radius:6px;padding:3px 10px;font-size:12px;font-weight:600">✅ 已上架</span>'
+              : '<span style="background:#fef2f2;color:#dc2626;border-radius:6px;padding:3px 10px;font-size:12px;font-weight:600">❌ 失败</span>'}
+            <div style="margin-top:8px;font-size:13px;color:#475569">
+              <div>成本 <b>${cost != null && !Number.isNaN(cost) ? '¥' + fmt(cost) : '—'}</b></div>
+              <div>上架 <b style="color:#2563eb">${sale != null && !Number.isNaN(sale) ? '¥' + fmt(sale) : '—'}</b></div>
+              <div style="color:#16a34a;font-weight:600">毛利 ${profit != null ? '¥' + fmt(profit) : '—'} <span style="color:#94a3b8;font-weight:400">${margin}</span></div>
+            </div>
+          </div>
+        </div>
+        ${sku.length ? `<details style="margin-top:10px"><summary style="cursor:pointer;font-size:12px;color:#64748b">SKU 明细 · 进价 → 拼单价 → 单买价</summary>
+          <table style="width:100%;margin-top:8px;border-collapse:collapse;font-size:12px">
+            <thead><tr style="color:#94a3b8"><th style="text-align:left;padding:5px 8px">规格</th><th style="text-align:right;padding:5px 8px">进价(原始)</th><th style="text-align:right;padding:5px 8px">拼单价</th><th style="text-align:right;padding:5px 8px">单买价</th></tr></thead>
+            <tbody>${skuRows}</tbody>
+          </table></details>` : ''}
+        ${x.remark ? `<div style="color:#b91c1c;font-size:12px;margin-top:6px">⚠️ ${esc(x.remark)}</div>` : ''}
+        ${x.source_url ? `<div style="margin-top:6px"><a href="${esc(x.source_url)}" target="_blank" rel="noopener" style="font-size:12px;color:#2563eb;text-decoration:none">🔗 1688 货源 →</a></div>` : ''}
+      </div>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div style="padding:20px;max-width:1100px">
+      <div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap">
+        <div style="flex:1;min-width:120px;background:#f8fafc;border-radius:12px;padding:14px">
+          <div style="color:#64748b;font-size:12px">已上架商品</div>
+          <div style="font-size:24px;font-weight:700;margin-top:4px;color:#16a34a">${published.length}</div>
+        </div>
+        <div style="flex:1;min-width:120px;background:#f8fafc;border-radius:12px;padding:14px">
+          <div style="color:#64748b;font-size:12px">在售 SKU 总数</div>
+          <div style="font-size:24px;font-weight:700;margin-top:4px">${totalSku}</div>
+        </div>
+        <div style="flex:1;min-width:120px;background:#f8fafc;border-radius:12px;padding:14px">
+          <div style="color:#64748b;font-size:12px">失败记录</div>
+          <div style="font-size:24px;font-weight:700;margin-top:4px;color:${failed.length ? '#dc2626' : '#94a3b8'}">${failed.length}</div>
+        </div>
+        <div style="flex:1;min-width:120px;background:#f8fafc;border-radius:12px;padding:14px">
+          <div style="color:#64748b;font-size:12px">平均毛利率</div>
+          <div style="font-size:24px;font-weight:700;margin-top:4px;color:#2563eb">${avgMargin}</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+        <select id="pg-shop" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;background:#fff">
+          <option value="">全部店铺</option>
+          ${Object.entries(PG_SHOP).map(([id, n]) => `<option value="${id}" ${pgFilter.shop_id === id ? 'selected' : ''}>${n}</option>`).join('')}
+        </select>
+        <select id="pg-status" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;background:#fff">
+          <option value="">全部状态</option>
+          <option value="published" ${pgFilter.status === 'published' ? 'selected' : ''}>✅ 已上架</option>
+          <option value="failed" ${pgFilter.status === 'failed' ? 'selected' : ''}>❌ 失败</option>
+        </select>
+        <button class="btn" id="pg-refresh" style="font-size:13px;padding:8px 14px">🔄 刷新</button>
+      </div>
+      <div id="pg-list">${cards || '<div class="empty" style="color:#94a3b8">暂无上架记录。去「一键上架」跑一单，成功后自动归档到这里。</div>'}</div>
+    </div>
+  `;
+
+  $('#pg-shop').onchange = () => { pgFilter.shop_id = $('#pg-shop').value; renderPublishedGoods(); };
+  $('#pg-status').onchange = () => { pgFilter.status = $('#pg-status').value; renderPublishedGoods(); };
+  $('#pg-refresh').onclick = () => renderPublishedGoods();
 }
 
 // 盈利看板：当日净利 = 净收入 − 推广 − 商品成本 − 运费
@@ -2170,6 +2291,81 @@ async function loadFreightCompare(month) {
   if (freightEl) renderFreightPanel(freightEl);
 }
 
+window.copyToClip = async (text, label) => {
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.style.cssText = 'position:fixed;left:-9999px;top:0';
+      document.body.appendChild(ta); ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    }
+    toast((label || '') + '已复制');
+  } catch (e) { toast('复制失败，请长按手动复制'); }
+};
+
+async function showFreightOrderDetail(key) {
+  if (!key) return;
+  const overlay = document.createElement('div');
+  overlay.className = 'freight-detail-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:999;display:flex;align-items:center;justify-content:center;padding:24px';
+  const box = document.createElement('div');
+  box.style.cssText = 'background:#fff;border-radius:16px;padding:20px;max-width:520px;width:100%;max-height:86vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.22)';
+  box.innerHTML = '<div class="empty">加载中…</div>';
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+
+  let d;
+  try {
+    d = await api('/api/freight/order-detail?tracking_no=' + encodeURIComponent(key));
+  } catch (e) {
+    box.innerHTML = '<div class="empty">❌ ' + esc(e.message) + '</div>';
+    return;
+  }
+  if (!d || !d.found) {
+    box.innerHTML = '<div class="empty">未找到该订单 / 运费信息</div>';
+    return;
+  }
+  const o = d.order, f = d.freight;
+  const row = (label, val, extra = '') => `<div style="display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px solid #f5f6fa;font-size:13px"><span style="color:#8894ab;flex:0 0 auto">${label}</span><span style="color:#17203a;font-weight:600;text-align:right;word-break:break-all">${val}${extra}</span></div>`;
+  const diffColor = f.diff == null ? '' : (f.diff > 0 ? 'color:#dc2626' : 'color:#16a34a');
+  const diffTxt = f.diff == null ? '—' : (f.diff > 0 ? '+' : '') + fmt(f.diff);
+  const addr = [o.province || '', o.city || '', o.district || ''].filter(Boolean).join(' ');
+  box.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+      <div style="font-size:16px;font-weight:700;color:#17203a">订单 + 运费详情</div>
+      <button class="btn xs" onclick="this.closest('.freight-detail-overlay').remove()" style="flex:0 0 auto">✕ 关闭</button>
+    </div>
+    <div style="font-size:13px;font-weight:700;color:#1e3a5f;margin-bottom:6px">📦 订单信息</div>
+    ${row('订单号', esc(o.order_no || '—'), ` <a href="javascript:;" style="color:#1d4ed8;font-size:12px" onclick="copyToClip('${esc(o.order_no)}','订单号')">复制</a>`)}
+    ${row('店铺', esc(o.shop_name || '—'))}
+    ${row('状态', esc(o.status || '—'))}
+    ${row('规格', esc(o.spec || '—'))}
+    ${row('数量', o.quantity != null ? o.quantity : '—')}
+    ${row('买家实付', o.buyer_amount != null ? '¥' + fmt(o.buyer_amount) : '—')}
+    ${row('卖家实收', o.seller_amount != null ? '¥' + fmt(o.seller_amount) : '—')}
+    ${row('支付时间', esc(o.pay_time || '—'))}
+    ${row('发货时间', esc(o.confirm_time || '—'))}
+    ${row('收货地址', esc(addr || '—'))}
+    <div style="font-size:13px;font-weight:700;color:#1e3a5f;margin:14px 0 6px">🚚 运费信息</div>
+    ${row('运单号', esc(f.tracking_no || '—'), ` <a href="javascript:;" style="color:#1d4ed8;font-size:12px" onclick="copyToClip('${esc(f.tracking_no)}','运单号')">复制</a>`)}
+    ${row('面单账号', esc(f.account_name || '—'))}
+    ${row('快递', esc(f.courier || '—'))}
+    ${row('发货日期', esc(f.ship_date || '—'))}
+    ${row('目的地', esc([f.province || '', f.city || ''].filter(Boolean).join(' ') || '—'))}
+    ${row('结算重量', f.weight != null ? f.weight + ' kg' : '—')}
+    ${row('快递费', f.freight_cost != null ? '¥' + fmt(f.freight_cost) : '—')}
+    ${row('面单费', f.bill_fee != null ? '¥' + fmt(f.bill_fee) : '—')}
+    ${row('附加费', f.extra_fee != null ? '¥' + fmt(f.extra_fee) : '—')}
+    ${row('应结金额', f.total != null ? '¥' + fmt(f.total) : '—')}
+    ${row('标准运费', f.standard != null ? '¥' + fmt(f.standard) : '—')}
+    ${row('差值', f.diff == null ? '—' : `<span style="${diffColor}">${diffTxt}</span>`)}
+  `;
+}
+
 function renderFreightPanel(freightEl) {
   const fr = catalogCache.freight;
   if (!fr || fr.total <= 0) {
@@ -2200,10 +2396,13 @@ function renderFreightPanel(freightEl) {
     ? `
     <div class="callout" style="margin-bottom:10px">共 ${fm.total_groups} 组「相同 SKU+数量」，其中 ${fm.anomaly_total} 单运费偏离标准（多为重量差异）。</div>
     <div class="table-wrap"><table>
-      <thead><tr><th>规格</th><th>标准运费</th><th>实际运费</th><th>差值</th><th>重量</th><th>目的地</th></tr></thead>
+      <thead><tr><th>店铺</th><th>订单号</th><th>数量</th><th>规格</th><th>标准运费</th><th>实际运费</th><th>差值</th><th>重量</th><th>目的地</th></tr></thead>
       <tbody>${anomalies.slice(0, 30).map(a => `
         <tr>
-          <td title="${esc(a.spec)}">${esc((a.spec || '').slice(0, 16))}${(a.spec || '').length > 16 ? '…' : ''}</td>
+          <td>${esc(a.shop_name || '—')}</td>
+          <td><a href="javascript:;" style="color:#1d4ed8;font-weight:600;text-decoration:none" onclick="showFreightOrderDetail('${esc(a.tracking_no || a.order_no)}')" title="点击查看完整订单 + 运费信息">${esc((a.order_no || '').slice(0, 10))}${(a.order_no || '').length > 10 ? '…' : ''}</a></td>
+          <td>${a.quantity != null ? a.quantity : '—'}</td>
+          <td title="${esc(a.spec)}">${esc((a.spec || '').slice(0, 14))}${(a.spec || '').length > 14 ? '…' : ''}</td>
           <td>¥${fmt(a.standard_fee)}</td>
           <td>¥${fmt(a.actual_fee)}</td>
           <td class="${a.diff > 0 ? 'stock-low' : ''}">${a.diff > 0 ? '+' : ''}${fmt(a.diff)}</td>
@@ -2263,6 +2462,7 @@ function renderFreightPanel(freightEl) {
     <div style="display:flex;gap:8px;margin:10px 0 14px;flex-wrap:wrap">
       <button class="btn sm" data-freight-import>⬆ 导入账单</button>
       <button class="btn sm" data-freight-rematch>🔁 重新匹配</button>
+      <button class="btn sm" data-freight-diff style="background:#fff7ed;color:#ea580c;border-color:#fed7aa">📝 差额记录</button>
       <button class="btn sm" data-freight-export>⬇ 导出运费</button>
     </div>
     <h4 style="margin:0 0 8px">🗺️ 目的地省份 TOP</h4>
@@ -2287,6 +2487,7 @@ function renderFreightPanel(freightEl) {
   freightEl.querySelector('[data-freight-month]').onchange = e => loadFreight(e.target.value, catalogCache.freightShop);
   freightEl.querySelector('[data-freight-shop]').onchange = e => loadFreight(catalogCache.freightMonth, e.target.value);
   freightEl.querySelector('[data-freight-import]').onclick = () => importFreightBill();
+  freightEl.querySelector('[data-freight-diff]').onclick = () => showFreightDiffDialog();
   const cmpMonthEl = freightEl.querySelector('[data-freight-compare-month]');
   if (cmpMonthEl) cmpMonthEl.onchange = e => loadFreightCompare(e.target.value);
   freightEl.querySelector('[data-freight-rematch]').onclick = async () => {

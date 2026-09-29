@@ -35,7 +35,7 @@ PDD_COMMENTS_FULL_JS = r"C:\tmp\fetch_comments_full.js"
 
 # 访问口令：环境变量 ECOM_OP_TOKEN 可覆盖，默认见下。静态资源公开，/api/* 需带口令。
 ACCESS_TOKEN = os.environ.get("ECOM_OP_TOKEN", "Alcz8283103")
-AUTH_WHITELIST = {"/", "/index.html", "/app.js", "/style.css", "/favicon.ico", "/api/auth/login"}
+AUTH_WHITELIST = {"/", "/index.html", "/app.js", "/style.css", "/favicon.ico", "/api/auth/login", "/api/published-goods/image"}
 
 
 def _sanitize(obj):
@@ -1024,6 +1024,15 @@ class Handler(BaseHTTPRequestHandler):
             month = qs.get("month", [""])[0] or None
             return _json(self, catalog.freight_compare(month))
 
+        if path == "/api/freight/order-detail" and self.command == "GET":
+            order_no = qs.get("order_no", [""])[0] or None
+            tracking_no = qs.get("tracking_no", [""])[0] or None
+            return _json(self, catalog.freight_order_detail(order_no, tracking_no))
+
+        if path == "/api/freight/by-date" and self.command == "GET":
+            date = qs.get("date", [""])[0] or None
+            return _json(self, {"items": catalog.list_freight_by_date(date)})
+
         if path == "/api/catalog/suppliers" and self.command == "GET":
             return _json(self, {"items": catalog.list_suppliers()})
 
@@ -1313,6 +1322,16 @@ class Handler(BaseHTTPRequestHandler):
             task["images"] = json.loads(task.get("images") or "[]")
             return _json(self, task)
 
+        if path == "/api/published-goods" and self.command == "GET":
+            shop_id = qs.get("shop_id", [""])[0]
+            status = qs.get("status", [""])[0]
+            shop_id = int(shop_id) if str(shop_id).isdigit() and shop_id else None
+            return _json(self, {"items": catalog.list_published_goods(
+                shop_id=shop_id, status=(status or None))})
+
+        if path == "/api/published-goods/image" and self.command == "GET":
+            return self._serve_pdd_image(qs.get("path", [""])[0])
+
         # 静态页面
         if path in ("/", "/index.html") and self.command == "GET":
             return self._serve_file("index.html", "text/html; charset=utf-8")
@@ -1345,6 +1364,38 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_pdd_image(self, img_path):
+        """服务 C:\\tmp\\pdd-publish 下的商品图（本地抓取图），防路径穿越。"""
+        norm = (img_path or "").replace("\\", "/")
+        if not norm.lower().startswith("c:/tmp/pdd-publish/"):
+            return _json(self, {"error": "forbidden"}, 403)
+        # api.py 跑在 WSL，读 Windows 文件要映射到 /mnt/c/...
+        wsl_path = "/mnt/c" + norm[2:]  # C:/tmp/... → /mnt/c/tmp/...
+        if not os.path.exists(wsl_path) or os.path.isdir(wsl_path):
+            return _json(self, {"error": "not found"}, 404)
+        ext = os.path.splitext(wsl_path)[1].lower()
+        ctype = {
+            ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+            ".gif": "image/gif", ".webp": "image/webp",
+        }.get(ext, "image/jpeg")
+        with open(wsl_path, "rb") as f:
+            body = f.read()
+        # 内容嗅探：图片文件扩展名可能与实际格式不符（如 WebP 存成 .jpg），按魔数修正 Content-Type
+        if body[:3] == b"\xff\xd8\xff":
+            ctype = "image/jpeg"
+        elif body[:8] == b"\x89PNG\r\n\x1a\n":
+            ctype = "image/png"
+        elif body[:4] == b"RIFF" and body[8:12] == b"WEBP":
+            ctype = "image/webp"
+        elif body[:6] in (b"GIF89a", b"GIF87a"):
+            ctype = "image/gif"
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "max-age=86400")
         self.end_headers()
         self.wfile.write(body)
 
@@ -1706,16 +1757,56 @@ def _autopublish_bg(task_id: int, pricing: dict = None):
     # publish.js 输出是进度日志（非 JSON），判断成功靠 stdout 里的 RESULT_SUCCESS 明确标记
     # 不能用 "/success" 或 "上架成功" 宽松匹配：续填模式的日志里含 URL ".../success?goods_id=xxx" 会误判
     out = res.get("stdout", "")
+    # 构造「上架列表」存表字段（SKU 明细：原始进价 cost + 上架价 pdd + 单买价 danmai）
+    _pb = cfg.get("priceBySpec2") or {}
+    _sku_details = []
+    for _k, _v in _pb.items():
+        if isinstance(_v, dict):
+            _sku_details.append({"name": str(_k), "cost": _v.get("cost"),
+                                 "pdd": _v.get("pdd"), "danmai": _v.get("danmai")})
+    _costs = [d["cost"] for d in _sku_details if d.get("cost") is not None]
+    _sales = [d["pdd"] for d in _sku_details if d.get("pdd") is not None]
+    _danmais = [d["danmai"] for d in _sku_details if d.get("danmai") is not None]
+    _pr = pricing or {}
+    _base = {
+        "task_id": task_id,
+        "main_image": (cfg.get("images") or [None])[0] or "",
+        "source_url": url,
+        "raw_title": product.get("title", ""),
+        "ai_title": cfg.get("title", ""),
+        "category": cfg.get("categoryPath", ""),
+        "shop_id": shop_id,
+        "shop_name": catalog.get_shop_name(shop_id),
+        "sku_count": len(_sku_details),
+        "sku_details": _sku_details,
+        "cost_price": (min(_costs) if _costs else None),
+        "sale_price": (min(_sales) if _sales else None),
+        "danmai_price": (min(_danmais) if _danmais else None),
+        "ref_price": cfg.get("refPrice"),
+        "profit_rate": _pr.get("profit_rate"),
+        "freight": _pr.get("freight"),
+        "stock": cfg.get("stock"),
+    }
     if "RESULT_SUCCESS" in out:
         m = __import__("re").search(r"RESULT_SUCCESS goods_id=(\d+)", out)
         goods_id = m.group(1) if m else ""
         catalog.update_autopublish_task(task_id, status="published", pdd_goods_id=goods_id)
         catalog.append_autopublish_log(task_id, "publish", "done", f"✅ 上架成功，商品ID: {goods_id}")
+        try:
+            catalog.save_published_good(**{**_base, "goods_id": goods_id, "status": "published",
+                "published_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "remark": ""})
+        except Exception as e:
+            catalog.append_autopublish_log(task_id, "publish", "done", f"⚠️ 写入上架列表失败:{e}")
     else:
         # 上架脚本跑完了但没成功标记，如实记 failed
         # 取 stdout 最后几行（去空行）作为失败线索，自动带进错误知识库 description
         lines = [l.strip() for l in out.splitlines() if l.strip()]
         tail = " | ".join(lines[-3:])[-280:] if lines else ""
+        try:
+            catalog.save_published_good(**{**_base, "goods_id": "", "status": "failed",
+                "published_at": "", "remark": f"未确认上架成功（{tail}）"})
+        except Exception:
+            pass
         return _fail("publish", f"未确认上架成功（{tail}）")
 
 
