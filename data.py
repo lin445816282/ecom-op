@@ -2327,10 +2327,30 @@ if __name__ == "__main__":
 # ----------------------------- 一键上架：AI 生成 config -----------------------------
 
 
-def ai_generate_publish_config(product: dict) -> dict:
+def calc_pricing(cost: float, profit_rate: float = 0.2, roi: float = 2.0,
+                 danmai_mult: float = 1.5, ref_mult: float = 1.2) -> dict:
+    """固定定价公式：倍率 = 1/(1-利润率-1/投产比)。
+
+    售价 = 成本 ÷ (1 − 利润率 − 1/投产比)
+      - 1/投产比 = 广告费占售价比例（投产比2 → 广告费占50%）
+      - 利润率20% + 广告费50% → 成本占30% → 倍率 1/0.3 ≈ 3.33
+    拼单价 = 成本 × 倍率；单买价 = 拼单价 × 单买倍数；参考价 = 单买价 × 参考倍数
+    """
+    denom = 1.0 - profit_rate - 1.0 / roi
+    if denom <= 0.05:
+        denom = 0.05  # 防除零/负倍率（利润率+广告费率过高的兜底）
+    k = 1.0 / denom
+    pdd = round(cost * k, 1)
+    danmai = round(pdd * danmai_mult, 1)
+    ref = round(danmai * ref_mult, 1)
+    return {"pdd": pdd, "danmai": danmai, "refPrice": ref}
+
+
+def ai_generate_publish_config(product: dict, pricing: dict = None) -> dict:
     """DeepSeek 把 1688 抓取的 product 自动生成 publish.js 的 config。
 
     product: {title, bodyText, images, offerId}
+    pricing: {profit_rate, roi, danmai_mult, ref_mult} 固定定价参数（默认 0.2/2/1.5/1.2）
     返回: {config: {...}|None, warning: str, error: str|None}
 
     config 字段（见 pdd-goods-publish-cdp skill / config.example.json）：
@@ -2338,6 +2358,11 @@ def ai_generate_publish_config(product: dict) -> dict:
       priceBySpec2{spec2值:{pdd,danmai}}, stock, refPrice, previewImages{spec1值:图}
     """
     import re
+    pricing = pricing or {}
+    profit_rate = float(pricing.get("profit_rate", 0.2))
+    roi = float(pricing.get("roi", 2.0))
+    danmai_mult = float(pricing.get("danmai_mult", 1.5))
+    ref_mult = float(pricing.get("ref_mult", 1.2))
     title = (product.get("title") or "").strip()
     body_text = (product.get("bodyText") or "")[:6000]
     images = product.get("images") or []
@@ -2356,14 +2381,14 @@ def ai_generate_publish_config(product: dict) -> dict:
         '  "categoryPath": "完整类目路径（如 节庆用品/礼品 > 婚庆用品 > 拉花）",\n'
         '  "title": "优化后标题，≤30个汉字、≤60字符，保留核心卖点+场景词，不要夸张违规词",\n'
         '  "specs": [{"type":"规格类型名(颜色/款式/尺寸/型号)","values":["值1","值2"]}],\n'
-        '  "priceBySpec2": {"规格2的值":{"pdd":拼单价,"danmai":单买价}},\n'
+        '  "priceBySpec2": {"规格2的值":{"cost":进价(元)}},\n'
         '  "stock": 库存数字(默认500),\n'
         '  "refPrice": 参考价(必须大于最大单买价),\n'
         '  "previewImages": {"规格1的值":"对应主图索引(0-9，0表示第1张主图)"}\n'
         "}\n\n"
         "硬性规则：\n"
         "1. 规格归纳：从页面文本的「颜色/款式/尺寸」等属性里提取规格。SKU 若超过 12 个，必须归纳合并成 ≤12 个（如 40 个复杂 SKU → 归纳成 3色×4款=12 个），specs 最多 2 维。\n"
-        "2. 定价：拼单价 ≈ 进价×1.5~1.85（覆盖运费+推广），单买价 = 拼单价+10~20。进价从页面文本的「¥」价格里取最低的那个。\n"
+        "2. 进价提取：从页面文本的「¥」价格里识别每个规格2值对应的进价(cost)，填到 priceBySpec2 的 cost 字段。若各规格进价相同或无法区分，统一用最低「¥」价格。\n"
         "3. 规格类型名只能用：颜色/款式/尺寸/型号/材质/容量/器型/口味/色号。\n"
         "4. previewImages：规格1 每个值对应一张主图（用图片索引 0-9，第1张主图=0）。\n"
         "5. 若 SKU 无法归纳到 12 个以内，如实列，外层会判断预警。\n"
@@ -2416,11 +2441,26 @@ def ai_generate_publish_config(product: dict) -> dict:
             idx = 0
         resolved_pv[str(k)] = images[idx] if idx < len(images) else (images[0] if images else "")
     cfg["previewImages"] = resolved_pv
-    # 定价兜底
-    if not cfg.get("priceBySpec2"):
-        return {"config": None, "warning": "", "error": "AI 未生成定价 priceBySpec2"}
-    if not cfg.get("refPrice"):
-        cfg["refPrice"] = 99.0
+    # 定价：AI 提取进价 cost，这里用固定公式算 pdd/danmai/refPrice（不再让 AI 自由定价）
+    costs = cfg.get("priceBySpec2") or {}
+    if not costs:
+        return {"config": None, "warning": "", "error": "AI 未提取进价 priceBySpec2"}
+    new_pb = {}
+    max_ref = 0.0
+    for spec2_val, c in costs.items():
+        if isinstance(c, dict):
+            cost = float(c.get("cost", c.get("pdd", 0)) or 0)
+        else:
+            cost = float(c or 0)
+        if cost <= 0:
+            continue
+        p = calc_pricing(cost, profit_rate, roi, danmai_mult, ref_mult)
+        new_pb[str(spec2_val)] = {"pdd": p["pdd"], "danmai": p["danmai"]}
+        max_ref = max(max_ref, p["refPrice"])
+    if not new_pb:
+        return {"config": None, "warning": "", "error": "进价解析失败（cost 非法）"}
+    cfg["priceBySpec2"] = new_pb
+    cfg["refPrice"] = round(max_ref, 1)
     if not cfg.get("stock"):
         cfg["stock"] = 500
 

@@ -1246,10 +1246,11 @@ class Handler(BaseHTTPRequestHandler):
             item = self._read_body()
             url = str(item.get("url") or "").strip()
             shop_id = int(item.get("shop_id") or 5)
+            pricing = item.get("pricing") or {}
             if not url:
                 return _json(self, {"error": "请填写 1688 商品链接"}, 400)
             task = catalog.create_autopublish_task(url, shop_id)
-            threading.Thread(target=_autopublish_bg, args=(task["id"],), daemon=True).start()
+            threading.Thread(target=_autopublish_bg, args=(task["id"], pricing), daemon=True).start()
             return _json(self, {"ok": True, "task": task})
 
         if path == "/api/autopublish" and self.command == "GET":
@@ -1567,12 +1568,12 @@ def _run_node_script(script_name: str, args: list, timeout: int = 180) -> dict:
     return {"ok": r.returncode == 0, "stdout": out, "stderr": err, "data": data}
 
 
-def _autopublish_bg(task_id: int):
+def _autopublish_bg(task_id: int, pricing: dict = None):
     """一键上架编排：scrape(1688抓取) → ai(data.ai_generate_publish_config) → publish(CDP上架)。
 
     每环节回写任务状态+日志；环节失败即终止（failed），不跳过、不假装成功。
     数据流：scrape.js 写 product.json + 图片到任务目录 → Python 读 product.json
-    → AI 生成 config.json → publish.js 读 config.json 上架。
+    → AI 生成 config.json（定价用 pricing 固定公式）→ publish.js 读 config.json 上架。
     """
     import subprocess
     task = catalog.get_autopublish_task(task_id)
@@ -1630,7 +1631,7 @@ def _autopublish_bg(task_id: int):
     # ---- 环节2：AI 生成 config.json ----
     catalog.append_autopublish_log(task_id, "ai", "running", "DeepSeek 分析规格/定价/类目，生成上架配置…")
     catalog.update_autopublish_task(task_id, status="ai", stage="ai")
-    ai = data.ai_generate_publish_config(product)
+    ai = data.ai_generate_publish_config(product, pricing)
     if ai.get("error"):
         return _fail("ai", ai["error"])
     cfg = ai.get("config") or {}
