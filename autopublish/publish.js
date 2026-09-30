@@ -265,7 +265,7 @@ async function fillByType(c, selector, text){
       inps.forEach(inp=>{
         const r=inp.getBoundingClientRect();
         if(r.width<=0) return;
-        const colIdx=cols.findIndex(cx=>Math.abs(r.x-cx)<=30);
+        const colIdx=cols.findIndex(cx=>Math.abs((r.x+r.width/2)-cx)<=30);
         if(colIdx<0) return;
         rows.push({y:Math.round(r.y), x:Math.round(r.x), col:colIdx, val:(inp.value||'').trim()});
       });
