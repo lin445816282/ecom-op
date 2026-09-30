@@ -17,7 +17,7 @@ import catalog
 
 NODE_EXE = "/mnt/d/Program Files/nodejs/node.exe"
 # node.exe 是 Windows 程序，脚本路径要用 Windows 盘符
-_SEARCH_JS_WIN = r"D:\电商运营\运营工作台\search_1688_offers.js"
+_SEARCH_JS_WIN = r"D:\电商运营\运营工作台\search_1688_home.js"
 API_BASE = "http://127.0.0.1:8765"
 ACCESS_TOKEN = os.environ.get("ECOM_OP_TOKEN", "Alcz8283103")
 CDP_1688_PORT = "9238"
@@ -25,7 +25,8 @@ SHOP_ID = 1  # 闲时来（AI 老板只管这家店）
 
 # 选品关键词：闲时来的成功类目（节庆用品）。控制数量，避免频繁搜索触发 1688 x5sec 风控
 SELECT_KEYWORDS = [
-    "婚庆气球", "婚礼拉花", "喜字贴", "婚庆红包", "派对气球",
+    "万圣节装饰", "万圣节气球", "万圣节南瓜灯", "万圣节道具",
+    "圣诞装饰", "圣诞树", "婚庆气球", "婚礼拉花", "喜字贴", "婚庆红包", "派对气球",
 ]
 
 # 相关性过滤：标题含这些词才算节庆相关（过滤 1688 推荐的无关商品如手套）
@@ -33,6 +34,7 @@ FESTIVAL_WORDS = (
     "气球", "婚庆", "婚房", "婚礼", "喜字", "拉花", "红包", "派对",
     "生日", "布置", "装饰", "铝膜", "铝箔", "礼花", "礼炮", "挂饰",
     "吊饰", "拉旗", "彩旗", "灯笼", "婚宴", "订婚", "周岁", "满月",
+    "万圣", "南瓜", "圣诞", "骷髅", "鬼", "女巫", "蜘蛛",
 )
 
 
@@ -47,6 +49,8 @@ def search_1688(kw, limit=12):
         if not lines:
             return []
         items = json.loads(lines[-1])
+        if isinstance(items, dict):
+            items = items.get("items", [])
         return items if isinstance(items, list) else []
     except Exception:
         return []
