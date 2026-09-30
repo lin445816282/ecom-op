@@ -376,13 +376,13 @@ async function fillByType(c, selector, text){
       finalUrl=await ev(c,'location.href');
       // 成功：URL 跳离 goods_add/index（success 页或商品列表页）
       if(/goods_add\/success/.test(finalUrl) || /\/goods\/list/.test(finalUrl)){ successFlag=true; break; }
-      // 失败：检测到明确的校验/资质错误文案（假一赔十/必填项等），如实记录原因。
-      // ⚠️ URL 停留原地不一定是失败（跳转可能 >40s，task_75 实测 URL 停留原地但最终在售），
-      //    只有检测到「必须支持/不能为空/请填写」等明确错误才算失败。
+      // 失败：只匹配「明确的拦截性错误」——缺字段/资质硬拦截。
+      // ⚠️ 教训(task_79)：提交成功前会短暂闪现「请准确填写属性…」引导提示（含"填写/必填/违规"字样），
+      //    但商品最终成功跳 success 页。宽泛匹配「请填写/必填/违规」会把引导提示误判为失败。
+      //    因此只保留硬拦截文案（请输入第N行/不能为空/必须支持假一赔十/请先选择）。
       const t=await ev(c,'document.body.innerText');
-      if(t && /必须支持|假一赔十|不能为空|请填写|请选择|请上传|必填|不通过|违规/.test(t)){
-        const m=t.match(/(必须支持[^\n]*|请[^\n]{0,30}|[^\n]*(?:不能为空|必填)[^\n]*)/);
-        failReason=(m?m[0]:'').slice(0,80);
+      if(t && /必须支持假一赔十|请输入第\d+行|不能为空|请先(选择|填写|上传|设置)/.test(t)){
+        failReason=(t.match(/(必须支持假一赔十[^\n]*|请输入第\d+行[^\n]*|[^\n]*(?:不能为空|请先(?:选择|填写|上传|设置))[^\n]*)/)||[''])[0].slice(0,80);
         break;
       }
     }
