@@ -233,68 +233,74 @@ async function fillByType(c, selector, text){
   const totalSku = skuRows.length;
   log('  SKU 共', totalSku, '行（', specsArr.length, '维规格）');
 
-  // ===== Step 5: 填价格库存（动态定位列坐标 + y 坐标分行，不依赖硬编码 x） =====
-  // 关键：价格表虚拟滚动，旧 baseIdx*4 全局索引在 SKU 行数多时错位，单买价列漏填（task_72 教训）。
-  // 正确做法：先读表头「库存/拼单价/单买价」输入框的 x 坐标动态定位列（窗口宽度变化时 x 会漂移，
-  // 硬编码 602/704/871 会失配），再按 y 坐标分行，反复扫描填空。
-  log('[5/8] 填价格库存（动态列坐标定位）');
-  await ev(c,`window.scrollTo(0, document.body.scrollHeight)`);
+  // ===== Step 5: 填价格库存（数据行 x 聚类定位列 + native setter 填值） =====
+  // 教训（task_72/79）：①表头筛选框的 x 坐标 ≠ 数据行输入框 x 坐标，读表头定位列必然错位；
+  // ②Input.insertText 对 React 受控 SKU 表格不可靠（填了又空，导致死循环）；
+  // ③SKU 行有 4 列「库存/拼单价/单买价/规格编码」，规格编码也是 placeholder="请输入"，必须排除（只填前3列）。
+  // 正确做法：直接对数据行输入框按 x 中心聚类成列（取前3列），用 native setter + dispatchEvent 填值。
+  log('[5/8] 填价格库存（数据行 x 聚类 + native setter）');
+  // 注入全局价格数组：每行 [库存, 拼单价, 单买价]
+  const skuVals = skuRows.map(r => [String(cfg.stock), String(r.price.pdd), String(r.price.danmai)]);
+  await ev(c, `window.__skuVals=${JSON.stringify(skuVals)};`);
+  await ev(c, `window.scrollTo(0, document.body.scrollHeight)`);
   await sleep(2000);
-  // 先读表头列坐标：placeholder 精确为「库存」「拼单价」「单买价」的输入框 x 坐标
-  const colXsRaw = await ev(c, `(function(){
-    const heads=['库存','拼单价','单买价'];
-    const out={};
-    heads.forEach(h=>{
-      const inp=[...document.querySelectorAll('input')].find(i=>(i.placeholder||'').trim()===h);
-      if(inp){ const r=inp.getBoundingClientRect(); if(r.width>0) out[h]=Math.round(r.x+r.width/2); }
-    });
-    return JSON.stringify(out);
-  })()`);
-  let colXs={库存:511, 拼单价:624, 单买价:808};
-  try{ const _c=JSON.parse(colXsRaw||'{}'); if(_c['库存']&&_c['拼单价']&&_c['单买价']) colXs=_c; }catch(e){}
-  log('  列坐标:', JSON.stringify(colXs));
-  const COLS=[colXs['库存'], colXs['拼单价'], colXs['单买价']];
-  // 反复扫描填：每次读所有可见「请输入」框，按 y 分组为行、x 判断列，逐行填满，
-  // 填完滚动触发更多行渲染，直到没有空框或达到轮数上限。
   let totalFilled=0;
   for(let round=0; round<12; round++){
-    const snap = await ev(c, `(()=>{
-      const inps=[...document.querySelectorAll('input[placeholder="请输入"]')];
-      const cols=${JSON.stringify(COLS)};
-      const rows=[];
-      inps.forEach(inp=>{
-        const r=inp.getBoundingClientRect();
-        if(r.width<=0) return;
-        const colIdx=cols.findIndex(cx=>Math.abs((r.x+r.width/2)-cx)<=30);
-        if(colIdx<0) return;
-        rows.push({y:Math.round(r.y), x:Math.round(r.x), col:colIdx, val:(inp.value||'').trim()});
+    const r = await ev(c, `(()=>{
+      const inps=[...document.querySelectorAll('input[placeholder="请输入"]')].filter(i=>i.getBoundingClientRect().width>0);
+      if(!inps.length) return JSON.stringify({cols:0,rows:0,filled:0});
+      // 1) 按 x 中心聚类成列（同一列 x 差 < 50）
+      const colClusters=[];
+      inps.forEach(el=>{
+        const rc=el.getBoundingClientRect();
+        const xc=rc.x+rc.width/2;
+        let cl=colClusters.find(c=>Math.abs(c.x-xc)<50);
+        if(!cl){cl={x:xc,items:[]};colClusters.push(cl);}
+        cl.items.push(el);
       });
-      // 按 y 去重排序得到行列表
-      const ys=[...new Set(rows.map(o=>o.y))].sort((a,b)=>a-b);
-      // 标记空框
-      const empty=rows.filter(o=>!o.val).map(o=>({x:o.x, y:o.y, col:o.col, row:ys.indexOf(o.y)}));
-      return JSON.stringify({empty:empty, rowCount:ys.length, total:rows.length});
+      colClusters.sort((a,b)=>a.x-b.x);
+      // 前3列=库存/拼单价/单买价（第4列规格编码不填）
+      if(colClusters.length<3) return JSON.stringify({cols:colClusters.length,rows:0,filled:0});
+      const cols=colClusters.slice(0,3);
+      // 2) 按 y 中心聚类成行（同一行 y 差 < 20）
+      const rows=[];
+      cols.forEach((cl,colIdx)=>{
+        cl.items.forEach(el=>{
+          const rc=el.getBoundingClientRect();
+          const yc=rc.y+rc.height/2;
+          let row=rows.find(rr=>Math.abs(rr.y-yc)<20);
+          if(!row){row={y:yc,cells:[]};rows.push(row);}
+          row.cells.push({el:el,col:colIdx});
+        });
+      });
+      rows.sort((a,b)=>a.y-b.y);
+      // 3) native setter 填空框（填过的跳过）
+      const setter=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
+      const vals=window.__skuVals||[];
+      let filled=0;
+      rows.forEach((row,ri)=>{
+        const v=vals[ri];
+        if(!v) return;
+        row.cells.forEach(cell=>{
+          const el=cell.el;
+          if((el.value||'').trim()) return;
+          const val=v[cell.col];
+          if(val==null||val==='') return;
+          setter.call(el,String(val));
+          el.dispatchEvent(new Event('input',{bubbles:true}));
+          el.dispatchEvent(new Event('change',{bubbles:true}));
+          filled++;
+        });
+      });
+      return JSON.stringify({cols:colClusters.length,rows:rows.length,filled:filled});
     })()`);
-    let snapObj={empty:[],rowCount:0};
-    try{ snapObj=JSON.parse(snap||'{}'); }catch(e){}
-    if(!snapObj.empty || !snapObj.empty.length) break;
-    // 逐个填空框（按行号取价格）
-    for(const e of snapObj.empty){
-      const price = skuRows[e.row] ? skuRows[e.row].price : {pdd:0, danmai:0};
-      const val = e.col===0 ? String(cfg.stock) : (e.col===1 ? String(price.pdd) : String(price.danmai));
-      if(!val || val==='undefined' || val==='null') continue;
-      const f=await ev(c,`(()=>{
-        const inps=[...document.querySelectorAll('input[placeholder="请输入"]')];
-        const t=inps.find(inp=>{const r=inp.getBoundingClientRect();return r.width>0&&Math.abs(r.x-${e.x})<=15&&Math.abs(r.y-${e.y})<=15;});
-        if(!t)return 'no';
-        t.scrollIntoView({block:'center'}); t.click(); t.focus(); return 'ok';
-      })()`);
-      if(f==='ok'){ await sleep(250); await c.send('Input.insertText',{text:val}); await sleep(200); totalFilled++; }
-    }
-    log('  第'+round+'轮填', snapObj.empty.length, '个空框');
-    // 滚动触发更多行渲染
+    let o={cols:0,rows:0,filled:0};
+    try{ o=JSON.parse(r||'{}'); }catch(e){}
+    totalFilled += o.filled||0;
+    log('  第'+round+'轮: 列数'+o.cols+' 行数'+o.rows+' 填'+o.filled+'个');
+    if(o.filled===0) break;
     await ev(c,`window.scrollTo(0, document.body.scrollHeight)`);
-    await sleep(1200);
+    await sleep(800);
   }
   log('  累计填', totalFilled, '个单元格 / 目标', totalSku*3, '个');
 
