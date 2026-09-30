@@ -70,15 +70,28 @@ def parse_product(txt):
     return title, price
 
 
+def _offer_id(url):
+    """从 1688 链接提取 offerId（offer/xxx 或 offerId=xxx），非 1688 返回空字符串。"""
+    if not url:
+        return ""
+    m = re.search(r"/offer/(\d+)", url)
+    if m:
+        return m.group(1)
+    m = re.search(r"offerId=(\d+)", url)
+    if m:
+        return m.group(1)
+    return ""
+
+
 def select_products(n=5):
     """搜索节庆用品，选 n 个候选商品（去重已上架 + 相关性过滤 + 价格过滤）。"""
     catalog.init_db()
-    # 已上架的 source_url（1688 链接）去重
+    # 已上架的 offerId 去重（忽略 query 参数，避免 ?spm= 等导致字符串不等）
     existing = set()
     for g in catalog.list_published_goods(limit=500):
-        u = (g.get("source_url") or "").strip()
-        if u:
-            existing.add(u)
+        oid = _offer_id((g.get("source_url") or "").strip())
+        if oid:
+            existing.add(oid)
 
     candidates = []
     seen = set()
@@ -91,7 +104,7 @@ def select_products(n=5):
             if not oid or oid in seen:
                 continue
             seen.add(oid)
-            if url and url in existing:
+            if oid in existing:
                 continue
             title, price = parse_product(it.get("txt", ""))
             if not title:
@@ -104,8 +117,8 @@ def select_products(n=5):
                 continue
             candidates.append({"oid": oid, "url": url, "title": title,
                                "price": price, "kw": kw})
-        # 搜索间隔，降低 1688 x5sec 风控概率
-        time.sleep(3)
+        # 搜索间隔，降低 1688 x5sec 风控概率（首页搜索路径已较安全，6s 更稳）
+        time.sleep(6)
 
     # 按价格升序（低价利于走量），取前 n 个
     candidates.sort(key=lambda c: c["price"] if c["price"] else 999)
