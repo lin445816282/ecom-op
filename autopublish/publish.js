@@ -309,6 +309,36 @@ async function fillByType(c, selector, text){
     log('  参考价填写:', r);
   }
 
+  // ===== Step 7.5: 品牌（服饰/部分类目强制，未填会被资质拦截停在"编辑中"） =====
+  // 关键：无品牌商品必须声明「无品牌/无注册商标」，否则提交后被品牌资质校验拦截（task_72 儿童手套教训）。
+  log('[7.5/8] 处理品牌（无品牌则声明，避免资质拦截）');
+  const brandState = await ev(c, `(()=>{
+    var t=document.body.innerText;
+    // 是否有品牌必填提示
+    var needBrand=/品牌[^\n]{0,10}(必填|必选|请选择|\*)|\*品牌|品牌\s*\*/.test(t);
+    // 品牌 Select 是否已选值
+    var brandInput=document.querySelector('input[placeholder*="品牌"]');
+    var brandVal=brandInput?brandInput.value:'';
+    return JSON.stringify({needBrand:needBrand, brandVal:brandVal, hasBrandInput:!!brandInput});
+  })()`);
+  try{
+    const _bs = JSON.parse(brandState || '{}');
+    log('  品牌状态:', _bs.brandVal ? ('已填['+_bs.brandVal.slice(0,15)+']') : (_bs.hasBrandInput ? '空(需填)' : '无品牌输入框(该类目不要求)'));
+    // 若品牌框存在且为空，尝试选「无品牌/无注册商标」
+    if(_bs.hasBrandInput && !_bs.brandVal){
+      // 点品牌 Select 打开下拉
+      const opened=await ev(c, `(()=>{var i=document.querySelector('input[placeholder*="品牌"]');if(!i)return 0;i.scrollIntoView({block:'center'});i.click();i.focus();return 1})()`);
+      await sleep(1200);
+      // 找「无品牌/无注册商标」选项并点击（叶子文本精确匹配）
+      const picked=await ev(c, `(()=>{
+        var opts=[...document.querySelectorAll('*')].filter(e=>e.children.length===0&&/无品牌|无注册商标/.test((e.textContent||'').trim())&&e.getBoundingClientRect().width>0);
+        if(opts.length){opts[opts.length-1].click();return opts[opts.length-1].textContent.trim();}
+        return 'no option';
+      })()`);
+      log('  品牌选择:', picked);
+    }
+  }catch(e){ log('  品牌处理异常:', e.message); }
+
   // ===== Step 8: 提交 =====
   log('[8/8] 提交前检查');
   const err=await ev(c,`(()=>{const m=document.body.innerText.match(/错误（(\d+)）/);return m?m[0]:'错误（0）'})()`);
