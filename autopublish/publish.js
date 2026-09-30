@@ -241,11 +241,12 @@ async function fillByType(c, selector, text){
   log('[5/8] 填价格库存（数据行 x 聚类 + native setter）');
   // 注入全局价格数组：每行 [库存, 拼单价, 单买价]
   const skuVals = skuRows.map(r => [String(cfg.stock), String(r.price.pdd), String(r.price.danmai)]);
-  await ev(c, `window.__skuVals=${JSON.stringify(skuVals)};`);
-  await ev(c, `window.scrollTo(0, document.body.scrollHeight)`);
-  await sleep(2000);
+  await ev(c, `window.__skuVals=${JSON.stringify(skuVals)};window.__filledRows=0;`);
+  await ev(c, `window.scrollTo(0, 0)`);
+  await sleep(1500);
   let totalFilled=0;
-  for(let round=0; round<12; round++){
+  let noProgress=0;
+  for(let round=0; round<60; round++){
     const r = await ev(c, `(()=>{
       const inps=[...document.querySelectorAll('input[placeholder="请输入"]')].filter(i=>i.getBoundingClientRect().width>0);
       if(!inps.length) return JSON.stringify({cols:0,rows:0,filled:0});
@@ -262,10 +263,11 @@ async function fillByType(c, selector, text){
       // 前3列=库存/拼单价/单买价（第4列规格编码不填）
       if(colClusters.length<3) return JSON.stringify({cols:colClusters.length,rows:0,filled:0});
       const cols=colClusters.slice(0,3);
-      // 2) 按 y 中心聚类成行（同一行 y 差 < 20）
+      // 2) 只聚类「空框」，按 y 中心聚类成空行（同一行 y 差 < 20）
       const rows=[];
       cols.forEach((cl,colIdx)=>{
         cl.items.forEach(el=>{
+          if((el.value||'').trim()) return; // 只处理空框
           const rc=el.getBoundingClientRect();
           const yc=rc.y+rc.height/2;
           let row=rows.find(rr=>Math.abs(rr.y-yc)<20);
@@ -274,16 +276,16 @@ async function fillByType(c, selector, text){
         });
       });
       rows.sort((a,b)=>a.y-b.y);
-      // 3) native setter 填空框（填过的跳过）
+      // 3) native setter 填空框；空行 SKU 序号 = 已填行数(__filledRows) + 空行序号 ri
       const setter=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
       const vals=window.__skuVals||[];
+      const startRow=window.__filledRows||0;
       let filled=0;
       rows.forEach((row,ri)=>{
-        const v=vals[ri];
+        const v=vals[startRow+ri];
         if(!v) return;
         row.cells.forEach(cell=>{
           const el=cell.el;
-          if((el.value||'').trim()) return;
           const val=v[cell.col];
           if(val==null||val==='') return;
           setter.call(el,String(val));
@@ -297,10 +299,15 @@ async function fillByType(c, selector, text){
     let o={cols:0,rows:0,filled:0};
     try{ o=JSON.parse(r||'{}'); }catch(e){}
     totalFilled += o.filled||0;
-    log('  第'+round+'轮: 列数'+o.cols+' 行数'+o.rows+' 填'+o.filled+'个');
-    if(o.filled===0) break;
-    await ev(c,`window.scrollTo(0, document.body.scrollHeight)`);
-    await sleep(800);
+    log('  第'+round+'轮: 列数'+o.cols+' 空行'+o.rows+' 填'+o.filled+'个');
+    if(totalFilled >= totalSku*3) break;
+    if(o.filled===0){ noProgress++; if(noProgress>=3) break; }
+    else noProgress=0;
+    // 累计已填行数（空行数 = 本轮填的行数）
+    await ev(c, `window.__filledRows += ${o.rows||0};`);
+    // 单调向下滚动，触发虚拟列表渲染更多行
+    await ev(c, `window.scrollBy(0, 400)`);
+    await sleep(500);
   }
   log('  累计填', totalFilled, '个单元格 / 目标', totalSku*3, '个');
 

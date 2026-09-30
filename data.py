@@ -2393,11 +2393,11 @@ def ai_generate_publish_config(product: dict, pricing: dict = None) -> dict:
         '  "previewImages": {"规格1的值":"对应主图索引(0-9，0表示第1张主图)"}\n'
         "}\n\n"
         "硬性规则：\n"
-        "1. 规格归纳：从页面文本的「颜色/款式/尺寸」等属性里提取规格。**SKU 总数（各维 values 数量的乘积）必须 ≤12 个**。若原始规格（尤其「款式+数量」合并的复杂颜色属性）展开后超过 12 个，必须精简到核心组合——只保留最热门/最主流的 2-4 个款式图案 和 2-4 个数量/规格做精简笛卡尔积（如 3图案×3数量=9 个）。宁可 SKU 少而精，绝不全量展开成几十个。specs 最多 2 维。\n"
+        "1. 规格归纳：从页面文本的「颜色/款式/尺寸」等属性里提取规格。**SKU 总数（各维 values 数量的乘积）必须 ≤30 个**。若原始规格（尤其「款式+数量」合并的复杂颜色属性）展开后超过 30 个，必须精简到核心组合——只保留最热门/最主流的款式图案和数量/规格做精简笛卡尔积（如 5图案×6数量=30 个）。宁可 SKU 少而精，绝不全量展开成上百个。specs 最多 2 维。\n"
         "2. 进价提取：从页面文本的「¥」价格里识别每个规格2值对应的进价(cost)，填到 priceBySpec2 的 cost 字段。若各规格进价相同或无法区分，统一用最低「¥」价格。\n"
         "3. 规格类型名只能用：款式/尺寸/型号/容量/材质/器型/口味（这些拼多多有且用文本输入）。⚠️ 禁用「颜色」「色号」「花色」——「颜色/色号」用色卡选择(非文本输入)填不了，「花色」根本不在拼多多规格类型列表里。颜色类商品一律用「款式」命名，值填颜色名(如 白色/粉色/黄色)。\n"
         "4. previewImages：规格1 每个值对应一张主图（用图片索引 0-9，第1张主图=0）。\n"
-        "5. 若 SKU 无法归纳到 12 个以内，如实列，外层会判断预警。\n"
+        "5. 若 SKU 无法归纳到 30 个以内，如实列，外层会判断预警。\n"
         "只输出 JSON 对象，不要 markdown 代码块，不要多余文字。"
     )
     body = json.dumps({
@@ -2440,19 +2440,19 @@ def ai_generate_publish_config(product: dict, pricing: dict = None) -> dict:
         _t = (_s.get("type") or "").strip()
         if _t in ("颜色", "色号", "花色"):
             _s["type"] = "款式"
-    # SKU 精简兜底：笛卡尔积 >12 强制精简（AI 可能不遵守 ≤12，导致拼多多虚拟滚动填不完、提交失败）
+    # SKU 精简兜底：笛卡尔积 >30 强制精简（AI 可能不遵守 ≤30，导致拼多多虚拟滚动填不完、提交失败）
     _trim_note = ""
     _specs = cfg.get("specs") or []
     _sku_total = 1
     for s in _specs:
         _sku_total *= max(1, len(s.get("values") or []))
-    if _sku_total > 12:
+    if _sku_total > 30:
         if len(_specs) >= 2:
-            # 2维：规格1（款式图案）保留前4个，规格2（数量）保留前3个 → ≤12
-            _specs[0]["values"] = (_specs[0].get("values") or [])[:4]
-            _specs[1]["values"] = (_specs[1].get("values") or [])[:3]
+            # 2维：规格1（款式图案）保留前6个，规格2（数量）保留前5个 → ≤30
+            _specs[0]["values"] = (_specs[0].get("values") or [])[:6]
+            _specs[1]["values"] = (_specs[1].get("values") or [])[:5]
         elif _specs:
-            _specs[0]["values"] = (_specs[0].get("values") or [])[:12]
+            _specs[0]["values"] = (_specs[0].get("values") or [])[:30]
         cfg["specs"] = _specs
         _t = 1
         for s in _specs:
