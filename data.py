@@ -2350,6 +2350,35 @@ def calc_pricing(cost: float, profit_rate: float = 0.2, roi: float = 2.0,
     return {"pdd": pdd, "danmai": danmai, "refPrice": ref}
 
 
+# 闲时来（节庆用品店）1688 标题关键词 → 拼多多真实类目映射。
+# 拼多多类目树（实测 2026-09-30 于闲时来店类目选择页搜索所得）：
+#   节庆用品/礼品 > 节日/装扮用品 > 气球/南瓜灯/面具/其他节日装扮用品/荧光棒...
+#   玩具/童车/益智/积木/模型 > 电子/发光/充气/整蛊玩具 > 解压玩具
+#   灯饰光源照明 > 家居类灯饰 > 氛围灯
+# AI 不知道拼多多真实类目树，常把万圣节摆件猜成「节庆装饰/节庆摆件」导致发布时搜不到，这里按标题关键词修正。
+CATEGORY_MAP = [
+    ("捏捏乐", "玩具/童车/益智/积木/模型 > 电子/发光/充气/整蛊玩具 > 解压玩具", "解压玩具"),
+    ("解压", "玩具/童车/益智/积木/模型 > 电子/发光/充气/整蛊玩具 > 解压玩具", "解压玩具"),
+    ("南瓜灯", "节庆用品/礼品 > 节日/装扮用品 > 南瓜灯", "南瓜灯"),
+    ("气球", "节庆用品/礼品 > 节日/装扮用品 > 气球", "气球"),
+    ("氛围灯", "灯饰光源照明 > 家居类灯饰 > 氛围灯", "氛围灯"),
+    ("装饰灯", "灯饰光源照明 > 家居类灯饰 > 氛围灯", "氛围灯"),
+    ("南瓜", "节庆用品/礼品 > 节日/装扮用品 > 南瓜灯", "南瓜灯"),
+    ("万圣", "节庆用品/礼品 > 节日/装扮用品 > 其他节日装扮用品", "其他节日装扮用品"),
+    ("圣诞", "节庆用品/礼品 > 节日/装扮用品 > 其他节日装扮用品", "其他节日装扮用品"),
+]
+
+
+def _fix_category_by_map(cfg: dict, title: str) -> bool:
+    """按标题关键词命中 CATEGORY_MAP，修正 AI 猜错的类目。命中返回 True。"""
+    for kw, path, ckw in CATEGORY_MAP:
+        if kw in title:
+            cfg["categoryPath"] = path
+            cfg["categoryKeyword"] = ckw
+            return True
+    return False
+
+
 def ai_generate_publish_config(product: dict, pricing: dict = None) -> dict:
     """DeepSeek 把 1688 抓取的 product 自动生成 publish.js 的 config。
 
@@ -2501,5 +2530,9 @@ def ai_generate_publish_config(product: dict, pricing: dict = None) -> dict:
         total_sku *= max(1, len(s.get("values") or []))
     if total_sku > 30:
         warning = (warning + "；" if warning else "") + f"SKU 共 {total_sku} 个（>30），拼多多表格可能无法自动化填完，建议人工精简规格"
+
+    # 类目修正：按标题关键词命中映射表（AI 不知道拼多多真实类目树，常猜错类目导致发布时搜不到）
+    if _fix_category_by_map(cfg, title):
+        warning = (warning + "；" if warning else "") + "类目已按映射修正为「" + cfg.get("categoryPath", "") + "」"
 
     return {"config": cfg, "warning": warning, "error": None}
