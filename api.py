@@ -1914,6 +1914,43 @@ def _shop_lock(shop_id: int):
     return _SHOP_LOCKS.setdefault(shop_id, threading.Lock())
 
 
+def _auto_verify_bg(task_id: int, shop_id: int, goods_id: str):
+    """上架提交后延迟自动回查真实在售状态（后台线程，60s 后跑，避免与 publish 抢 CDP）。
+
+    提交 ≠ 在售：拼多多提交后先进审核队列，需等商品进入后台列表才能回查。
+    回查结果：published→已上架 / draft→草稿 / offshelf|soldout|rejected→失败 / missing→保持 submitted（可能还在审核，不误判 failed）。
+    """
+    if not goods_id:
+        return
+    import time as _time
+    _time.sleep(60)  # 等商品进入后台商品列表（提交后立即回查会 missing 误判）
+    port = SHOP_CDP_PORT.get(shop_id)
+    if not port:
+        return
+    try:
+        with _shop_lock(shop_id):
+            res = _run_node_script("verify_publish.js", [str(port), str(goods_id)], timeout=150)
+        statuses = (res.get("data") or {}).get("statuses") or {}
+        real = statuses.get(str(goods_id))
+        if not real or real == "missing":
+            # missing = 可能还在审核队列，保持 submitted，不误判 failed（等下次手动/定时 verify）
+            return
+        if real == "published":
+            catalog.update_autopublish_task(task_id, status="published")
+            catalog.save_published_good(goods_id=goods_id, status="published", remark="回查确认在售")
+            catalog.append_autopublish_log(task_id, "publish", "done", f"✅ 回查确认在售（商品ID: {goods_id}）")
+        elif real == "draft":
+            catalog.update_autopublish_task(task_id, status="draft")
+            catalog.save_published_good(goods_id=goods_id, status="draft", remark="回查确认草稿")
+            catalog.append_autopublish_log(task_id, "publish", "done", "⚠️ 回查确认草稿（未真正上架）")
+        else:  # offshelf / soldout / rejected
+            catalog.update_autopublish_task(task_id, status="failed", error=f"回查确认未上架({real})")
+            catalog.save_published_good(goods_id=goods_id, status="failed", remark=f"回查确认未上架({real})")
+            catalog.append_autopublish_log(task_id, "publish", "failed", f"❌ 回查确认未上架({real})")
+    except Exception as e:
+        catalog.append_autopublish_log(task_id, "publish", "done", f"⚠️ 自动回查失败:{e}")
+
+
 def _cdp_port_alive(port: int) -> bool:
     """探测某 CDP 端口是否监听（Windows 侧 PowerShell，WSL 里 curl 连不上 Windows CDP）。"""
     import subprocess
@@ -2236,6 +2273,9 @@ def _autopublish_bg(task_id: int, pricing: dict = None):
                 "published_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "remark": "已提交待审核"})
         except Exception as e:
             catalog.append_autopublish_log(task_id, "publish", "done", f"⚠️ 写入上架列表失败:{e}")
+        # 自动回查真实状态（延迟 60s，避免与 publish 抢 CDP + 等商品进入后台列表）
+        if goods_id:
+            threading.Thread(target=_auto_verify_bg, args=(task_id, shop_id, goods_id), daemon=True).start()
     elif "RESULT_FAILED" in out:
         # 提交被拼多多拦截（类目资质/必填项/判重等），如实记录具体原因
         m = __import__("re").search(r"RESULT_FAILED (.+)", out)
