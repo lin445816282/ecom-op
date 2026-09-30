@@ -16,7 +16,20 @@ import catalog
 
 NODE_EXE = "/mnt/d/Program Files/nodejs/node.exe"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-SCRAPE_JS = os.path.join(BASE_DIR, "scrape_goods_effect.js").replace("/", "\\")
+
+
+def _wsl_to_win(path: str) -> str:
+    """WSL 路径 /mnt/c/xxx → Windows 路径 C:\\xxx（node.exe 是 Windows 程序）。"""
+    p = os.path.abspath(path)
+    low = p.lower()
+    for d in "cdefgh":
+        prefix = f"/mnt/{d}/"
+        if low.startswith(prefix):
+            return f"{d.upper()}:\\" + p[len(prefix):].replace("/", "\\")
+    return p.replace("/", "\\")
+
+
+SCRAPE_JS = _wsl_to_win(os.path.join(BASE_DIR, "scrape_goods_effect.js"))
 RAW_OUT = r"C:\tmp\goods_effect_raw.json"
 STD_FONT = "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"
 
