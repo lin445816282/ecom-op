@@ -4260,7 +4260,8 @@ _SEED_TASKS = [
     ("title_opt_shop3", "标题优化批量·如若月下", "商品", 3, "30 9 * * *", "每天 09:30", "3d797b863695", "pdd_title_batch.py --shop 3", 1),
     ("title_review", "标题优化复盘", "商品", None, "0 8 * * 1", "每周一 08:00", "4d6d161d6fe3", "pdd_title_review.py --apply", 1),
     # AI老板
-    ("aiboss_daily", "AI老板每日工作流", "AI老板", 5, "0 11 * * *", "每天 11:00", "1efd70d41ac5", "ai_boss_daily.py", 1),
+    ("aiboss_daily", "AI老板每日工作流·中午班", "AI老板", 5, "0 12 * * *", "每天 12:00", "1efd70d41ac5", "ai_boss_daily.py", 1),
+    ("aiboss_daily_eve", "AI老板每日工作流·晚班", "AI老板", 5, "30 19 * * *", "每天 19:30", "83f2cdcb6532", "ai_boss_daily.py", 1),
     # 竞品/评价（待建设）
     ("competitor_monitor", "竞品监控", "竞品", None, "", "待建设", "", "", 0),
     ("review_monitor", "商品评价监控", "评价", None, "0 10 * * *", "每天 10:00", "901cd9406962", "collect_reviews.py", 1),
