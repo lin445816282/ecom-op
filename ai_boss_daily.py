@@ -73,10 +73,10 @@ def build_summary(result):
     return "；".join(lines)
 
 
-def main():
+def main(argv=None):
     catalog.init_db()  # 确保表结构存在（独立脚本运行时）
     work_date = datetime.now().strftime("%Y-%m-%d")
-    args = sys.argv[1:]
+    args = sys.argv[1:] if argv is None else argv
     do_collect = "--no-collect" not in args
     do_execute = "--no-execute" not in args
     do_select = "--no-select" not in args

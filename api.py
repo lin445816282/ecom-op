@@ -1644,7 +1644,7 @@ class Handler(BaseHTTPRequestHandler):
             def _daily_bg():
                 try:
                     import ai_boss_daily
-                    r = ai_boss_daily.main()
+                    r = ai_boss_daily.main(args)
                     print(f"[aiboss] 每日工作流完成: {r.get('summary', '')}")
                 except Exception as e:
                     print(f"[aiboss] 每日工作流失败: {e}")
