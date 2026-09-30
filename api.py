@@ -1598,6 +1598,22 @@ class Handler(BaseHTTPRequestHandler):
             r = catalog.update_ai_boss_action(aid, **fields)
             return _json(self, {"ok": True, "action": r})
 
+        if path == "/api/aiboss/collect" and self.command == "POST":
+            # 触发 CDP 采集商品经营数据（后台线程，避免阻塞请求）
+            item = self._read_body()
+            port = str(item.get("port") or "9232")
+
+            def _collect_bg():
+                try:
+                    import aiboss_collect
+                    n = aiboss_collect.collect(port)
+                    print(f"[aiboss] 采集完成，导入 {n} 条")
+                except Exception as e:
+                    print(f"[aiboss] 采集失败: {e}")
+
+            threading.Thread(target=_collect_bg, daemon=True).start()
+            return _json(self, {"ok": True, "message": "采集已启动（后台运行，约30秒完成）"})
+
         # 静态页面
         if path in ("/", "/index.html") and self.command == "GET":
             return self._serve_file("index.html", "text/html; charset=utf-8")

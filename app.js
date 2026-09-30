@@ -6764,7 +6764,8 @@ async function renderAiBoss() {
           <div style="flex:1;min-width:90px;background:#f8fafc;border-radius:8px;padding:10px;text-align:center"><div style="font-size:12px;color:#64748b">支付订单</div><div style="font-size:20px;font-weight:700">${totalOrders7}</div></div>
           <div style="flex:1;min-width:90px;background:#f8fafc;border-radius:8px;padding:10px;text-align:center"><div style="font-size:12px;color:#64748b">支付金额</div><div style="font-size:20px;font-weight:700">¥${fmt(totalAmount7)}</div></div>
         </div>
-        <div style="color:#94a3b8;font-size:12px;margin-bottom:8px">数据来源：CDP 抓商家后台（待接入）或手动导入。导入经营数据后，规则引擎才能评估触发。</div>
+        <div style="color:#94a3b8;font-size:12px;margin-bottom:8px">数据来源：CDP 抓商家后台（已接入）或手动导入。点击采集后，规则引擎自动评估触发。</div>
+        <button class="btn primary" style="padding:7px 16px;font-size:13px;margin-bottom:8px" onclick="aiBossCollect()">🔄 采集今日经营数据</button>
         <details style="margin-top:8px">
           <summary style="cursor:pointer;color:#2563eb;font-size:13px">＋ 手动导入经营数据 / 成交词</summary>
           <div style="margin-top:10px">
@@ -6900,6 +6901,14 @@ async function aiBossImportKeywords() {
     const r = await api('/api/aiboss/keywords', 'POST', { rows });
     toast('✅ 已导入 ' + r.imported + ' 条成交词');
     renderAiBoss();
+  } catch (e) { toast('❌ ' + e.message); }
+}
+
+async function aiBossCollect() {
+  toast('🔄 采集已启动，约 30 秒后刷新查看');
+  try {
+    await api('/api/aiboss/collect', 'POST', {});
+    setTimeout(() => { toast('✅ 采集完成，刷新中…'); renderAiBoss(); }, 30000);
   } catch (e) { toast('❌ ' + e.message); }
 }
 
