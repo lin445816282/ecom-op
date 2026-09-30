@@ -233,52 +233,57 @@ async function fillByType(c, selector, text){
   const totalSku = skuRows.length;
   log('  SKU 共', totalSku, '行（', specsArr.length, '维规格）');
 
-  // ===== Step 5: 填价格库存（x 坐标精确匹配列） =====
-  log('[5/8] 填价格库存');
+  // ===== Step 5: 填价格库存（x 坐标识别列 + y 坐标分行，不依赖「每行4框」全局索引） =====
+  // 关键：价格表虚拟滚动，querySelectorAll 只拿可见行，旧 baseIdx*4 全局索引在 SKU 行数多时错位，
+  //       导致单买价列漏填（task_72 儿童手套 11 SKU 教训）。改用 x 坐标识别列、y 坐标分行：
+  //       库存 x≈602 / 拼单价 x≈704 / 单买价 x≈871 / 规格编码 x≈1120（跳过）。
+  log('[5/8] 填价格库存（x列+y行坐标定位）');
   await ev(c,`window.scrollTo(0, document.body.scrollHeight)`);
   await sleep(2000);
-  // 每行 4 个「请输入」：库存(x~605)/拼单价(x~709)/单买价(x~877)/规格编码(x~1131)
-  let filledRows=0;
-  for(let i=0; i<skuRows.length; i++){
-    const price = skuRows[i].price;
-    const rowVals=[String(cfg.stock), String(price.pdd), String(price.danmai)];
-    const baseIdx = filledRows*4;
-    for(let col=0; col<3; col++){
-      const gidx = baseIdx + col;
-      const f=await ev(c,`(()=>{const inps=[...document.querySelectorAll('input[placeholder="请输入"]')];const inp=inps[${gidx}];if(!inp)return 'no';inp.scrollIntoView({block:'center'});inp.click();inp.focus();return 'ok'})()`);
-      if(f==='ok'){ await sleep(200); await c.send('Input.insertText',{text:rowVals[col]}); await sleep(150); }
-      else log(`  ⚠️ 行${filledRows} col${col} 无输入框`);
-    }
-    filledRows++;
-  }
-  log('  已填', filledRows, '行 / 共', totalSku, '行');
-  // 补填：首行库存常因「滚动到底→scrollIntoView回滚」焦点丢失而漏填，检查所有行补填空的库存/价格单元格
-  for(let pass=0; pass<3; pass++){
-    const emptyCells = await ev(c, `(()=>{
+  // 反复扫描填：每次读所有可见「请输入」框，按 y 分组为行、x 判断列，逐行填满，
+  // 填完滚动触发更多行渲染，直到没有空框或达到轮数上限。
+  let totalFilled=0;
+  for(let round=0; round<12; round++){
+    // 读当前可见的空框（返回 [{x,y,col,row}]，row 按 y 去重排序后的行序号）
+    const snap = await ev(c, `(()=>{
       const inps=[...document.querySelectorAll('input[placeholder="请输入"]')];
-      const out=[];
-      for(let i=0;i<inps.length;i++){
-        if(i%4===3) continue; // 跳过规格编码列
-        if(!inps[i].value) out.push(i);
-      }
-      return JSON.stringify(out);
+      const cols=[602,704,871]; // 库存/拼单价/单买价
+      const rows=[];
+      inps.forEach(inp=>{
+        const r=inp.getBoundingClientRect();
+        if(r.width<=0) return;
+        const colIdx=cols.findIndex(cx=>Math.abs(r.x-cx)<=30);
+        if(colIdx<0) return;
+        rows.push({y:Math.round(r.y), x:Math.round(r.x), col:colIdx, val:(inp.value||'').trim()});
+      });
+      // 按 y 去重排序得到行列表
+      const ys=[...new Set(rows.map(o=>o.y))].sort((a,b)=>a-b);
+      // 标记空框
+      const empty=rows.filter(o=>!o.val).map(o=>({x:o.x, y:o.y, col:o.col, row:ys.indexOf(o.y)}));
+      return JSON.stringify({empty:empty, rowCount:ys.length, total:rows.length});
     })()`);
-    let empties=[];
-    try{ empties=JSON.parse(emptyCells||'[]'); }catch(e){}
-    if(!empties.length) break;
-    for(const idx of empties){
-      const row = Math.floor(idx/4);
-      const col = idx%4;
-      const pr = skuRows[row] ? skuRows[row].price : {pdd:0,danmai:0};
-      const val = col===0 ? String(cfg.stock) : col===1 ? String(pr.pdd) : String(pr.danmai);
-      if(!val) continue;
-      await ev(c,`(()=>{const inp=[...document.querySelectorAll('input[placeholder="请输入"]')][${idx}];if(!inp)return 'no';inp.scrollIntoView({block:'center'});inp.click();inp.focus();return 'ok'})()`);
-      await sleep(400);
-      await c.send('Input.insertText',{text:val});
-      await sleep(300);
+    let snapObj={empty:[],rowCount:0};
+    try{ snapObj=JSON.parse(snap||'{}'); }catch(e){}
+    if(!snapObj.empty || !snapObj.empty.length) break;
+    // 逐个填空框（按行号取价格）
+    for(const e of snapObj.empty){
+      const price = skuRows[e.row] ? skuRows[e.row].price : {pdd:0, danmai:0};
+      const val = e.col===0 ? String(cfg.stock) : (e.col===1 ? String(price.pdd) : String(price.danmai));
+      if(!val || val==='undefined' || val==='null') continue;
+      const f=await ev(c,`(()=>{
+        const inps=[...document.querySelectorAll('input[placeholder="请输入"]')];
+        const t=inps.find(inp=>{const r=inp.getBoundingClientRect();return r.width>0&&Math.abs(r.x-${e.x})<=15&&Math.abs(r.y-${e.y})<=15;});
+        if(!t)return 'no';
+        t.scrollIntoView({block:'center'}); t.click(); t.focus(); return 'ok';
+      })()`);
+      if(f==='ok'){ await sleep(250); await c.send('Input.insertText',{text:val}); await sleep(200); totalFilled++; }
     }
-    log('  补填', empties.length, '个空单元格');
+    log('  第'+round+'轮填', snapObj.empty.length, '个空框');
+    // 滚动触发更多行渲染
+    await ev(c,`window.scrollTo(0, document.body.scrollHeight)`);
+    await sleep(1200);
   }
+  log('  累计填', totalFilled, '个单元格 / 目标', totalSku*3, '个');
 
   // ===== Step 6: 上传规格预览图（逐个，每次找第一个未上传行） =====
   log('[6/8] 上传规格预览图');
