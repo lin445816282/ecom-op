@@ -394,9 +394,9 @@ async function fillByType(c, selector, text){
       }
     }
     log('  提交结果 URL:', finalUrl);
-    if(successFlag){ const m=finalUrl.match(/goods_id=(\\d+)/); log('✅ 已提交待审核，商品ID:', m?m[1]:'未知'); log('RESULT_SUBMITTED goods_id='+(m?m[1]:'')); }
+    if(successFlag){ const m=finalUrl.match(/goods_id=(\d+)/); log('✅ 已提交待审核，商品ID:', m?m[1]:'未知'); log('RESULT_SUBMITTED goods_id='+(m?m[1]:'')); }
     else if(failReason){ log('❌ 提交被拦截：' + failReason); log('RESULT_FAILED ' + failReason); }
-    else { log('⚠️ 提交后 120 秒未跳转成功页且无明确错误，按已提交处理（待 verify 回查确认）'); log('RESULT_SUBMITTED goods_id='+((finalUrl.match(/goods_id=(\\d+)/)||[])[1]||'')); }
+    else { log('⚠️ 提交后 120 秒未跳转成功页且无明确错误，按已提交处理（待 verify 回查确认）'); log('RESULT_SUBMITTED goods_id='+((finalUrl.match(/goods_id=(\d+)/)||[])[1]||'')); }
   } else {
     log('⚠️ 未找到提交按钮，请人工检查页面');
   }
