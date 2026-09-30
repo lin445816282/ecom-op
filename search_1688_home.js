@@ -20,26 +20,37 @@ const sleep = ms => new Promise(r=>setTimeout(r,ms));
     await send('Page.enable',{});
     await send('Runtime.enable',{});
 
-    // 确保在首页
+    // 确保在首页：只有 www.1688.com 根域才算（detail/s/login/search 都跳回）
     const cur = await send('Runtime.evaluate',{expression:'location.href', returnByValue:true});
     const curUrl = cur.result.value || '';
-    if(!/1688\.com/.test(curUrl) || /punish|x5sec/.test(curUrl)){
+    const isHome = /^https:\/\/www\.1688\.com\/?($|\?)/.test(curUrl);
+    if(!isHome || /punish|x5sec/.test(curUrl)){
       await send('Page.navigate',{url:'https://www.1688.com/'});
       await sleep(7000);
     }
 
     // 设值 + form.submit（target 改 _self 避免 popup）
-    await send('Runtime.evaluate',{expression:`(function(){
-      var ta = document.getElementById('alisearch-input');
-      if(!ta) return 'NO_TA';
-      var setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
-      setter.call(ta, ${JSON.stringify(KW)});
-      ta.dispatchEvent(new Event('input', {bubbles:true}));
-      ta.dispatchEvent(new Event('change', {bubbles:true}));
-      var form = document.getElementById('alisearch-form');
-      if(form){ form.target = '_self'; form.submit(); return 'SUBMITTED'; }
-      return 'NO_FORM';
-    })()`, returnByValue:true});
+    async function doSubmit(){
+      const r = await send('Runtime.evaluate',{expression:`(function(){
+        var ta = document.getElementById('alisearch-input');
+        if(!ta) return 'NO_TA';
+        var setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+        setter.call(ta, ${JSON.stringify(KW)});
+        ta.dispatchEvent(new Event('input', {bubbles:true}));
+        ta.dispatchEvent(new Event('change', {bubbles:true}));
+        var form = document.getElementById('alisearch-form');
+        if(form){ form.target = '_self'; form.submit(); return 'SUBMITTED'; }
+        return 'NO_FORM';
+      })()`, returnByValue:true});
+      return (r && r.result && r.result.value) || '';
+    }
+    let submitVal = await doSubmit();
+    if(submitVal !== 'SUBMITTED'){
+      // 没找到搜索框（可能仍在详情页/登录页）：导航回首页重试一次
+      await send('Page.navigate',{url:'https://www.1688.com/'});
+      await sleep(7000);
+      submitVal = await doSubmit();
+    }
     await sleep(6000);
 
     // 检查风控 + 结果
