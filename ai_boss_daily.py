@@ -24,11 +24,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import catalog
 import ai_boss_engine
 import aiboss_collect
+import aiboss_select
 
 API_BASE = "http://127.0.0.1:8765"
 ACCESS_TOKEN = os.environ.get("ECOM_OP_TOKEN", "Alcz8283103")
-# AI 老板有商品的店铺 CDP 端口（嘉裕=9232，闲时来=9234），串行采集避免 CDP 冲突
-SHOP_PORTS = ["9232", "9234"]
+# AI 老板只管闲时来店（shop_id=1），CDP 端口 9234
+SHOP_PORTS = ["9234"]
 
 
 def _call_execute(gid, action_type, rule, goods_name, detail):
@@ -46,17 +47,25 @@ def _call_execute(gid, action_type, rule, goods_name, detail):
 
 
 def build_summary(result):
+    sel = result["select"]
     c = result["collect"]["count"]
     g = result["evaluate"]["goods_count"]
     t = result["evaluate"]["actions_count"]
     e = result["execute"]["executed"]
     b = result["execute"]["blocked"]
     f = result["execute"]["failed"]
-    lines = [f"采集 {c} 条经营数据", f"分析 {g} 个自营商品", f"触发 {t} 个动作"]
+    lines = []
+    if sel["count"]:
+        lines.append(f"选品上架 {sel['published']}/{sel['count']} 个")
+    else:
+        lines.append("选品 0 个")
+    lines += [f"采集 {c} 条经营数据", f"分析 {g} 个自营商品", f"触发 {t} 个动作"]
     if e or b or f:
         lines.append(f"执行 {e} 成功 / {b} 拦截 / {f} 失败")
     else:
         lines.append("无待执行动作")
+    if sel["error"]:
+        lines.append(f"选品异常:{sel['error'][:60]}")
     if result["collect"]["error"]:
         lines.append(f"采集异常:{result['collect']['error'][:80]}")
     if result["evaluate"].get("error"):
@@ -70,14 +79,28 @@ def main():
     args = sys.argv[1:]
     do_collect = "--no-collect" not in args
     do_execute = "--no-execute" not in args
+    do_select = "--no-select" not in args
     dry_run = "--dry-run" in args
 
     result = {
         "work_date": work_date,
+        "select": {"count": 0, "published": 0, "products": [], "error": None},
         "collect": {"count": 0, "error": None},
         "evaluate": {"goods_count": 0, "actions_count": 0, "actions": [], "error": None},
         "execute": {"executed": 0, "blocked": 0, "failed": 0, "detail": []},
     }
+
+    # 0. 选品上架（每次 5 个，到闲时来 shop 1）
+    if do_select and not dry_run:
+        try:
+            selected = aiboss_select.select_products(5)
+            result["select"]["count"] = len(selected)
+            result["select"]["products"] = [{"oid": p["oid"], "title": p["title"],
+                                             "price": p["price"], "kw": p["kw"]} for p in selected]
+            if selected:
+                result["select"]["published"] = aiboss_select.publish_products(selected)
+        except Exception as e:
+            result["select"]["error"] = str(e)
 
     # 1. 采集（多店串行）
     if do_collect:
