@@ -233,21 +233,34 @@ async function fillByType(c, selector, text){
   const totalSku = skuRows.length;
   log('  SKU 共', totalSku, '行（', specsArr.length, '维规格）');
 
-  // ===== Step 5: 填价格库存（x 坐标识别列 + y 坐标分行，不依赖「每行4框」全局索引） =====
-  // 关键：价格表虚拟滚动，querySelectorAll 只拿可见行，旧 baseIdx*4 全局索引在 SKU 行数多时错位，
-  //       导致单买价列漏填（task_72 儿童手套 11 SKU 教训）。改用 x 坐标识别列、y 坐标分行：
-  //       库存 x≈602 / 拼单价 x≈704 / 单买价 x≈871 / 规格编码 x≈1120（跳过）。
-  log('[5/8] 填价格库存（x列+y行坐标定位）');
+  // ===== Step 5: 填价格库存（动态定位列坐标 + y 坐标分行，不依赖硬编码 x） =====
+  // 关键：价格表虚拟滚动，旧 baseIdx*4 全局索引在 SKU 行数多时错位，单买价列漏填（task_72 教训）。
+  // 正确做法：先读表头「库存/拼单价/单买价」输入框的 x 坐标动态定位列（窗口宽度变化时 x 会漂移，
+  // 硬编码 602/704/871 会失配），再按 y 坐标分行，反复扫描填空。
+  log('[5/8] 填价格库存（动态列坐标定位）');
   await ev(c,`window.scrollTo(0, document.body.scrollHeight)`);
   await sleep(2000);
+  // 先读表头列坐标：placeholder 精确为「库存」「拼单价」「单买价」的输入框 x 坐标
+  const colXsRaw = await ev(c, `(function(){
+    const heads=['库存','拼单价','单买价'];
+    const out={};
+    heads.forEach(h=>{
+      const inp=[...document.querySelectorAll('input')].find(i=>(i.placeholder||'').trim()===h);
+      if(inp){ const r=inp.getBoundingClientRect(); if(r.width>0) out[h]=Math.round(r.x+r.width/2); }
+    });
+    return JSON.stringify(out);
+  })()`);
+  let colXs={库存:511, 拼单价:624, 单买价:808};
+  try{ const _c=JSON.parse(colXsRaw||'{}'); if(_c['库存']&&_c['拼单价']&&_c['单买价']) colXs=_c; }catch(e){}
+  log('  列坐标:', JSON.stringify(colXs));
+  const COLS=[colXs['库存'], colXs['拼单价'], colXs['单买价']];
   // 反复扫描填：每次读所有可见「请输入」框，按 y 分组为行、x 判断列，逐行填满，
   // 填完滚动触发更多行渲染，直到没有空框或达到轮数上限。
   let totalFilled=0;
   for(let round=0; round<12; round++){
-    // 读当前可见的空框（返回 [{x,y,col,row}]，row 按 y 去重排序后的行序号）
     const snap = await ev(c, `(()=>{
       const inps=[...document.querySelectorAll('input[placeholder="请输入"]')];
-      const cols=[602,704,871]; // 库存/拼单价/单买价
+      const cols=${JSON.stringify(COLS)};
       const rows=[];
       inps.forEach(inp=>{
         const r=inp.getBoundingClientRect();
