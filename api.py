@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 import data
 import catalog
 import import_freight
+import ai_boss_engine
 
 PORT = 8765
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -1519,6 +1520,83 @@ class Handler(BaseHTTPRequestHandler):
                 return _json(self, {"error": "请填单号"}, 400)
             r = catalog.fill_ai_boss_tracking(order_id, tracking_no)
             return _json(self, {"ok": True, "order": r})
+
+        # ------------------------- AI老板数据闭环 + 规则引擎（系统当董事会） -------------------------
+        if path == "/api/aiboss/dashboard" and self.command == "GET":
+            return _json(self, {
+                "daily": catalog.list_ai_boss_daily(days=30),
+                "keywords": catalog.list_ai_boss_keywords(days=7),
+                "actions": catalog.list_ai_boss_actions(limit=50),
+                "rules": ai_boss_engine.evaluate_rules(),
+            })
+
+        if path == "/api/aiboss/daily" and self.command == "POST":
+            item = self._read_body()
+            rows = item.get("rows") or [item]
+            cnt = 0
+            for r in rows:
+                gid = str(r.get("goods_id") or "").strip()
+                if not gid:
+                    continue
+                catalog.upsert_ai_boss_daily(
+                    goods_id=gid,
+                    goods_name=str(r.get("goods_name") or "").strip(),
+                    stat_date=str(r.get("stat_date") or "").strip(),
+                    visitor_cnt=int(r.get("visitor_cnt") or 0),
+                    page_view_cnt=int(r.get("page_view_cnt") or 0),
+                    pay_buyer_cnt=int(r.get("pay_buyer_cnt") or 0),
+                    pay_order_cnt=int(r.get("pay_order_cnt") or 0),
+                    pay_amount=float(r.get("pay_amount") or 0),
+                    pay_rate=float(r.get("pay_rate") or 0),
+                    collect_cnt=int(r.get("collect_cnt") or 0),
+                )
+                cnt += 1
+            return _json(self, {"ok": True, "imported": cnt})
+
+        if path == "/api/aiboss/keywords" and self.command == "POST":
+            item = self._read_body()
+            rows = item.get("rows") or [item]
+            cnt = 0
+            for r in rows:
+                gid = str(r.get("goods_id") or "").strip()
+                kw = str(r.get("keyword") or "").strip()
+                if not gid or not kw:
+                    continue
+                catalog.upsert_ai_boss_keyword(
+                    goods_id=gid,
+                    keyword=kw,
+                    stat_date=str(r.get("stat_date") or "").strip(),
+                    pay_order_cnt=int(r.get("pay_order_cnt") or 0),
+                    pay_amount=float(r.get("pay_amount") or 0),
+                    pay_rate=float(r.get("pay_rate") or 0),
+                )
+                cnt += 1
+            return _json(self, {"ok": True, "imported": cnt})
+
+        if path == "/api/aiboss/action" and self.command == "POST":
+            item = self._read_body()
+            r = catalog.add_ai_boss_action(
+                goods_id=str(item.get("goods_id") or "").strip(),
+                goods_name=str(item.get("goods_name") or "").strip(),
+                action_type=str(item.get("action_type") or "").strip(),
+                action_detail=str(item.get("action_detail") or "").strip(),
+                trigger_rule=str(item.get("trigger_rule") or "").strip(),
+                status=str(item.get("status") or "proposed").strip(),
+            )
+            return _json(self, {"ok": True, "action": r})
+
+        if path.startswith("/api/aiboss/action/") and self.command == "POST":
+            try:
+                aid = int(path.rstrip("/").rsplit("/", 1)[-1])
+            except ValueError:
+                return _json(self, {"error": "非法 id"}, 400)
+            item = self._read_body()
+            fields = {}
+            for k in ("status", "verify_status", "verify_detail", "action_detail"):
+                if k in item:
+                    fields[k] = item[k]
+            r = catalog.update_ai_boss_action(aid, **fields)
+            return _json(self, {"ok": True, "action": r})
 
         # 静态页面
         if path in ("/", "/index.html") and self.command == "GET":

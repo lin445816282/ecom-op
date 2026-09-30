@@ -6647,11 +6647,21 @@ async function renderAiBoss() {
   const el = $('#view-aiboss');
   if (!el) return;
   let data = { items: [], orders: [], summary: {} };
+  let dash = { daily: [], keywords: [], actions: [], rules: { actions: [], rules: {}, constraints: {} } };
   try { data = await api('/api/aiboss'); } catch (e) { data = { items: [], orders: [], summary: {} }; }
+  try { dash = await api('/api/aiboss/dashboard'); } catch (e) {}
   const s = data.summary || {};
   const items = data.items || [];
   const orders = data.orders || [];
-  _bossData = { items, orders };
+  _bossData = { items, orders, dash };
+
+  const rules = dash.rules || {};
+  const ruleActions = rules.actions || [];
+  const ruleStatus = rules.rules || {};
+  const constraints = rules.constraints || {};
+  const actionLog = dash.actions || [];
+  const daily = dash.daily || [];
+  const keywords = dash.keywords || [];
 
   const itemRows = items.map(it => `
     <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin-bottom:8px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
@@ -6686,6 +6696,39 @@ async function renderAiBoss() {
     </div>`;
   }).join('');
 
+  // ---- 规则引擎面板 + 动作审计 ----
+  const ruleNameMap = { A: '标题提词换词', B: '7天零数据下架', C: '出单品加推' };
+  const actionNameMap = { title_update: '改标题', offshelf: '下架', promote: '加推', price_switch: '换供应商' };
+  const ruleActionRows = ruleActions.length ? ruleActions.map(a => {
+    const detail = a.detail ? (typeof a.detail === 'string' ? a.detail : JSON.stringify(a.detail)).slice(0, 100) : '';
+    return `<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:10px;margin-bottom:8px">
+      <span style="font-weight:600;color:#c2410c;font-size:13px">规则${a.rule}·${ruleNameMap[a.rule] || ''}</span>
+      <span style="font-size:12px;color:#9a3412;margin-left:6px">→ ${actionNameMap[a.action_type] || a.action_type}</span>
+      <div style="color:#7c2d12;font-size:12px;margin-top:4px">${esc(a.goods_name || a.goods_id)}${detail ? ' · ' + esc(detail) : ''}</div>
+    </div>`;
+  }).join('') : '<div style="color:#94a3b8;font-size:13px">当前无触发动作（数据量不足或未达阈值，先导入经营数据）。</div>';
+
+  const ruleStatusHtml = ['A', 'B', 'C'].map(k => {
+    const r = ruleStatus[k] || { name: '', triggered: [] };
+    const n = (r.triggered || []).length;
+    return `<div style="flex:1;min-width:110px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px">
+      <div style="font-size:12px;color:#475569;font-weight:600">规则${k} ${esc(r.name || '')}</div>
+      <div style="font-size:20px;font-weight:700;margin-top:4px;color:${n ? '#dc2626' : '#16a34a'}">${n} 触发</div>
+    </div>`;
+  }).join('');
+
+  const stMap = { proposed: '提议', executed: '已执行', verified: '已验证', blocked: '被硬约束拦截' };
+  const vsMap = { pending: '待验证', verified_success: '✅验证成功', uncertain: '⚠️不确定', failed_final: '❌失败' };
+  const actionLogHtml = actionLog.length ? actionLog.slice(0, 12).map(a => `<div style="padding:8px 0;border-bottom:1px solid #f1f5f9;font-size:12px;color:#475569;display:flex;justify-content:space-between;gap:8px">
+      <span><b>${esc(actionNameMap[a.action_type] || a.action_type)}</b> <span style="color:#94a3b8">· ${esc(a.goods_name || a.goods_id || '')} · ${esc((a.created_at || '').slice(0, 16))}</span></span>
+      <span style="white-space:nowrap">${stMap[a.status] || a.status} / ${vsMap[a.verify_status] || a.verify_status}</span>
+    </div>`).join('') : '<div style="color:#94a3b8;font-size:13px">暂无动作记录。</div>';
+
+  const recentDaily = daily.slice(0, 7);
+  const totalVisitors = recentDaily.reduce((s, d) => s + (Number(d.visitor_cnt) || 0), 0);
+  const totalOrders7 = recentDaily.reduce((s, d) => s + (Number(d.pay_order_cnt) || 0), 0);
+  const totalAmount7 = recentDaily.reduce((s, d) => s + (Number(d.pay_amount) || 0), 0);
+
   el.innerHTML = `
     <div style="padding:20px;max-width:1100px">
       <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">
@@ -6704,6 +6747,41 @@ async function renderAiBoss() {
           <div style="font-size:26px;font-weight:700;margin-top:4px;color:#17203a">${s.item_count}</div>
           <div style="font-size:12px;color:#94a3b8;margin-top:2px">累计出单 ${s.order_count} 笔</div>
         </div>
+      </div>
+
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin-bottom:16px">
+        <div style="font-weight:700;font-size:15px;margin-bottom:4px">🧠 决策规则引擎（系统当董事会）</div>
+        <div style="color:#94a3b8;font-size:12px;margin-bottom:12px">AI 提议，系统确认事实 + 执行硬约束。标题修改硬约束：每 ${constraints.title_cooldown_days || 14} 天 1 次。</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">${ruleStatusHtml}</div>
+        <div style="font-size:13px;font-weight:600;color:#475569;margin-bottom:8px">⚡ 待执行动作</div>
+        ${ruleActionRows}
+      </div>
+
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin-bottom:16px">
+        <div style="font-weight:700;font-size:15px;margin-bottom:4px">📊 经营数据闭环（近7天）</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+          <div style="flex:1;min-width:90px;background:#f8fafc;border-radius:8px;padding:10px;text-align:center"><div style="font-size:12px;color:#64748b">访客</div><div style="font-size:20px;font-weight:700">${totalVisitors}</div></div>
+          <div style="flex:1;min-width:90px;background:#f8fafc;border-radius:8px;padding:10px;text-align:center"><div style="font-size:12px;color:#64748b">支付订单</div><div style="font-size:20px;font-weight:700">${totalOrders7}</div></div>
+          <div style="flex:1;min-width:90px;background:#f8fafc;border-radius:8px;padding:10px;text-align:center"><div style="font-size:12px;color:#64748b">支付金额</div><div style="font-size:20px;font-weight:700">¥${fmt(totalAmount7)}</div></div>
+        </div>
+        <div style="color:#94a3b8;font-size:12px;margin-bottom:8px">数据来源：CDP 抓商家后台（待接入）或手动导入。导入经营数据后，规则引擎才能评估触发。</div>
+        <details style="margin-top:8px">
+          <summary style="cursor:pointer;color:#2563eb;font-size:13px">＋ 手动导入经营数据 / 成交词</summary>
+          <div style="margin-top:10px">
+            <div style="font-size:12px;color:#64748b;margin-bottom:6px">经营数据（JSON 数组）</div>
+            <textarea id="boss-daily-json" placeholder='JSON 数组：[{"goods_id":"...","goods_name":"标题","stat_date":"2026-09-30","visitor_cnt":100,"pay_order_cnt":3,"pay_amount":180,"pay_rate":0.03,"collect_cnt":5}]' style="width:100%;min-height:70px;padding:8px 12px;border:1px solid #cbd5e1;border-radius:8px;font-size:12px;font-family:monospace"></textarea>
+            <button class="btn primary" style="padding:6px 14px;font-size:12px;margin-top:6px" onclick="aiBossImportDaily()">导入经营数据</button>
+            <div style="font-size:12px;color:#64748b;margin:10px 0 6px">成交词（JSON 数组）</div>
+            <textarea id="boss-kw-json" placeholder='JSON 数组：[{"goods_id":"...","keyword":"手套","stat_date":"2026-09-30","pay_order_cnt":2,"pay_rate":0.05}]' style="width:100%;min-height:60px;padding:8px 12px;border:1px solid #cbd5e1;border-radius:8px;font-size:12px;font-family:monospace"></textarea>
+            <button class="btn primary" style="padding:6px 14px;font-size:12px;margin-top:6px" onclick="aiBossImportKeywords()">导入成交词</button>
+          </div>
+        </details>
+      </div>
+
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin-bottom:16px">
+        <div style="font-weight:700;font-size:15px;margin-bottom:4px">📋 动作审计（每一步可追溯）</div>
+        <div style="color:#94a3b8;font-size:12px;margin-bottom:10px">AI 的每个决策动作 + 验证结果。只有系统验证器返回 VERIFIED_SUCCESS 才进入可操作池。</div>
+        ${actionLogHtml}
       </div>
 
       <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin-bottom:16px">
@@ -6795,6 +6873,32 @@ async function aiBossFillTracking(id) {
   try {
     await api('/api/aiboss/orders/' + id, 'POST', { tracking_no: no });
     toast('✅ 已发货，利润入账');
+    renderAiBoss();
+  } catch (e) { toast('❌ ' + e.message); }
+}
+
+async function aiBossImportDaily() {
+  const raw = $('#boss-daily-json').value.trim();
+  if (!raw) { toast('请粘贴 JSON 数组'); return; }
+  let rows;
+  try { rows = JSON.parse(raw); } catch (e) { toast('❌ JSON 解析失败：' + e.message); return; }
+  if (!Array.isArray(rows)) rows = [rows];
+  try {
+    const r = await api('/api/aiboss/daily', 'POST', { rows });
+    toast('✅ 已导入 ' + r.imported + ' 条经营数据');
+    renderAiBoss();
+  } catch (e) { toast('❌ ' + e.message); }
+}
+
+async function aiBossImportKeywords() {
+  const raw = $('#boss-kw-json').value.trim();
+  if (!raw) { toast('请粘贴 JSON 数组'); return; }
+  let rows;
+  try { rows = JSON.parse(raw); } catch (e) { toast('❌ JSON 解析失败：' + e.message); return; }
+  if (!Array.isArray(rows)) rows = [rows];
+  try {
+    const r = await api('/api/aiboss/keywords', 'POST', { rows });
+    toast('✅ 已导入 ' + r.imported + ' 条成交词');
     renderAiBoss();
   } catch (e) { toast('❌ ' + e.message); }
 }

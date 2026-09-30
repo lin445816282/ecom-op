@@ -555,6 +555,50 @@ CREATE TABLE IF NOT EXISTS ai_boss_orders (
     created_at TEXT DEFAULT (datetime('now','localtime'))
 );
 CREATE INDEX IF NOT EXISTS idx_ai_boss_orders_status ON ai_boss_orders(status);
+
+CREATE TABLE IF NOT EXISTS ai_boss_goods_daily (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    goods_id TEXT DEFAULT '',
+    goods_name TEXT DEFAULT '',
+    stat_date TEXT DEFAULT '',
+    visitor_cnt INTEGER DEFAULT 0,
+    page_view_cnt INTEGER DEFAULT 0,
+    pay_buyer_cnt INTEGER DEFAULT 0,
+    pay_order_cnt INTEGER DEFAULT 0,
+    pay_amount REAL DEFAULT 0,
+    pay_rate REAL DEFAULT 0,
+    collect_cnt INTEGER DEFAULT 0,
+    note TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_ai_boss_daily_goods ON ai_boss_goods_daily(goods_id, stat_date);
+
+CREATE TABLE IF NOT EXISTS ai_boss_keywords (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    goods_id TEXT DEFAULT '',
+    keyword TEXT NOT NULL,
+    stat_date TEXT DEFAULT '',
+    pay_order_cnt INTEGER DEFAULT 0,
+    pay_amount REAL DEFAULT 0,
+    pay_rate REAL DEFAULT 0,
+    note TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_ai_boss_kw_goods ON ai_boss_keywords(goods_id, stat_date);
+
+CREATE TABLE IF NOT EXISTS ai_boss_actions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    goods_id TEXT DEFAULT '',
+    goods_name TEXT DEFAULT '',
+    action_type TEXT DEFAULT '',
+    action_detail TEXT DEFAULT '',
+    trigger_rule TEXT DEFAULT '',
+    verify_status TEXT DEFAULT 'pending',
+    verify_detail TEXT DEFAULT '',
+    status TEXT DEFAULT 'proposed',
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_ai_boss_actions_goods ON ai_boss_actions(goods_id);
 """
 
 
@@ -5033,4 +5077,136 @@ def ai_boss_summary() -> dict:
             "pending_profit": round(pending_profit, 2),
             "shipped_qty": shipped_qty,
         }
+
+
+# ===================== AI老板数据闭环（经营数据 + 成交词 + 动作审计） =====================
+
+def upsert_ai_boss_daily(goods_id, goods_name="", stat_date="", visitor_cnt=0, page_view_cnt=0,
+                         pay_buyer_cnt=0, pay_order_cnt=0, pay_amount=0, pay_rate=0,
+                         collect_cnt=0, note="") -> dict:
+    """导入/更新单品日粒度经营数据（按 goods_id+stat_date 去重 upsert）。"""
+    with closing(_conn()) as c:
+        row = c.execute(
+            "SELECT id FROM ai_boss_goods_daily WHERE goods_id=? AND stat_date=?",
+            (goods_id, stat_date)).fetchone()
+        if row:
+            c.execute(
+                "UPDATE ai_boss_goods_daily SET goods_name=?, visitor_cnt=?, page_view_cnt=?, "
+                "pay_buyer_cnt=?, pay_order_cnt=?, pay_amount=?, pay_rate=?, collect_cnt=?, note=? WHERE id=?",
+                (goods_name, visitor_cnt, page_view_cnt, pay_buyer_cnt, pay_order_cnt,
+                 pay_amount, pay_rate, collect_cnt, note, row["id"]))
+            rid = row["id"]
+        else:
+            cur = c.execute(
+                "INSERT INTO ai_boss_goods_daily(goods_id, goods_name, stat_date, visitor_cnt, page_view_cnt, "
+                "pay_buyer_cnt, pay_order_cnt, pay_amount, pay_rate, collect_cnt, note) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (goods_id, goods_name, stat_date, visitor_cnt, page_view_cnt, pay_buyer_cnt,
+                 pay_order_cnt, pay_amount, pay_rate, collect_cnt, note))
+            rid = cur.lastrowid
+        c.commit()
+        r = c.execute("SELECT * FROM ai_boss_goods_daily WHERE id=?", (rid,)).fetchone()
+        return dict(r) if r else {}
+
+
+def list_ai_boss_daily(goods_id=None, days=None) -> list[dict]:
+    """查询经营日粒度数据。days=N 只取最近 N 天。"""
+    with closing(_conn()) as c:
+        q = "SELECT * FROM ai_boss_goods_daily"
+        args = []
+        if goods_id:
+            q += " WHERE goods_id=?"
+            args.append(goods_id)
+        if days:
+            q += (" WHERE" if " WHERE" not in q else " AND") + " stat_date >= date('now','localtime','-%d day')" % days
+        q += " ORDER BY stat_date DESC, id DESC"
+        return [dict(r) for r in c.execute(q, args).fetchall()]
+
+
+def upsert_ai_boss_keyword(goods_id, keyword, stat_date="", pay_order_cnt=0, pay_amount=0, pay_rate=0, note="") -> dict:
+    """导入成交词（按 goods_id+keyword+stat_date 去重 upsert）。"""
+    with closing(_conn()) as c:
+        row = c.execute(
+            "SELECT id FROM ai_boss_keywords WHERE goods_id=? AND keyword=? AND stat_date=?",
+            (goods_id, keyword, stat_date)).fetchone()
+        if row:
+            c.execute(
+                "UPDATE ai_boss_keywords SET pay_order_cnt=?, pay_amount=?, pay_rate=?, note=? WHERE id=?",
+                (pay_order_cnt, pay_amount, pay_rate, note, row["id"]))
+            rid = row["id"]
+        else:
+            cur = c.execute(
+                "INSERT INTO ai_boss_keywords(goods_id, keyword, stat_date, pay_order_cnt, pay_amount, pay_rate, note) "
+                "VALUES(?,?,?,?,?,?,?)",
+                (goods_id, keyword, stat_date, pay_order_cnt, pay_amount, pay_rate, note))
+            rid = cur.lastrowid
+        c.commit()
+        r = c.execute("SELECT * FROM ai_boss_keywords WHERE id=?", (rid,)).fetchone()
+        return dict(r) if r else {}
+
+
+def list_ai_boss_keywords(goods_id=None, days=None) -> list[dict]:
+    """查询成交词。days=N 只取最近 N 天。"""
+    with closing(_conn()) as c:
+        q = "SELECT * FROM ai_boss_keywords"
+        args = []
+        if goods_id:
+            q += " WHERE goods_id=?"
+            args.append(goods_id)
+        if days:
+            q += (" WHERE" if " WHERE" not in q else " AND") + " stat_date >= date('now','localtime','-%d day')" % days
+        q += " ORDER BY pay_order_cnt DESC, stat_date DESC"
+        return [dict(r) for r in c.execute(q, args).fetchall()]
+
+
+def add_ai_boss_action(goods_id="", goods_name="", action_type="", action_detail="", trigger_rule="",
+                       status="proposed", verify_status="pending", verify_detail="") -> dict:
+    """记录 AI 的一次决策动作（审计追溯用）。"""
+    with closing(_conn()) as c:
+        cur = c.execute(
+            "INSERT INTO ai_boss_actions(goods_id, goods_name, action_type, action_detail, trigger_rule, "
+            "status, verify_status, verify_detail) VALUES(?,?,?,?,?,?,?,?)",
+            (goods_id, goods_name, action_type, action_detail, trigger_rule, status, verify_status, verify_detail))
+        c.commit()
+        r = c.execute("SELECT * FROM ai_boss_actions WHERE id=?", (cur.lastrowid,)).fetchone()
+        return dict(r) if r else {}
+
+
+def list_ai_boss_actions(goods_id=None, limit=100) -> list[dict]:
+    """查询动作审计。"""
+    with closing(_conn()) as c:
+        if goods_id:
+            rows = c.execute("SELECT * FROM ai_boss_actions WHERE goods_id=? ORDER BY id DESC LIMIT ?",
+                             (goods_id, limit)).fetchall()
+        else:
+            rows = c.execute("SELECT * FROM ai_boss_actions ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def update_ai_boss_action(action_id, **fields) -> dict:
+    """更新动作审计（如验证结果、执行状态）。"""
+    allow = {"status", "verify_status", "verify_detail", "action_detail"}
+    sets = []
+    vals = []
+    for k, v in fields.items():
+        if k in allow:
+            sets.append(f"{k}=?")
+            vals.append(v)
+    if not sets:
+        return {}
+    with closing(_conn()) as c:
+        c.execute(f"UPDATE ai_boss_actions SET {', '.join(sets)} WHERE id=?", vals + [action_id])
+        c.commit()
+        r = c.execute("SELECT * FROM ai_boss_actions WHERE id=?", (action_id,)).fetchone()
+        return dict(r) if r else {}
+
+
+def last_title_update(goods_id) -> dict:
+    """查某商品最近一次已执行的标题修改动作（硬约束：每14天1次）。"""
+    with closing(_conn()) as c:
+        r = c.execute(
+            "SELECT * FROM ai_boss_actions WHERE goods_id=? AND action_type='title_update' "
+            "AND status IN ('executed','verified') ORDER BY id DESC LIMIT 1",
+            (goods_id,)).fetchone()
+        return dict(r) if r else {}
 
