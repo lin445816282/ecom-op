@@ -6701,10 +6701,16 @@ async function renderAiBoss() {
   const actionNameMap = { title_update: '改标题', offshelf: '下架', promote: '加推', price_switch: '换供应商' };
   const ruleActionRows = ruleActions.length ? ruleActions.map(a => {
     const detail = a.detail ? (typeof a.detail === 'string' ? a.detail : JSON.stringify(a.detail)).slice(0, 100) : '';
-    return `<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:10px;margin-bottom:8px">
-      <span style="font-weight:600;color:#c2410c;font-size:13px">规则${a.rule}·${ruleNameMap[a.rule] || ''}</span>
-      <span style="font-size:12px;color:#9a3412;margin-left:6px">→ ${actionNameMap[a.action_type] || a.action_type}</span>
-      <div style="color:#7c2d12;font-size:12px;margin-top:4px">${esc(a.goods_name || a.goods_id)}${detail ? ' · ' + esc(detail) : ''}</div>
+    const isOffshelf = a.action_type === 'offshelf';
+    const btnLabel = isOffshelf ? '✓ 确认已下架' : '▶ 执行';
+    const btnStyle = isOffshelf ? 'background:#fff;color:#c2410c;border:1px solid #fdba74' : 'background:#ea580c;color:#fff;border:none';
+    return `<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:10px;margin-bottom:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <div style="flex:1;min-width:180px">
+        <span style="font-weight:600;color:#c2410c;font-size:13px">规则${a.rule}·${ruleNameMap[a.rule] || ''}</span>
+        <span style="font-size:12px;color:#9a3412;margin-left:6px">→ ${actionNameMap[a.action_type] || a.action_type}</span>
+        <div style="color:#7c2d12;font-size:12px;margin-top:4px">${esc(a.goods_name || a.goods_id)}${detail ? ' · ' + esc(detail) : ''}</div>
+      </div>
+      <button onclick="aiBossExecute('${a.goods_id}','${a.action_type}')" style="padding:7px 16px;font-size:13px;font-weight:600;border-radius:8px;cursor:pointer;${btnStyle}">${btnLabel}</button>
     </div>`;
   }).join('') : '<div style="color:#94a3b8;font-size:13px">当前无触发动作（数据量不足或未达阈值，先导入经营数据）。</div>';
 
@@ -6909,6 +6915,28 @@ async function aiBossCollect() {
   try {
     await api('/api/aiboss/collect', 'POST', {});
     setTimeout(() => { toast('✅ 采集完成，刷新中…'); renderAiBoss(); }, 30000);
+  } catch (e) { toast('❌ ' + e.message); }
+}
+
+async function aiBossExecute(goods_id, action_type) {
+  const acts = (_bossData.dash && _bossData.dash.rules && _bossData.dash.rules.actions) || [];
+  const a = acts.find(x => x.goods_id === goods_id && x.action_type === action_type);
+  if (!a) { toast('未找到该动作'); return; }
+  const isOffshelf = action_type === 'offshelf';
+  let ok = true;
+  if (isOffshelf) {
+    ok = await confirmDialog('确认已在拼多多后台手动下架该商品？系统将记录为「人工下架确认」（无自动验证）。', { title: '确认下架', confirmText: '确认已下架' });
+  } else {
+    ok = await confirmDialog('执行改标题？系统用成交词生成优化标题（DeepSeek）并通过质量门校验后更新到拼多多后台。', { title: '执行规则动作', confirmText: '执行' });
+  }
+  if (!ok) return;
+  try {
+    await api('/api/aiboss/execute', 'POST', {
+      goods_id, action_type,
+      rule: a.rule, goods_name: a.goods_name, detail: a.detail,
+    });
+    toast('✅ 已启动执行，约 1 分钟后刷新查看结果');
+    setTimeout(() => renderAiBoss(), 60000);
   } catch (e) { toast('❌ ' + e.message); }
 }
 

@@ -5210,3 +5210,24 @@ def last_title_update(goods_id) -> dict:
             (goods_id,)).fetchone()
         return dict(r) if r else {}
 
+
+def find_published_goods_by_id(goods_id) -> dict:
+    """从 published_goods 反查商品（goods_id → shop_id + 标题 + 进价售价）。"""
+    gid = str(goods_id or "").strip()
+    if not gid:
+        return {}
+    with closing(_conn()) as c:
+        row = c.execute(
+            "SELECT * FROM published_goods WHERE goods_id=? ORDER BY id DESC LIMIT 1",
+            (gid,),
+        ).fetchone()
+    if not row:
+        return {}
+    r = dict(row)
+    try:
+        r["sku_details"] = json.loads(r.get("sku_details") or "[]")
+    except Exception:
+        r["sku_details"] = []
+    return r
+
+

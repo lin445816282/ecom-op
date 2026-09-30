@@ -121,11 +121,17 @@ def collect(port: str, stat_date: str = None):
     mapping = _crack_font_mapping(font_path)
     print("字体映射:", {hex(k): v for k, v in mapping.items()})
 
+    # 3.5 只保留 AI 老板自己上架的商品（published_goods 里的长 ID），排除店铺老商品（短 ID）
+    pub_ids = {str(g.get("goods_id")) for g in catalog.list_published_goods(limit=300) if g.get("goods_id")}
+
     # 4. 解密 + 入库
     cnt = 0
     for row in rows:
         gid = row.get("gid", "").strip()
         if not gid:
+            continue
+        if gid not in pub_ids:
+            print(f"  跳过(非AI老板上架): {gid}")
             continue
         title = row.get("title", "").strip()
         # 清理标题里的 CSS 样式残留

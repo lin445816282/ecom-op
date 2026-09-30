@@ -1614,6 +1614,17 @@ class Handler(BaseHTTPRequestHandler):
             threading.Thread(target=_collect_bg, daemon=True).start()
             return _json(self, {"ok": True, "message": "采集已启动（后台运行，约30秒完成）"})
 
+        if path == "/api/aiboss/execute" and self.command == "POST":
+            # 执行规则动作（复用已有 CDP 能力：改标题走 pdd_set_titles.js，下架需人工）
+            import threading
+            item = self._read_body()
+            gid = str(item.get("goods_id") or "").strip()
+            action_type = str(item.get("action_type") or "").strip()
+            if not gid or not action_type:
+                return _json(self, {"error": "缺 goods_id 或 action_type"}, 400)
+            threading.Thread(target=_execute_aiboss_action_bg, args=(gid, action_type, item), daemon=True).start()
+            return _json(self, {"ok": True, "started": True, "action_type": action_type})
+
         # 静态页面
         if path in ("/", "/index.html") and self.command == "GET":
             return self._serve_file("index.html", "text/html; charset=utf-8")
@@ -1829,6 +1840,124 @@ def _apply_batch(batch, port):
         for rec in batch:
             catalog.update_title_opt(rec["id"], note=f"执行异常:{e}")
             catalog.log_title_opt(rec["shop_id"], rec["platform_product_id"], rec["product_name"], rec["old_title"], rec["new_title"], "apply", "fail", f"执行异常:{e}")
+
+
+def _execute_aiboss_action_bg(gid, action_type, item):
+    """后台执行 AI 老板规则动作（复用已有 CDP 能力：改标题走 pdd_set_titles.js，下架需人工）。"""
+    import json as _json
+    # 1. 反查商品（shop_id + 当前标题）
+    pg = catalog.find_published_goods_by_id(gid)
+    shop_id = int(pg.get("shop_id") or 5)
+    old_title = str(pg.get("ai_title") or pg.get("raw_title") or "").strip()
+    goods_name = str(item.get("goods_name") or old_title or gid).strip()
+
+    # 2. 写审计（executing）
+    detail_raw = item.get("detail") or {}
+    if not isinstance(detail_raw, str):
+        detail_raw = _json.dumps(detail_raw, ensure_ascii=False)
+    aid = catalog.add_ai_boss_action(
+        goods_id=gid, goods_name=goods_name, action_type=action_type,
+        action_detail=detail_raw,
+        trigger_rule=str(item.get("rule") or ""), status="executing",
+    )
+    if not aid:
+        print(f"[aiboss] 写审计失败 {gid}")
+        return
+
+    # 3. 下架：本系统无自动下架 CDP，标记需人工 + 更新商品状态为 offshelf
+    if action_type == "offshelf":
+        catalog.save_published_good(goods_id=gid, status="offshelf")
+        catalog.update_ai_boss_action(aid, status="executed", verify_status="uncertain",
+                                      verify_detail="人工确认下架（系统无自动下架验证）")
+        print(f"[aiboss] 下架确认 {gid}")
+        return
+
+    # 4. 改标题（title_update / promote）：复用已有改标题链路
+    port = SHOP_CDP_PORT.get(shop_id)
+    if not port:
+        catalog.update_ai_boss_action(aid, status="failed", verify_detail=f"店铺 {shop_id} 未配置 CDP 端口")
+        return
+    _execute_aiboss_title(gid, old_title, goods_name, aid, port, item.get("detail") or {})
+
+
+def _execute_aiboss_title(gid, old_title, goods_name, aid, port, detail_raw):
+    """生成新标题（DeepSeek，复用 pdd_title_batch）+ 质量门 + 复用 pdd_set_titles.js 改标题。"""
+    import json as _json
+    import subprocess
+    import time
+    try:
+        import pdd_title_batch as ptb
+    except Exception as e:
+        catalog.update_ai_boss_action(aid, status="failed", verify_detail=f"import pdd_title_batch 失败:{e}")
+        return
+
+    # 提取成交词作为候选黄金词（规则A「前移词」/ 规则C「成交词」）
+    golden = []
+    if isinstance(detail_raw, dict):
+        for key in ("前移词", "成交词"):
+            arr = detail_raw.get(key) or []
+            if isinstance(arr, list):
+                for k in arr:
+                    if isinstance(k, dict):
+                        golden.append(str(k.get("keyword") or "").strip())
+                    else:
+                        golden.append(str(k).strip())
+    golden = [w for w in golden if w]
+
+    # 生成新标题
+    try:
+        api_key = ptb.load_api_key()
+        if not api_key:
+            catalog.update_ai_boss_action(aid, status="failed", verify_detail="无 DEEPSEEK_API_KEY")
+            return
+        products = [{"name": old_title or goods_name, "golden_words": golden}]
+        titles = ptb.gen_titles(products, api_key)
+        new_title = (titles[0] if titles else "").strip()
+    except Exception as e:
+        catalog.update_ai_boss_action(aid, status="failed", verify_detail=f"标题生成失败:{e}")
+        return
+
+    # 质量门
+    passed, reason = ptb.quality_gate(old_title, new_title)
+    if not passed:
+        catalog.update_ai_boss_action(aid, status="blocked", verify_detail=f"质量门拦截:{reason}")
+        return
+
+    # 复用 pdd_set_titles.js 改标题
+    ts = int(time.time())
+    base = f"aiboss_title_{ts}.json"
+    wsl_path = f"/mnt/c/tmp/{base}"
+    win_path = f"C:\\tmp\\{base}"
+    try:
+        with open(wsl_path, "w", encoding="utf-8") as f:
+            _json.dump([{"gid": gid, "title": new_title}], f, ensure_ascii=False)
+    except Exception as e:
+        catalog.update_ai_boss_action(aid, status="failed", verify_detail=f"清单写入失败:{e}")
+        return
+
+    try:
+        with _APPLY_LOCK:
+            r = subprocess.run([NODE_EXE, PDD_SET_TITLE_JS, str(port), win_path],
+                               capture_output=True, timeout=300)
+        out = r.stdout.decode("utf-8", errors="replace").strip()
+        results = []
+        for line in out.splitlines():
+            line = line.strip()
+            if line.startswith("["):
+                try:
+                    results = _json.loads(line)
+                except Exception:
+                    pass
+        res = next((x for x in results if str(x.get("gid")) == str(gid)), None)
+        if res and res.get("status") == "VERIFIED":
+            catalog.update_ai_boss_action(aid, status="executed", verify_status="verified_success",
+                                          verify_detail=f"已改标题 → {new_title}")
+        elif res:
+            catalog.update_ai_boss_action(aid, status="failed", verify_detail=f"改标题失败:{res.get('status')}")
+        else:
+            catalog.update_ai_boss_action(aid, status="failed", verify_detail="无结果")
+    except Exception as e:
+        catalog.update_ai_boss_action(aid, status="failed", verify_detail=f"执行异常:{e}")
 
 
 def _collect_competitors_bg(shop_id, platform_product_id, keyword):

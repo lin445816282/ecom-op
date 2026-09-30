@@ -169,9 +169,12 @@ def evaluate_rules():
             name_map.setdefault(d["goods_id"], d["goods_name"])
     # 上架时间：从 published_goods 里找
     pub_map = {}
-    for g in catalog.list_published_goods(300):
+    for g in catalog.list_published_goods(limit=300):
         if g.get("goods_id"):
             pub_map.setdefault(str(g["goods_id"]), g.get("published_at") or g.get("created_at"))
+
+    # 只分析 AI 老板自己上架的商品（goods_id 能匹配 published_goods），排除店铺老商品（短 ID）
+    gids = [g for g in gids if str(g) in pub_map]
 
     results = {"A": [], "B": [], "C": [], "actions": []}
     for gid in gids:
