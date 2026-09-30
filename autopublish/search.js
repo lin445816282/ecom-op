@@ -1,7 +1,7 @@
-// 1688 搜索货源脚本 — 连 9238 登录实例，搜关键词，滚动加载，提取商品 offerId+标题+价格
+// 1688 搜索货源脚本 v2 — CDP 输入搜索词（绕过 GBK 乱码），提取商品 offerId+标题+价格
 // 用法：node search.js <关键词> [CDP端口] [滚动次数]
-// 输出：stdout 最后一行打印 JSON {keyword, count, items:[{offerId,title,price,url}]}
-// offerId 藏在 data-aplus-report 的 object_id@ 里（1688 新版搜索卡片，A 标签无标准 href）
+// 输出：stdout 最后一行 JSON {keyword, count, items:[{offerId,title,price,url}]}
+// ⚠️ URL 参数 keywords 传中文会被 GBK 解码成乱码(鏀剁撼绠)，必须 CDP Input.insertText 输入
 const http = require('http');
 
 const KEYWORD = process.argv[2];
@@ -28,27 +28,42 @@ async function ev(c,expr){const r=await c.send('Runtime.evaluate',{expression:ex
   await c.send('Page.enable',{});
   await c.send('Runtime.enable',{});
 
-  const searchUrl='https://s.1688.com/selloffer/offer_search.htm?keywords='+encodeURIComponent(KEYWORD);
-  await c.send('Page.navigate',{url:searchUrl});
+  // 1. 导航到搜索页（不带 keywords，避免 GBK 乱码）
+  await c.send('Page.navigate',{url:'https://s.1688.com/selloffer/offer_search.htm'});
+  await sleep(4000);
 
-  // 等待商品卡片渲染（feedCard 是 1688 新版搜索卡片容器）
+  // 2. CDP 在搜索框输入关键词（精确定位 name=keywords，placeholder 是商品词残留不是"搜索"）
+  const focused=await ev(c,`(function(){var i=document.querySelector('input[name="keywords"]')||document.querySelector('input[name*="key"]');if(!i)return 'no';i.focus();return 'ok'})()`);
+  if(focused!=='ok'){console.log(JSON.stringify({error:'搜索框未找到',keyword:KEYWORD}));c.ws.close();process.exit(1);}
+  // 清空（Ctrl+A + Backspace）
+  await c.send('Input.dispatchKeyEvent',{type:'keyDown',key:'a',code:'KeyA',modifiers:2});
+  await c.send('Input.dispatchKeyEvent',{type:'keyUp',key:'a',code:'KeyA',modifiers:2});
+  await c.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Backspace',code:'Backspace'});
+  await c.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Backspace',code:'Backspace'});
+  await sleep(200);
+  await c.send('Input.insertText',{text:KEYWORD});
+  await sleep(500);
+  // 点击"搜索"按钮触发（Enter 键不触发 React 受控组件的 onSubmit）
+  await ev(c,`(()=>{var btn=[...document.querySelectorAll('button')].find(b=>(b.textContent||'').trim()==='搜索');if(btn){btn.click();return 'ok'}return 'no'})()`);
+
+  // 3. 等待搜索结果
   let loaded=false;
-  for(let i=0;i<25;i++){
+  for(let i=0;i<20;i++){
     await sleep(1000);
     const n=await ev(c,'document.querySelectorAll("a[class*=feedCard]").length');
     if(n>=3){loaded=true;break;}
   }
   if(!loaded){console.log(JSON.stringify({error:'搜索结果未加载',keyword:KEYWORD}));c.ws.close();process.exit(1);}
 
-  // 滚动触发懒加载
+  // 4. 滚动触发懒加载
   for(let i=0;i<SCROLLS;i++){
     await ev(c,'window.scrollTo(0, document.body.scrollHeight)');
     await sleep(1500);
   }
   await ev(c,'window.scrollTo(0, 0)');
-  await sleep(1000);
+  await sleep(800);
 
-  // 提取：offerId 从 data-aplus-report 的 object_id@，标题取卡片内标题元素/首行，价格正则
+  // 5. 提取：offerId 从 data-aplus-report，标题从 title 元素，价格正则
   const raw=await ev(c,`(function(){
     var cards=document.querySelectorAll('a[class*=feedCard]');
     var out=[];var seen={};
@@ -56,21 +71,13 @@ async function ev(c,expr){const r=await c.send('Runtime.evaluate',{expression:ex
       var report=card.getAttribute('data-aplus-report')||'';
       var m=report.match(/object_id@(\\d+)/);
       var oid=m?m[1]:'';
-      if(!oid){
-        // 备选：data-renderkey 最后一段
-        var rk=card.getAttribute('data-renderkey')||'';
-        var seg=rk.split('_');oid=seg[seg.length-1]||'';
-      }
+      if(!oid){var rk=card.getAttribute('data-renderkey')||'';var seg=rk.split('_');oid=seg[seg.length-1]||'';}
       if(!oid||!/^\\d{9,}$/.test(oid)||seen[oid])return;
       seen[oid]=1;
-      var txt=card.innerText||'';
-      var lines=txt.split('\\n').map(function(s){return s.trim()}).filter(Boolean);
-      // 标题 = 第一行（1688 卡片标题在首行）
-      var title=lines[0]||'';
-      // 价格 = ¥ 后第一个数字
-      var pm=txt.match(/¥\\s*([\\d.]+)/);
-      var price=pm?pm[1]:'';
-      out.push({offerId:oid,title:title.slice(0,60),price:price,url:'https://detail.1688.com/offer/'+oid+'.html'});
+      var t=card.querySelector('[class*="title"],h3,h2,[class*="Title"]');
+      var title=(t?t.innerText:(card.innerText||'').split('\\n')[0]||'').trim();
+      var pm=(card.innerText||'').match(/[¥￥]\\s*([\\d.]+)/);
+      out.push({offerId:oid,title:title.slice(0,60),price:pm?pm[1]:'',url:'https://detail.1688.com/offer/'+oid+'.html'});
     });
     return JSON.stringify(out.slice(0,30));
   })()`);

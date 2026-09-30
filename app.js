@@ -653,6 +653,20 @@ async function renderAutopublish() {
   const el = $('#view-autopublish');
   el.innerHTML = `
     <div style="padding:20px;max-width:1100px">
+      <div id="cdp-instances" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin-bottom:16px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+          <div style="font-weight:700;font-size:15px">🖥️ CDP 实例</div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <button class="btn" id="cdp-refresh-btn" style="padding:7px 14px;font-size:12px">刷新状态</button>
+            <button class="btn" id="cdp-restart-all-btn" style="padding:7px 14px;font-size:12px">全部重启</button>
+          </div>
+        </div>
+        <div style="color:#64748b;font-size:12px;margin-bottom:10px">CDP 是自动化上架/抓取的浏览器实例。上架报 <code>ECONNREFUSED</code> 或「抓取失败」多半是实例挂了，点「重启」恢复（登录态保存在独立 profile，重启不丢）。</div>
+        <div id="cdp-list" style="display:flex;gap:10px;flex-wrap:wrap">
+          <div class="empty" style="color:#94a3b8">加载中…</div>
+        </div>
+      </div>
+
       <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:18px;margin-bottom:16px">
         <div style="font-weight:700;font-size:15px;margin-bottom:4px">🚀 一键上架</div>
         <div style="color:#64748b;font-size:13px;margin-bottom:12px">粘贴 1688 商品链接，自动跑完「抓取 → AI 生成配置 → CDP 上架拼多多」全流程，实时看进度。</div>
@@ -724,6 +738,81 @@ async function renderAutopublish() {
     if (inp) inp.oninput = updatePricePreview;
   });
   updatePricePreview();
+
+  // ===== CDP 实例状态卡片 =====
+  const renderCdpList = (instances) => {
+    const box = $('#cdp-list');
+    if (!box) return;
+    if (!instances || !instances.length) {
+      box.innerHTML = '<div class="empty" style="color:#94a3b8">无实例</div>';
+      return;
+    }
+    box.innerHTML = instances.map(c => {
+      const dot = c.alive ? '🟢' : '🔴';
+      const stateColor = c.alive ? '#16a34a' : '#dc2626';
+      const stateText = c.alive ? '在线' : '离线';
+      return `<div style="border:1px solid ${c.alive ? '#e2e8f0' : '#fecaca'};border-radius:10px;padding:12px;min-width:180px;flex:1;background:${c.alive ? '#fff' : '#fef2f2'}">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+          <span style="font-weight:700;font-size:14px">${dot} ${c.label}</span>
+          <span style="font-size:12px;color:${stateColor};font-weight:600">${stateText}</span>
+        </div>
+        <div style="font-size:12px;color:#64748b;line-height:1.5">
+          <div>端口 <code>${c.port}</code>${c.pid ? ' · PID ' + c.pid : ''}</div>
+          <div>${c.role}</div>
+        </div>
+        <button class="btn ${c.alive ? '' : 'primary'}" data-cdp-restart="${c.port}" style="margin-top:8px;padding:5px 12px;font-size:12px;width:100%">${c.alive ? '重启' : '启动'}</button>
+      </div>`;
+    }).join('');
+    // 绑定重启按钮
+    box.querySelectorAll('[data-cdp-restart]').forEach(btn => {
+      btn.onclick = async () => {
+        const port = Number(btn.dataset.cdpRestart);
+        btn.disabled = true;
+        btn.textContent = '重启中…';
+        try {
+          const resp = await api('/api/cdp/restart', 'POST', { port });
+          if (resp && resp.ok) {
+            toast(`${resp.label} 已${resp.alive ? '重启成功' : '启动（端口未就绪，稍后刷新确认）'}`);
+          } else {
+            toast((resp && resp.message) || '重启失败');
+          }
+        } catch (e) {
+          toast('重启失败: ' + e.message);
+        }
+        await loadCdpStatus();
+      };
+    });
+  };
+  const loadCdpStatus = async () => {
+    try {
+      const resp = await api('/api/cdp/status');
+      renderCdpList(resp && resp.instances);
+    } catch (e) {
+      const box = $('#cdp-list');
+      if (box) box.innerHTML = `<div class="empty" style="color:#dc2626">加载失败: ${e.message}</div>`;
+    }
+  };
+  const btnRefresh = $('#cdp-refresh-btn');
+  if (btnRefresh) btnRefresh.onclick = loadCdpStatus;
+  const btnRestartAll = $('#cdp-restart-all-btn');
+  if (btnRestartAll) btnRestartAll.onclick = async () => {
+    btnRestartAll.disabled = true;
+    btnRestartAll.textContent = '重启中…';
+    try {
+      const resp = await api('/api/cdp/status');
+      const insts = (resp && resp.instances) || [];
+      for (const c of insts) {
+        await api('/api/cdp/restart', 'POST', { port: c.port });
+      }
+      toast(`已依次重启 ${insts.length} 个实例`);
+    } catch (e) {
+      toast('全部重启失败: ' + e.message);
+    }
+    btnRestartAll.disabled = false;
+    btnRestartAll.textContent = '全部重启';
+    await loadCdpStatus();
+  };
+  loadCdpStatus();
 
   $('#ap-start-btn').onclick = async () => {
     if ($('#ap-start-btn').disabled) return;  // 双保险：禁用时忽略点击，防重复提交

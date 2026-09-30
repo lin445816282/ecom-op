@@ -6,6 +6,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 import sys
+import time
 import threading
 from urllib.parse import urlparse, parse_qs, quote
 from datetime import datetime, timedelta
@@ -21,6 +22,15 @@ PROMOTION_HISTORY_PATH = os.path.expanduser("~/.hermes/pdd_promotion_history.jso
 # 店铺 → 拼多多 CDP 端口（Edge 独立 profile，详见 pdd-promotion-cdp skill）
 # 端口对齐 launch_4shops.ps1：9232=嘉裕, 9230=如若月下, 9234=闲时来, 9228=欧世艺
 SHOP_CDP_PORT = {5: 9232, 3: 9230, 1: 9234, 6: 9228}
+# CDP 实例清单：端口 → {label, profile, target, role}。用于页面「CDP 实例」状态卡片 + 手动重启。
+# profile 与 C:\\tmp\\ 下 Edge user-data-dir 一一对应（登录态存 profile，重启不丢登录态）。
+CDP_INSTANCES = [
+    {"port": 9238, "label": "1688 抓取", "profile": r"C:\tmp\edge-cdp-1688", "role": "1688 商品详情抓取", "target": "https://detail.1688.com"},
+    {"port": 9232, "label": "嘉裕工艺品", "profile": r"C:\tmp\edge-cdp-ry", "role": "拼多多店铺", "shop_id": 5, "target": "https://mms.pinduoduo.com"},
+    {"port": 9230, "label": "如若月下", "profile": r"C:\tmp\edge-cdp-ruoyue", "role": "拼多多店铺", "shop_id": 3, "target": "https://mms.pinduoduo.com"},
+    {"port": 9234, "label": "闲时来工艺", "profile": r"C:\tmp\edge-cdp-xianshi", "role": "拼多多店铺", "shop_id": 1, "target": "https://mms.pinduoduo.com"},
+    {"port": 9228, "label": "欧世艺", "profile": r"C:\tmp\edge-cdp-oshiyi", "role": "拼多多店铺", "shop_id": 6, "target": "https://mms.pinduoduo.com"},
+]
 NODE_EXE = "/mnt/d/Program Files/nodejs/node.exe"
 PDD_SET_TITLE_JS = r"C:\tmp\pdd_set_titles.js"
 # 一键上架：执行层脚本目录（WSL 路径 / Windows 路径，node.exe 只能吃 Windows 路径）
@@ -1392,6 +1402,21 @@ class Handler(BaseHTTPRequestHandler):
             return _json(self, {"ok": True, "verified": verified, "changed": changed,
                                 "statuses": statuses})
 
+        # CDP 实例管理：查状态 + 手动重启（页面「CDP 实例」卡片用）
+        if path == "/api/cdp/status" and self.command == "GET":
+            return _json(self, {"instances": _cdp_status_all()})
+
+        if path == "/api/cdp/restart" and self.command == "POST":
+            item = self._read_body()
+            try:
+                port = int(item.get("port") or 0)
+            except (TypeError, ValueError):
+                port = 0
+            if not port:
+                return _json(self, {"error": "缺少端口号"}, 400)
+            res = _cdp_restart(port)
+            return _json(self, res, 200 if res.get("ok") else 400)
+
         if path == "/api/autopublish" and self.command == "GET":
             limit = int(qs.get("limit", ["50"])[0] or 50)
             items = catalog.list_autopublish_tasks(limit)
@@ -1889,6 +1914,128 @@ def _shop_lock(shop_id: int):
     return _SHOP_LOCKS.setdefault(shop_id, threading.Lock())
 
 
+def _cdp_port_alive(port: int) -> bool:
+    """探测某 CDP 端口是否监听（Windows 侧 PowerShell，WSL 里 curl 连不上 Windows CDP）。"""
+    import subprocess
+    ps = (
+        'Get-NetTCPConnection -LocalPort %d -State Listen -ErrorAction SilentlyContinue '
+        '| Select-Object -First 1 -ExpandProperty OwningProcess'
+    ) % port
+    try:
+        r = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-Command", ps],
+            capture_output=True, text=True, timeout=15,
+        )
+        return bool(r.stdout.strip())
+    except Exception:
+        return False
+
+
+def _cdp_status_all() -> list:
+    """返回所有 CDP 实例的实时状态（alive / pid / 标签 / 端口）。"""
+    import subprocess
+    # 一次性查所有端口监听状态，避免逐个 powershell 调用太慢
+    ports = [c["port"] for c in CDP_INSTANCES]
+    ps = (
+        "Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue "
+        "| Where-Object { $_.LocalPort -in @(%s) } "
+        "| Select-Object LocalPort,OwningProcess | Format-Table -HideTableHeaders"
+    ) % ",".join(str(p) for p in ports)
+    alive_map = {}
+    try:
+        r = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-Command", ps],
+            capture_output=True, text=True, timeout=20,
+        )
+        for line in r.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            # 形如 "9232   12345"
+            parts = line.split()
+            if len(parts) >= 2 and parts[0].isdigit():
+                alive_map[int(parts[0])] = parts[1]
+    except Exception:
+        pass
+    out = []
+    for c in CDP_INSTANCES:
+        port = c["port"]
+        pid = alive_map.get(port)
+        out.append({
+            "port": port,
+            "label": c["label"],
+            "role": c["role"],
+            "target": c["target"],
+            "alive": bool(pid),
+            "pid": pid or None,
+        })
+    return out
+
+
+def _cdp_restart(port: int) -> dict:
+    """重启指定 CDP 端口：杀整棵进程树 → 用对应 profile 重新起 Edge。
+
+    返回 {ok, port, label, message, launched, alive}。
+    """
+    import subprocess
+    inst = next((c for c in CDP_INSTANCES if c["port"] == port), None)
+    if not inst:
+        return {"ok": False, "port": port, "message": "未知端口"}
+    label = inst["label"]
+    profile = inst["profile"]
+    target = inst["target"]
+
+    # 1. 杀监听该端口的进程树（taskkill /T /F /PID）
+    kill_ps = (
+        "$c = Get-NetTCPConnection -LocalPort %d -State Listen -ErrorAction SilentlyContinue "
+        "| Select-Object -First 1 -ExpandProperty OwningProcess; "
+        "if ($c) { taskkill /F /T /PID $c | Out-Null; Start-Sleep -Seconds 2; 'KILLED ' + $c } "
+        "else { 'NO_PROC' }"
+    ) % port
+    try:
+        r = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-Command", kill_ps],
+            capture_output=True, text=True, timeout=30,
+        )
+        kill_msg = (r.stdout or "").strip()
+    except Exception as e:
+        kill_msg = f"杀进程异常:{e}"
+
+    # 2. 重新启动 Edge（独立 user-data-dir，保留登录态）
+    launch_ps = (
+        "$Edge = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'; "
+        "if (-not (Test-Path $Edge)) { $Edge = 'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe' }; "
+        "Start-Process $Edge -ArgumentList "
+        "'--remote-debugging-port=%d','--remote-debugging-address=0.0.0.0','--remote-allow-origins=*',"
+        "'--no-first-run','--no-default-browser-check','--user-data-dir=%s','%s' -WindowStyle Minimized"
+    ) % (port, profile, target)
+    try:
+        subprocess.run(
+            ["powershell.exe", "-NoProfile", "-Command", launch_ps],
+            capture_output=True, text=True, timeout=30,
+        )
+    except Exception:
+        pass
+
+    # 3. 等端口监听（最多 12 秒）
+    alive = False
+    for _ in range(12):
+        import time as _t
+        _t.sleep(1)
+        if _cdp_port_alive(port):
+            alive = True
+            break
+
+    return {
+        "ok": True,
+        "port": port,
+        "label": label,
+        "message": kill_msg,
+        "launched": True,
+        "alive": alive,
+    }
+
+
 def _read_publish_progress(task_id: int) -> dict:
     """读取 publish.js 实时写进 config.publish.log 的细粒度进度。
 
@@ -1925,6 +2072,7 @@ def _autopublish_bg(task_id: int, pricing: dict = None):
     每环节回写任务状态+日志；环节失败即终止（failed），不跳过、不假装成功。
     数据流：scrape.js 写 product.json + 图片到任务目录 → Python 读 product.json
     → AI 生成 config.json（定价用 pricing 固定公式）→ publish.js 读 config.json 上架。
+    单个链接整体超时 5 分钟（300s），超时即真实记录 timeout 失败并结束。
     """
     import subprocess
     task = catalog.get_autopublish_task(task_id)
@@ -1933,12 +2081,14 @@ def _autopublish_bg(task_id: int, pricing: dict = None):
     url = task["source_url"]
     shop_id = task["shop_id"]
 
-    # 任务专属目录（Windows 路径给 node.exe，WSL 路径给 Python 读）
-    outdir_win = f"C:\\tmp\\pdd-publish\\task_{task_id}"
-    outdir_wsl = f"/mnt/c/tmp/pdd-publish/task_{task_id}"
-    os.makedirs(outdir_wsl, exist_ok=True)
-    config_win = outdir_win + "\\config.json"
-    config_wsl = os.path.join(outdir_wsl, "config.json")
+    # 单链接整体超时（5 分钟）。超时后任何环节都要立即终止并真实记录。
+    OVERALL_TIMEOUT = int(os.environ.get("AUTOPUBLISH_TIMEOUT", "300"))
+    _t0 = time.time()
+
+    def _overtime(stage):
+        """检查是否已超时，返回超时秒数（未超时返回 0）。"""
+        used = time.time() - _t0
+        return used if used > OVERALL_TIMEOUT else 0
 
     def _fail(stage, msg):
         catalog.append_autopublish_log(task_id, stage, "failed", msg)
@@ -1949,11 +2099,26 @@ def _autopublish_bg(task_id: int, pricing: dict = None):
         except Exception:
             pass
 
+    def _fail_timeout(stage):
+        """超时统一记录：真实记录已耗时 + 卡在哪个环节，不虚假标 submitted。"""
+        used = int(time.time() - _t0)
+        msg = f"上架超时（>{OVERALL_TIMEOUT}s，已耗 {used}s，卡在 {stage} 环节）"
+        return _fail(stage, msg)
+
+    # 任务专属目录（Windows 路径给 node.exe，WSL 路径给 Python 读）
+    outdir_win = f"C:\\tmp\\pdd-publish\\task_{task_id}"
+    outdir_wsl = f"/mnt/c/tmp/pdd-publish/task_{task_id}"
+    os.makedirs(outdir_wsl, exist_ok=True)
+    config_win = outdir_win + "\\config.json"
+    config_wsl = os.path.join(outdir_wsl, "config.json")
+
     # ---- 环节1：1688 抓取（scrape.js 写 product.json + 图） ----
     catalog.append_autopublish_log(task_id, "scrape", "running", "开始抓取 1688 商品详情…")
     catalog.update_autopublish_task(task_id, status="crawling", stage="scrape")
     with _SCRAPE_LOCK:
         res = _run_node_script("scrape.js", [url, outdir_win, str(CLIENT_1688_PORT)], timeout=120)
+    if _overtime("scrape"):
+        return _fail_timeout("scrape")
     if not res.get("data"):
         return _fail("scrape", res.get("error") or res.get("stderr") or "抓取失败（无数据）")
     d = res["data"]
@@ -1988,9 +2153,13 @@ def _autopublish_bg(task_id: int, pricing: dict = None):
     )
 
     # ---- 环节2：AI 生成 config.json ----
+    if _overtime("ai"):
+        return _fail_timeout("ai")
     catalog.append_autopublish_log(task_id, "ai", "running", "DeepSeek 分析规格/定价/类目，生成上架配置…")
     catalog.update_autopublish_task(task_id, status="ai", stage="ai")
     ai = data.ai_generate_publish_config(product, pricing)
+    if _overtime("ai"):
+        return _fail_timeout("ai")
     if ai.get("error"):
         return _fail("ai", ai["error"])
     cfg = ai.get("config") or {}
@@ -2011,13 +2180,17 @@ def _autopublish_bg(task_id: int, pricing: dict = None):
     )
 
     # ---- 环节3：拼多多 CDP 真实上架 ----
+    if _overtime("publish"):
+        return _fail_timeout("publish")
     catalog.append_autopublish_log(task_id, "publish", "running", "CDP 真实上架到拼多多…")
     catalog.update_autopublish_task(task_id, status="publishing", stage="publish")
     port = SHOP_CDP_PORT.get(shop_id)
     if not port:
         return _fail("publish", f"店铺 {shop_id} 未配置 CDP 端口")
     with _shop_lock(shop_id):
-        res = _run_node_script("publish.js", [config_win, str(port)], timeout=300)
+        res = _run_node_script("publish.js", [config_win, str(port)], timeout=180)
+    if _overtime("publish"):
+        return _fail_timeout("publish")
     if not res.get("data") and not res.get("ok"):
         return _fail("publish", res.get("error") or res.get("stderr") or "上架失败")
     # publish.js 输出是进度日志（非 JSON），判断成功靠 stdout 里的 RESULT_SUCCESS 明确标记
@@ -2063,6 +2236,16 @@ def _autopublish_bg(task_id: int, pricing: dict = None):
                 "published_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "remark": "已提交待审核"})
         except Exception as e:
             catalog.append_autopublish_log(task_id, "publish", "done", f"⚠️ 写入上架列表失败:{e}")
+    elif "RESULT_FAILED" in out:
+        # 提交被拼多多拦截（类目资质/必填项/判重等），如实记录具体原因
+        m = __import__("re").search(r"RESULT_FAILED (.+)", out)
+        reason = (m.group(1) if m else "提交被拦截").strip()
+        try:
+            catalog.save_published_good(**{**_base, "goods_id": "", "status": "failed",
+                "published_at": "", "remark": f"提交被拦截：{reason}"})
+        except Exception:
+            pass
+        return _fail("publish", f"提交被拦截：{reason}")
     else:
         # 上架脚本跑完了但没成功标记，如实记 failed
         # 取 stdout 最后几行（去空行）作为失败线索，自动带进错误知识库 description

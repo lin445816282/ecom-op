@@ -316,18 +316,26 @@ async function fillByType(c, selector, text){
   const submit=await ev(c,`(()=>{const btn=[...document.querySelectorAll('button')].find(b=>(b.textContent||'').trim().includes('提交并上架'));if(btn){btn.scrollIntoView({block:'center'});btn.click();return 'ok';}return 'no submit btn'})()`);
   log('  提交按钮:', submit);
   if(submit==='ok'){
-    let finalUrl=''; let successFlag=false;
+    let finalUrl=''; let successFlag=false; let failReason='';
     for(let i=0;i<120;i++){
       await sleep(1000);
       finalUrl=await ev(c,'location.href');
-      if(/\/success|goods_add\/success|goods\/list/.test(finalUrl)){ successFlag=true; break; }
-      // 拼多多提交后跳 success 页可能 >40s，额外检测页面「提交成功」文案兜底
+      // 成功：URL 跳离 goods_add/index（success 页或商品列表页）
+      if(/goods_add\/success/.test(finalUrl) || /\/goods\/list/.test(finalUrl)){ successFlag=true; break; }
+      // 失败：检测到明确的校验/资质错误文案（假一赔十/必填项等），如实记录原因。
+      // ⚠️ URL 停留原地不一定是失败（跳转可能 >40s，task_75 实测 URL 停留原地但最终在售），
+      //    只有检测到「必须支持/不能为空/请填写」等明确错误才算失败。
       const t=await ev(c,'document.body.innerText');
-      if(t && /提交成功|发布成功/.test(t)){ successFlag=true; break; }
+      if(t && /必须支持|假一赔十|不能为空|请填写|请选择|请上传|必填|不通过|违规/.test(t)){
+        const m=t.match(/(必须支持[^\n]*|请[^\n]{0,30}|[^\n]*(?:不能为空|必填)[^\n]*)/);
+        failReason=(m?m[0]:'').slice(0,80);
+        break;
+      }
     }
     log('  提交结果 URL:', finalUrl);
-    if(successFlag){ const m=finalUrl.match(/goods_id=(\d+)/); log('✅ 已提交待审核，商品ID:', m?m[1]:'未知'); log('RESULT_SUBMITTED goods_id='+(m?m[1]:'')); }
-    else log('⚠️ 提交后 120 秒未确认成功，请人工检查页面');
+    if(successFlag){ const m=finalUrl.match(/goods_id=(\\d+)/); log('✅ 已提交待审核，商品ID:', m?m[1]:'未知'); log('RESULT_SUBMITTED goods_id='+(m?m[1]:'')); }
+    else if(failReason){ log('❌ 提交被拦截：' + failReason); log('RESULT_FAILED ' + failReason); }
+    else { log('⚠️ 提交后 120 秒未跳转成功页且无明确错误，按已提交处理（待 verify 回查确认）'); log('RESULT_SUBMITTED goods_id='+((finalUrl.match(/goods_id=(\\d+)/)||[])[1]||'')); }
   } else {
     log('⚠️ 未找到提交按钮，请人工检查页面');
   }
