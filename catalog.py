@@ -614,6 +614,13 @@ CREATE TABLE IF NOT EXISTS ai_boss_log (
     created_at TEXT DEFAULT (datetime('now','localtime'))
 );
 CREATE INDEX IF NOT EXISTS idx_ai_boss_log_date ON ai_boss_log(work_date);
+
+CREATE TABLE IF NOT EXISTS ai_boss_research (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    work_date TEXT DEFAULT '',
+    content TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+);
 """
 
 
@@ -5227,6 +5234,24 @@ def last_title_update(goods_id) -> dict:
             "AND status IN ('executed','verified') ORDER BY id DESC LIMIT 1",
             (goods_id,)).fetchone()
         return dict(r) if r else {}
+
+
+def add_ai_boss_research(content, work_date="") -> dict:
+    """保存一份 AI 老板选品研究报告。"""
+    with closing(_conn()) as c:
+        cur = c.execute(
+            "INSERT INTO ai_boss_research(work_date, content) VALUES(?,?)",
+            (work_date, content))
+        c.commit()
+        r = c.execute("SELECT * FROM ai_boss_research WHERE id=?", (cur.lastrowid,)).fetchone()
+        return dict(r) if r else {}
+
+
+def list_ai_boss_research(limit=20) -> list[dict]:
+    """查询选品研究报告（倒序）。"""
+    with closing(_conn()) as c:
+        rows = c.execute("SELECT * FROM ai_boss_research ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        return [dict(r) for r in rows]
 
 
 def find_published_goods_by_id(goods_id) -> dict:

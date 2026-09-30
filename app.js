@@ -6643,15 +6643,52 @@ function titleOptOpenLink(platformProductId) {
 // ===================== AI老板经营台账（独立记账，从 0 起算，不虚报） =====================
 let _bossData = { items: [], orders: [] };
 
+// 轻量 markdown → HTML（标题/表格/列表/加粗/引用/分隔线）
+function mdHtml(md) {
+  if (!md) return '';
+  const esc2 = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const lines = String(md).split('\n');
+  let html = '', inTable = false, inList = false;
+  const inline = (s) => esc2(s).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/`([^`]+)`/g, '<code>$1</code>');
+  for (let i = 0; i < lines.length; i++) {
+    const t = lines[i].trim();
+    if (/^\|.*\|$/.test(t)) {
+      if (!inTable) { html += '<table style="border-collapse:collapse;width:100%;margin:6px 0">'; inTable = true; }
+      const cells = t.slice(1, -1).split('|').map(c => c.trim());
+      if (cells.every(c => /^:?-{2,}:?$/.test(c))) continue;
+      html += '<tr>' + cells.map(c => `<td style="border:1px solid #e2e8f0;padding:5px 8px;font-size:12px;vertical-align:top">${inline(c)}</td>`).join('') + '</tr>';
+      continue;
+    } else if (inTable) { html += '</table>'; inTable = false; }
+    if (/^####\s/.test(t)) { html += `<div style="font-weight:700;font-size:13px;margin:8px 0 4px">${inline(t.slice(5))}</div>`; continue; }
+    if (/^###\s/.test(t)) { html += `<div style="font-weight:700;font-size:14px;margin:10px 0 4px;color:#17203a">${inline(t.slice(4))}</div>`; continue; }
+    if (/^##\s/.test(t)) { html += `<div style="font-weight:700;font-size:15px;margin:14px 0 6px;color:#17203a;border-bottom:1px solid #e2e8f0;padding-bottom:4px">${inline(t.slice(3))}</div>`; continue; }
+    if (/^#\s/.test(t)) { html += `<div style="font-weight:700;font-size:16px;margin:14px 0 8px;color:#17203a">${inline(t.slice(2))}</div>`; continue; }
+    if (/^-{3,}$/.test(t)) { html += '<hr style="border:none;border-top:1px solid #e2e8f0;margin:10px 0">'; continue; }
+    if (/^>/.test(t)) { html += `<div style="border-left:3px solid #cbd5e1;padding-left:8px;color:#64748b;margin:6px 0">${inline(t.replace(/^>\s?/, ''))}</div>`; continue; }
+    if (/^[-*]\s/.test(t)) {
+      if (!inList) { html += '<ul style="margin:4px 0;padding-left:18px">'; inList = true; }
+      html += `<li style="margin:2px 0">${inline(t.slice(2))}</li>`;
+      continue;
+    } else if (inList) { html += '</ul>'; inList = false; }
+    if (!t) { html += '<div style="height:6px"></div>'; continue; }
+    html += `<div style="margin:3px 0">${inline(t)}</div>`;
+  }
+  if (inTable) html += '</table>';
+  if (inList) html += '</ul>';
+  return html;
+}
+
 async function renderAiBoss() {
   const el = $('#view-aiboss');
   if (!el) return;
   let data = { items: [], orders: [], summary: {} };
   let dash = { daily: [], keywords: [], actions: [], rules: { actions: [], rules: {}, constraints: {} } };
   let bossLog = [];
+  let research = [];
   try { data = await api('/api/aiboss'); } catch (e) { data = { items: [], orders: [], summary: {} }; }
   try { dash = await api('/api/aiboss/dashboard'); } catch (e) {}
   try { bossLog = (await api('/api/aiboss/log')).items || []; } catch (e) { bossLog = []; }
+  try { research = (await api('/api/aiboss/research')).items || []; } catch (e) { research = []; }
   const s = data.summary || {};
   const items = data.items || [];
   const orders = data.orders || [];
@@ -6761,6 +6798,19 @@ async function renderAiBoss() {
           <div style="font-size:26px;font-weight:700;margin-top:4px;color:#17203a">${s.item_count}</div>
           <div style="font-size:12px;color:#94a3b8;margin-top:2px">累计出单 ${s.order_count} 笔</div>
         </div>
+      </div>
+
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin-bottom:16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;flex-wrap:wrap;gap:8px">
+          <div style="font-weight:700;font-size:15px">🔍 AI 选品研究（该卖什么）</div>
+          <button class="btn primary" style="padding:7px 16px;font-size:13px" onclick="aiBossResearch()">生成选品研究</button>
+        </div>
+        <div style="color:#94a3b8;font-size:12px;margin-bottom:12px">AI 老板研究应季/趋势，输出「该卖什么 + 关键词 + 注意事项 + 建议」，人拍板执行。</div>
+        ${research.length ? `
+        <details open style="margin-top:4px">
+          <summary style="cursor:pointer;color:#2563eb;font-size:13px">📄 最新报告（${esc((research[0].created_at||'').slice(0,10))}）</summary>
+          <div style="margin-top:10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px;font-size:13px;line-height:1.7;color:#334155;max-height:640px;overflow:auto">${mdHtml(research[0].content)}</div>
+        </details>` : '<div style="color:#94a3b8;font-size:13px">暂无研究报告，点右上角「生成选品研究」。</div>'}
       </div>
 
       <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin-bottom:16px">
@@ -6922,6 +6972,14 @@ async function aiBossImportKeywords() {
     const r = await api('/api/aiboss/keywords', 'POST', { rows });
     toast('✅ 已导入 ' + r.imported + ' 条成交词');
     renderAiBoss();
+  } catch (e) { toast('❌ ' + e.message); }
+}
+
+async function aiBossResearch() {
+  toast('🔍 AI 老板开始选品研究（约30-60秒）');
+  try {
+    await api('/api/aiboss/research', 'POST', {});
+    setTimeout(() => { toast('✅ 选品研究完成，刷新中…'); renderAiBoss(); }, 60000);
   } catch (e) { toast('❌ ' + e.message); }
 }
 

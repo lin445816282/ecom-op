@@ -1652,6 +1652,35 @@ class Handler(BaseHTTPRequestHandler):
             threading.Thread(target=_daily_bg, daemon=True).start()
             return _json(self, {"ok": True, "message": "AI 老板工作流已启动（后台运行，约1-2分钟）"})
 
+        if path == "/api/aiboss/research" and self.command == "POST":
+            # AI 老板选品研究：调 DeepSeek 生成「该卖什么 + 关键词 + 注意事项 + 建议」，后台线程写库
+            import threading
+
+            def _research_bg():
+                try:
+                    import aiboss_research
+                    content = aiboss_research.research()
+                    if isinstance(content, dict) and content.get("error"):
+                        catalog.add_ai_boss_log(
+                            work_date=datetime.now().strftime("%Y-%m-%d"), trigger_type="research",
+                            summary=f"选品研究失败：{content['error']}", status="failed")
+                        print(f"[aiboss] 选品研究失败: {content['error']}")
+                        return
+                    work_date = datetime.now().strftime("%Y-%m-%d")
+                    catalog.add_ai_boss_research(content, work_date)
+                    catalog.add_ai_boss_log(
+                        work_date=work_date, trigger_type="research",
+                        summary="选品研究完成（该卖什么 + 关键词 + 注意事项 + 建议）", status="success")
+                    print(f"[aiboss] 选品研究完成，{len(content)} 字")
+                except Exception as e:
+                    print(f"[aiboss] 选品研究失败: {e}")
+
+            threading.Thread(target=_research_bg, daemon=True).start()
+            return _json(self, {"ok": True, "message": "选品研究已启动（后台运行，约30-60秒）"})
+
+        if path == "/api/aiboss/research" and self.command == "GET":
+            return _json(self, {"items": catalog.list_ai_boss_research(limit=10)})
+
         # 静态页面
         if path in ("/", "/index.html") and self.command == "GET":
             return self._serve_file("index.html", "text/html; charset=utf-8")
