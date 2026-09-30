@@ -2383,8 +2383,8 @@ def ai_generate_publish_config(product: dict, pricing: dict = None) -> dict:
         f"商品页面文本（含规格/价格/属性）：\n{body_text}\n\n"
         "请输出一个 JSON 对象，字段如下：\n"
         "{\n"
-        '  "categoryKeyword": "类目搜索关键词（2-4字，如 婚庆/宠物/家居/厨房）",\n'
-        '  "categoryPath": "完整类目路径（如 节庆用品/礼品 > 婚庆用品 > 拉花）",\n'
+        '  "categoryKeyword": "类目搜索关键词（2-4字，取 categoryPath 第二级最具体品类词，如 手套/婚庆/仿真花/气球）",\n'
+        '  "categoryPath": "完整类目路径，严格用 > 分隔三级（一级>二级>三级），每级是拼多多真实类目名，禁止一级用 / 混多个词。例：服饰配件/饰品 > 手套 > 分指手套",\n'
         '  "title": "优化后标题，≤30个汉字、≤60字符，保留核心卖点+场景词，不要夸张违规词",\n'
         '  "specs": [{"type":"规格类型名(颜色/款式/尺寸/型号)","values":["值1","值2"]}],\n'
         '  "priceBySpec2": {"规格2的值":{"cost":进价(元)}},\n'

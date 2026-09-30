@@ -109,28 +109,35 @@ async function fillByType(c, selector, text){
     log('[1/8] 选类目: ' + cfg.categoryPath);
     await c.send('Page.navigate',{url:'https://mms.pinduoduo.com/goods/category'});
     await sleep(6000);
-    // 搜索关键词优化：优先用 categoryPath 第二级（具体品类词如"仿真花"），大类词（家居/婚庆）太宽泛搜不准
+    // 搜索关键词优化：优先用 categoryPath 第二级（具体品类词），大类词太宽泛搜不准
     const _parts = (cfg.categoryPath||'').split(' > ');
     let searchKw = cfg.categoryKeyword;
     if(_parts.length >= 2 && _parts[1] && _parts[1].length >= 2){ searchKw = _parts[1]; }
-    await fillByType(c, 'input[placeholder="请输入关键词搜索分类"]', searchKw);
-    await sleep(2500);
-    // 模糊匹配类目：精确 → 中间级词命中最后级 → 中间级词包含 → 最后级词包含 → AI关键词包含
-    const sel=await ev(c,`(()=>{
-      const want=${JSON.stringify(cfg.categoryPath)};
-      const parts = want.split(' > ');
-      const lastWord = parts[parts.length-1] || '';
-      const midWord = parts.length>=2 ? parts[1] : lastWord;
-      const cands = [...document.querySelectorAll('.choose-category,[class*="searchItem"]')];
-      const norm = e => (e.textContent||'').trim();
-      let el = cands.find(e=>norm(e)===want);
-      if(!el && midWord) el = cands.find(e=>{const lp=norm(e).split(' > ').pop(); return lp===midWord || lp.includes(midWord);});
-      if(!el && midWord) el = cands.find(e=>norm(e).includes(midWord));
-      if(!el && lastWord) el = cands.find(e=>norm(e).includes(lastWord));
-      if(!el) el = cands.find(e=>norm(e).includes(${JSON.stringify(cfg.categoryKeyword)}));
-      if(el){ el.scrollIntoView({block:'center'}); el.click(); return 'ok'; }
-      return 'no category';
-    })()`);
+    // 搜索 + 模糊匹配 + 重试（最多 3 次，搜索词逐次放宽：第二级 → keyword → 最后级）
+    // 批量上传时结果加载慢，单次搜索 cands 可能未渲染完，故失败自动换词重试
+    const _kwCands = [searchKw, cfg.categoryKeyword, _parts[_parts.length-1]].filter((v,i,a)=>v && v.length>=1 && a.indexOf(v)===i);
+    let sel = 'no category';
+    for(let _attempt=0; _attempt<_kwCands.length && sel!=='ok'; _attempt++){
+      const _kw = _kwCands[_attempt];
+      await fillByType(c, 'input[placeholder="请输入关键词搜索分类"]', _kw);
+      await sleep(4000);
+      sel = await ev(c,`(()=>{
+        const want=${JSON.stringify(cfg.categoryPath)};
+        const parts = want.split(' > ');
+        const lastWord = parts[parts.length-1] || '';
+        const midWord = parts.length>=2 ? parts[1] : lastWord;
+        const cands = [...document.querySelectorAll('.choose-category,[class*="searchItem"]')];
+        const norm = e => (e.textContent||'').trim();
+        let el = cands.find(e=>norm(e)===want);
+        if(!el && midWord) el = cands.find(e=>{const lp=norm(e).split(' > ').pop(); return lp===midWord || lp.includes(midWord);});
+        if(!el && midWord) el = cands.find(e=>norm(e).includes(midWord));
+        if(!el && lastWord) el = cands.find(e=>norm(e).includes(lastWord));
+        if(!el) el = cands.find(e=>norm(e).includes(${JSON.stringify(cfg.categoryKeyword)}));
+        if(el){ el.scrollIntoView({block:'center'}); el.click(); return 'ok'; }
+        return 'no category';
+      })()`);
+      if(sel!=='ok') log('  类目匹配失败(搜索词='+_kw+')，换词重试…');
+    }
     log('  类目选择:', sel);
     if(sel!=='ok'){ log('❌ 类目未匹配，终止（类目路径与拼多多实际不一致，需人工确认）'); c.ws.close(); process.exit(1); }
     await sleep(2000);
