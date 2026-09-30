@@ -599,6 +599,21 @@ CREATE TABLE IF NOT EXISTS ai_boss_actions (
     created_at TEXT DEFAULT (datetime('now','localtime'))
 );
 CREATE INDEX IF NOT EXISTS idx_ai_boss_actions_goods ON ai_boss_actions(goods_id);
+
+CREATE TABLE IF NOT EXISTS ai_boss_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    work_date TEXT DEFAULT '',
+    trigger_type TEXT DEFAULT 'cron',
+    collect_count INTEGER DEFAULT 0,
+    goods_analyzed INTEGER DEFAULT 0,
+    actions_triggered INTEGER DEFAULT 0,
+    actions_executed INTEGER DEFAULT 0,
+    actions_detail TEXT DEFAULT '[]',
+    summary TEXT DEFAULT '',
+    status TEXT DEFAULT 'success',
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_ai_boss_log_date ON ai_boss_log(work_date);
 """
 
 
@@ -5229,5 +5244,38 @@ def find_published_goods_by_id(goods_id) -> dict:
     except Exception:
         r["sku_details"] = []
     return r
+
+
+def add_ai_boss_log(**fields) -> int:
+    """写一条 AI 老板工作日志（一次定时唤醒的完整过程）。"""
+    allowed = {"work_date", "trigger_type", "collect_count", "goods_analyzed",
+               "actions_triggered", "actions_executed", "actions_detail", "summary", "status"}
+    data = {k: v for k, v in fields.items() if k in allowed}
+    if not data:
+        return 0
+    if "actions_detail" in data and not isinstance(data["actions_detail"], str):
+        data["actions_detail"] = json.dumps(data["actions_detail"], ensure_ascii=False)
+    cols = ", ".join(data.keys())
+    phs = ", ".join("?" for _ in data)
+    with closing(_conn()) as c:
+        cur = c.execute(f"INSERT INTO ai_boss_log({cols}) VALUES({phs})", list(data.values()))
+        c.commit()
+        return cur.lastrowid
+
+
+def list_ai_boss_log(limit: int = 50) -> list[dict]:
+    """列出 AI 老板工作日志（倒序）。"""
+    with closing(_conn()) as c:
+        rows = c.execute("SELECT * FROM ai_boss_log ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        try:
+            d["actions_detail"] = json.loads(d.get("actions_detail") or "[]")
+        except Exception:
+            d["actions_detail"] = []
+        out.append(d)
+    return out
+
 
 

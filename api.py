@@ -1625,6 +1625,33 @@ class Handler(BaseHTTPRequestHandler):
             threading.Thread(target=_execute_aiboss_action_bg, args=(gid, action_type, item), daemon=True).start()
             return _json(self, {"ok": True, "started": True, "action_type": action_type})
 
+        if path == "/api/aiboss/log" and self.command == "GET":
+            limit = int(qs.get("limit", [50])[0] or 50)
+            return _json(self, {"items": catalog.list_ai_boss_log(limit)})
+
+        if path == "/api/aiboss/run-daily" and self.command == "POST":
+            # 手动触发一次 AI 老板工作流（采集→评估→执行→写日志，后台线程）
+            import threading
+            item = self._read_body()
+            args = []
+            if item.get("no_collect"):
+                args.append("--no-collect")
+            if item.get("no_execute"):
+                args.append("--no-execute")
+            if item.get("dry_run"):
+                args.append("--dry-run")
+
+            def _daily_bg():
+                try:
+                    import ai_boss_daily
+                    r = ai_boss_daily.main()
+                    print(f"[aiboss] 每日工作流完成: {r.get('summary', '')}")
+                except Exception as e:
+                    print(f"[aiboss] 每日工作流失败: {e}")
+
+            threading.Thread(target=_daily_bg, daemon=True).start()
+            return _json(self, {"ok": True, "message": "AI 老板工作流已启动（后台运行，约1-2分钟）"})
+
         # 静态页面
         if path in ("/", "/index.html") and self.command == "GET":
             return self._serve_file("index.html", "text/html; charset=utf-8")

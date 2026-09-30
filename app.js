@@ -6648,8 +6648,10 @@ async function renderAiBoss() {
   if (!el) return;
   let data = { items: [], orders: [], summary: {} };
   let dash = { daily: [], keywords: [], actions: [], rules: { actions: [], rules: {}, constraints: {} } };
+  let bossLog = [];
   try { data = await api('/api/aiboss'); } catch (e) { data = { items: [], orders: [], summary: {} }; }
   try { dash = await api('/api/aiboss/dashboard'); } catch (e) {}
+  try { bossLog = (await api('/api/aiboss/log')).items || []; } catch (e) { bossLog = []; }
   const s = data.summary || {};
   const items = data.items || [];
   const orders = data.orders || [];
@@ -6730,6 +6732,12 @@ async function renderAiBoss() {
       <span style="white-space:nowrap">${stMap[a.status] || a.status} / ${vsMap[a.verify_status] || a.verify_status}</span>
     </div>`).join('') : '<div style="color:#94a3b8;font-size:13px">暂无动作记录。</div>';
 
+  const logStMap = { success: '✅ 正常', partial: '⚠️ 部分异常', fail: '❌ 失败' };
+  const bossLogHtml = bossLog.length ? bossLog.slice(0, 15).map(l => `<div style="padding:8px 0;border-bottom:1px solid #f1f5f9;font-size:12px;color:#475569;display:flex;justify-content:space-between;gap:8px;align-items:flex-start">
+      <span style="flex:1"><b style="color:#17203a">${esc(l.summary || '—')}</b></span>
+      <span style="white-space:nowrap;color:#94a3b8">${esc((l.created_at || '').slice(0, 16))} · ${logStMap[l.status] || l.status}</span>
+    </div>`).join('') : '<div style="color:#94a3b8;font-size:13px">暂无工作日志（定时唤醒后自动记录）。</div>';
+
   const recentDaily = daily.slice(0, 7);
   const totalVisitors = recentDaily.reduce((s, d) => s + (Number(d.visitor_cnt) || 0), 0);
   const totalOrders7 = recentDaily.reduce((s, d) => s + (Number(d.pay_order_cnt) || 0), 0);
@@ -6772,6 +6780,7 @@ async function renderAiBoss() {
         </div>
         <div style="color:#94a3b8;font-size:12px;margin-bottom:8px">数据来源：CDP 抓商家后台（已接入）或手动导入。点击采集后，规则引擎自动评估触发。</div>
         <button class="btn primary" style="padding:7px 16px;font-size:13px;margin-bottom:8px" onclick="aiBossCollect()">🔄 采集今日经营数据</button>
+        <button class="btn" style="padding:7px 16px;font-size:13px;margin-bottom:8px;margin-left:6px;background:#17203a;color:#fff" onclick="aiBossDailyRun()">🤖 AI老板上班（完整工作流）</button>
         <details style="margin-top:8px">
           <summary style="cursor:pointer;color:#2563eb;font-size:13px">＋ 手动导入经营数据 / 成交词</summary>
           <div style="margin-top:10px">
@@ -6789,6 +6798,12 @@ async function renderAiBoss() {
         <div style="font-weight:700;font-size:15px;margin-bottom:4px">📋 动作审计（每一步可追溯）</div>
         <div style="color:#94a3b8;font-size:12px;margin-bottom:10px">AI 的每个决策动作 + 验证结果。只有系统验证器返回 VERIFIED_SUCCESS 才进入可操作池。</div>
         ${actionLogHtml}
+      </div>
+
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin-bottom:16px">
+        <div style="font-weight:700;font-size:15px;margin-bottom:4px">📔 AI老板工作日志（每次上班留痕）</div>
+        <div style="color:#94a3b8;font-size:12px;margin-bottom:10px">定时唤醒后自动记录：采集→评估→决策→执行→复盘，全程可查。</div>
+        ${bossLogHtml}
       </div>
 
       <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin-bottom:16px">
@@ -6915,6 +6930,14 @@ async function aiBossCollect() {
   try {
     await api('/api/aiboss/collect', 'POST', {});
     setTimeout(() => { toast('✅ 采集完成，刷新中…'); renderAiBoss(); }, 30000);
+  } catch (e) { toast('❌ ' + e.message); }
+}
+
+async function aiBossDailyRun() {
+  toast('🤖 AI老板开始上班（采集→评估→执行→写日志），约1-2分钟');
+  try {
+    await api('/api/aiboss/run-daily', 'POST', {});
+    setTimeout(() => { toast('✅ 工作流完成，刷新中…'); renderAiBoss(); }, 120000);
   } catch (e) { toast('❌ ' + e.message); }
 }
 
