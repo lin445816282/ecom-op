@@ -104,40 +104,105 @@ async function fillByType(c, selector, text){
       await c.send('Page.enable',{}); await c.send('Runtime.enable',{}); await c.send('DOM.enable',{});
     }
     log('已连接干净 tab，从零开始');
+  }
 
-    // ===== Step 1: 选类目 =====
-    log('[1/8] 选类目: ' + cfg.categoryPath);
-    await c.send('Page.navigate',{url:'https://mms.pinduoduo.com/goods/category'});
-    await sleep(6000);
-    // 搜索关键词优化：优先用 categoryPath 第二级（具体品类词），大类词太宽泛搜不准
-    const _parts = (cfg.categoryPath||'').split(' > ');
-    let searchKw = cfg.categoryKeyword;
-    if(_parts.length >= 2 && _parts[1] && _parts[1].length >= 2){ searchKw = _parts[1]; }
-    // 搜索 + 模糊匹配 + 重试（最多 3 次，搜索词逐次放宽：第二级 → keyword → 最后级）
-    // 批量上传时结果加载慢，单次搜索 cands 可能未渲染完，故失败自动换词重试
-    const _kwCands = [searchKw, cfg.categoryKeyword, _parts[_parts.length-1]].filter((v,i,a)=>v && v.length>=1 && a.indexOf(v)===i);
-    let sel = 'no category';
-    for(let _attempt=0; _attempt<_kwCands.length && sel!=='ok'; _attempt++){
-      const _kw = _kwCands[_attempt];
-      await fillByType(c, 'input[placeholder="请输入关键词搜索分类"]', _kw);
+  // ===== 导航发布页 + 检测店铺类型（旗舰店 vs 普通店）=====
+  // 旗舰店(欧世艺等)：/goods/category 直接是「发布新商品」页，先填主图+标题 → 点「手动选择商品分类」弹窗选类目 → 选品牌 → 下一步
+  // 普通店(闲时来等)：/goods/category 是类目选择页，先搜索选类目 → 点「确认发布该类商品」→ 跳转发布页再填主图标题
+  await c.send('Page.navigate',{url:'https://mms.pinduoduo.com/goods/category'});
+  await sleep(6000);
+  const isFlagship = await ev(c, `(()=>{
+    const confirm=[...document.querySelectorAll('button')].find(b=>(b.textContent||'').trim()==='确认发布该类商品');
+    const next=[...document.querySelectorAll('button')].find(b=>(b.textContent||'').trim().replace(/\\s+/g,' ').includes('下一步'));
+    return !confirm && !!next;
+  })()`);
+  log('店铺类型:', isFlagship ? '旗舰店(先主图标题→弹窗选类目→品牌→下一步)' : '普通店(先选类目)');
+
+  // 通用：搜索框选类目（普通店页面 / 旗舰店弹窗 共用，搜索框 placeholder 一致）
+  async function searchAndSelectCategory(){
+    const _parts=(cfg.categoryPath||'').split(' > ');
+    let searchKw=cfg.categoryKeyword;
+    if(_parts.length>=2 && _parts[1] && _parts[1].length>=2){ searchKw=_parts[1]; }
+    const _kwCands=[searchKw,cfg.categoryKeyword,_parts[_parts.length-1]].filter((v,i,a)=>v&&v.length>=1&&a.indexOf(v)===i);
+    let sel='no category';
+    for(let _attempt=0;_attempt<_kwCands.length&&sel!=='ok';_attempt++){
+      const _kw=_kwCands[_attempt];
+      await fillByType(c,'input[placeholder="请输入关键词搜索分类"]',_kw);
       await sleep(4000);
-      sel = await ev(c,`(()=>{
+      sel=await ev(c,`(()=>{
         const want=${JSON.stringify(cfg.categoryPath)};
-        const parts = want.split(' > ');
-        const lastWord = parts[parts.length-1] || '';
-        const midWord = parts.length>=2 ? parts[1] : lastWord;
-        const cands = [...document.querySelectorAll('.choose-category,[class*="searchItem"]')];
-        const norm = e => (e.textContent||'').trim();
-        let el = cands.find(e=>norm(e)===want);
-        if(!el && midWord) el = cands.find(e=>{const lp=norm(e).split(' > ').pop(); return lp===midWord || lp.includes(midWord);});
-        if(!el && midWord) el = cands.find(e=>norm(e).includes(midWord));
-        if(!el && lastWord) el = cands.find(e=>norm(e).includes(lastWord));
-        if(!el) el = cands.find(e=>norm(e).includes(${JSON.stringify(cfg.categoryKeyword)}));
-        if(el){ el.scrollIntoView({block:'center'}); el.click(); return 'ok'; }
+        const parts=want.split(' > ');
+        const lastWord=parts[parts.length-1]||'';
+        const midWord=parts.length>=2?parts[1]:lastWord;
+        const cands=[...document.querySelectorAll('.choose-category,[class*="searchItem"]')];
+        const norm=e=>(e.textContent||'').trim();
+        let el=cands.find(e=>norm(e)===want);
+        if(!el&&midWord)el=cands.find(e=>{const lp=norm(e).split(' > ').pop();return lp===midWord||lp.includes(midWord);});
+        if(!el&&midWord)el=cands.find(e=>norm(e).includes(midWord));
+        if(!el&&lastWord)el=cands.find(e=>norm(e).includes(lastWord));
+        if(!el)el=cands.find(e=>norm(e).includes(${JSON.stringify(cfg.categoryKeyword)}));
+        if(el){el.scrollIntoView({block:'center'});el.click();return 'ok';}
         return 'no category';
       })()`);
-      if(sel!=='ok') log('  类目匹配失败(搜索词='+_kw+')，换词重试…');
+      if(sel!=='ok')log('  类目匹配失败(搜索词='+_kw+')，换词重试…');
     }
+    return sel;
+  }
+
+  if(isFlagship){
+    // ===== 旗舰店：先填主图+标题 =====
+    log('[2/8] 上传主图', cfg.images.length, '张');
+    const docF=await c.send('DOM.getDocument',{depth:3});
+    const qimgF=await c.send('DOM.querySelector',{nodeId:docF.root.nodeId,selector:'input[type="file"]'});
+    if(qimgF && qimgF.nodeId){
+      await c.send('DOM.setFileInputFiles',{nodeId:qimgF.nodeId,files:cfg.images.slice(0,10)});
+      await sleep(8000);
+      log('  上传完成');
+    } else {
+      log('  ⚠️ 未找到主图 file input');
+    }
+    log('[3/8] 填标题');
+    await fillByType(c, 'input[placeholder*="商品标题组成"]', cfg.title);
+    log('  已填标题:', cfg.title.slice(0,20));
+
+    // ===== 旗舰店：弹窗选类目 =====
+    log('[1/8] 选类目(旗舰店弹窗): ' + cfg.categoryPath);
+    await ev(c,`(()=>{const b=[...document.querySelectorAll('button')].find(x=>(x.textContent||'').trim().replace(/\\s+/g,' ').includes('手动选择商品分类'));if(!b)return 'no btn';b.click();return 'ok'})()`);
+    await sleep(5000);
+    const sel=await searchAndSelectCategory();
+    log('  类目选择:', sel);
+    if(sel!=='ok'){ log('❌ 类目未匹配，终止'); c.ws.close(); process.exit(1); }
+    await sleep(1500);
+    const confirmF=await ev(c,`(()=>{const btn=[...document.querySelectorAll('button')].find(b=>(b.textContent||'').trim()==='确认');if(btn){btn.click();return 'ok';}return 'no confirm'})()`);
+    log('  类目确认:', confirmF);
+    if(confirmF!=='ok'){ log('❌ 类目确认按钮未找到，终止'); c.ws.close(); process.exit(1); }
+    await sleep(2500);
+
+    // ===== 旗舰店：品牌（必填，仅店铺有资质品牌）=====
+    log('[7.5/8] 旗舰店品牌选择');
+    await ev(c,`(()=>{const b=[...document.querySelectorAll('*')].find(e=>e.children.length===0&&(e.textContent||'').trim()==='查看可用品牌');if(!b)return 'no';b.click();return 'ok'})()`);
+    await sleep(4000);
+    const brandPick=await ev(c,`(()=>{
+      const name=[...document.querySelectorAll('*')].filter(e=>e.children.length===0&&(e.textContent||'').trim()==='OSHIYI/欧世艺'&&e.getBoundingClientRect().width>0);
+      if(name.length){name[0].click();return 'ok';}
+      const name2=[...document.querySelectorAll('*')].filter(e=>e.children.length===0&&(e.textContent||'').trim().includes('OSHIYI/欧世艺')&&e.getBoundingClientRect().width>0);
+      if(name2.length){name2[0].click();return 'ok:'+name2[0].textContent.trim();}
+      return 'no brand';
+    })()`);
+    log('  品牌选择:', brandPick);
+    await sleep(2000);
+
+    // ===== 旗舰店：下一步 =====
+    log('  点「下一步」进入详情页');
+    const nextClick=await ev(c,`(()=>{const b=[...document.querySelectorAll('button')].find(x=>(x.textContent||'').trim().replace(/\\s+/g,' ').includes('下一步'));if(!b)return 'no btn';b.click();return 'ok'})()`);
+    log('  下一步:', nextClick);
+    await sleep(6000);
+    const hrefF=await ev(c,'location.href');
+    log('  详情页:', hrefF ? hrefF.slice(0,100) : '(空)');
+  } else {
+    // ===== 普通店：先选类目 =====
+    log('[1/8] 选类目: ' + cfg.categoryPath);
+    const sel=await searchAndSelectCategory();
     log('  类目选择:', sel);
     if(sel!=='ok'){ log('❌ 类目未匹配，终止（类目路径与拼多多实际不一致，需人工确认）'); c.ws.close(); process.exit(1); }
     await sleep(2000);
@@ -148,34 +213,29 @@ async function fillByType(c, selector, text){
     const href=await ev(c,'location.href');
     log('  发布页:', href);
     if(!href || !/goods_add\/index/.test(href)){ log('❌ 未跳转发布页，终止'); c.ws.close(); process.exit(1); }
-  }
 
-  // ===== 当前页面标题/URL =====
-  const curUrl = await ev(c, 'location.href');
-  log('当前页面:', curUrl ? curUrl.slice(0,100) : '(空)');
+    // ===== 普通店：上传主图 =====
+    log('[2/8] 上传主图', cfg.images.length, '张');
+    const hasMainImg=await ev(c, `(()=>{const up=[...document.querySelectorAll('input[type="file"][accept*="image"]')];return up.length})()`);
+    log('  图片 file input 数:', hasMainImg);
+    const doc=await c.send('DOM.getDocument',{depth:3});
+    const qimg=await c.send('DOM.querySelector',{nodeId:doc.root.nodeId, selector:'input[type="file"][accept*="image"]'});
+    if(qimg && qimg.nodeId){
+      await c.send('DOM.setFileInputFiles',{nodeId:qimg.nodeId, files:cfg.images.slice(0,10)});
+      await sleep(8000);
+      log('  上传完成');
+    } else {
+      log('  ⚠️ 未找到主图 file input');
+    }
 
-  // ===== Step 2: 上传主图 =====
-  log('[2/8] 上传主图', cfg.images.length, '张');
-  // 检测主图区是否已有图（file input 附近是否已有缩略图）
-  const hasMainImg = await ev(c, `(()=>{const up=[...document.querySelectorAll('input[type="file"][accept*="image"]')];return up.length})()`);
-  log('  图片 file input 数:', hasMainImg);
-  const doc=await c.send('DOM.getDocument',{depth:3});
-  const qimg=await c.send('DOM.querySelector',{nodeId:doc.root.nodeId, selector:'input[type="file"][accept*="image"]'});
-  if(qimg && qimg.nodeId){
-    await c.send('DOM.setFileInputFiles',{nodeId:qimg.nodeId, files:cfg.images.slice(0,10)});
-    await sleep(8000);
-    log('  上传完成');
-  } else {
-    log('  ⚠️ 未找到主图 file input');
-  }
-
-  // ===== Step 3: 填标题 =====
-  log('[3/8] 填标题');
-  const titleVal = await ev(c, `(()=>{const i=document.querySelector('input[placeholder*="商品标题组成"]');return i?i.value:undefined})()`);
-  if(titleVal){ log('  标题已填，跳过:', titleVal.slice(0,20)); }
-  else{
-    await fillByType(c, 'input[placeholder*="商品标题组成"]', cfg.title);
-    log('  已填标题:', cfg.title.slice(0,20));
+    // ===== 普通店：填标题 =====
+    log('[3/8] 填标题');
+    const titleVal=await ev(c, `(()=>{const i=document.querySelector('input[placeholder*="商品标题组成"]');return i?i.value:undefined})()`);
+    if(titleVal){ log('  标题已填，跳过:', titleVal.slice(0,20)); }
+    else{
+      await fillByType(c, 'input[placeholder*="商品标题组成"]', cfg.title);
+      log('  已填标题:', cfg.title.slice(0,20));
+    }
   }
 
   // ===== Step 4: 填规格（幂等） =====
