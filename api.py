@@ -1484,8 +1484,16 @@ class Handler(BaseHTTPRequestHandler):
             return _json(self, task)
 
         if path == "/api/category-map" and self.command == "GET":
-            items = [{"keyword": kw, "category_path": cp, "category_keyword": ck}
+            items = [{"keyword": kw, "category_path": cp, "category_keyword": ck, "source": "manual"}
                      for kw, cp, ck in data.CATEGORY_MAP]
+            for row in catalog.list_category_map_db():
+                items.append({
+                    "keyword": row.get("keyword", ""),
+                    "category_path": row.get("category_path", ""),
+                    "category_keyword": row.get("category_keyword", ""),
+                    "source": row.get("source", "learned"),
+                    "hit_count": row.get("hit_count", 1),
+                })
             return _json(self, {"items": items})
 
         if path == "/api/published-goods" and self.command == "GET":
@@ -2551,6 +2559,20 @@ def _autopublish_bg(task_id: int, pricing: dict = None):
         return _fail("publish", f"店铺 {shop_id} 未配置 CDP 端口")
     with _shop_lock(shop_id):
         res = _run_node_script("publish.js", [config_win, str(port)], timeout=180)
+    # 读取 publish.js 自动学习的类目映射，固化到数据库（下次同类商品直接命中）
+    try:
+        _learn_path = os.path.join(outdir_wsl, "config.category_learn.json")
+        if os.path.exists(_learn_path):
+            with open(_learn_path, encoding="utf-8") as _f:
+                _learned = json.load(_f)
+            _lkw = (_learned.get("keyword") or "").strip()
+            _lpath = (_learned.get("category_path") or "").strip()
+            if _lkw and _lpath:
+                catalog.add_category_map(_lkw, _lpath, _lkw, source="learned")
+                catalog.append_autopublish_log(task_id, "publish", "done",
+                                               f"🧠 类目已自动学习固化：{_lkw} → {_lpath}")
+    except Exception as _e:
+        catalog.append_autopublish_log(task_id, "publish", "done", f"⚠️ 类目学习固化失败:{_e}")
     if _overtime("publish"):
         return _fail_timeout("publish")
     if not res.get("data") and not res.get("ok"):

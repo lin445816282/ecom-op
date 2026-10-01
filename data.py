@@ -2367,7 +2367,7 @@ CATEGORY_MAP = [
     ("万圣", "节庆用品/礼品 > 节日/装扮用品 > 其他节日装扮用品", "其他节日装扮用品"),
     ("圣诞", "节庆用品/礼品 > 节日/装扮用品 > 其他节日装扮用品", "其他节日装扮用品"),
     # 家居饰品类（task 175~180 类目匹配不上，实测拼多多类目树 2026-10-01）
-    ("化妆镜", "节庆用品/礼品 > 文化创意用品 > 文化创意化妆镜", "化妆镜"),
+    ("化妆镜", "住宅家具 > 镜子类 > 化妆镜", "化妆镜"),
     ("水晶", "饰品/流行首饰/摆件/保养鉴定 > 摆件 > 水晶摆件", "水晶摆件"),
     ("树脂", "家居饰品 > 摆件 > 摆件", "摆件"),
     ("锡器", "家居饰品 > 摆件 > 摆件", "摆件"),
@@ -2377,8 +2377,23 @@ CATEGORY_MAP = [
 
 
 def _fix_category_by_map(cfg: dict, title: str) -> bool:
-    """按标题关键词命中 CATEGORY_MAP，修正 AI 猜错的类目。命中返回 True。"""
-    for kw, path, ckw in CATEGORY_MAP:
+    """按标题关键词命中映射表（硬编码 + 数据库自动学习），修正 AI 猜错的类目。命中返回 True。"""
+    # 合并：硬编码在前（人工经验优先）+ 数据库自动学习在后（高频优先，自动扩充新类目）
+    merged = list(CATEGORY_MAP)
+    try:
+        import catalog
+        learned = catalog.list_category_map_db()
+        for row in learned:
+            kw = (row.get("keyword") or "").strip()
+            path = (row.get("category_path") or "").strip()
+            ckw = (row.get("category_keyword") or "").strip() or kw
+            if kw and path and not any(kw == m[0] and path == m[1] for m in merged):
+                merged.append((kw, path, ckw))
+    except Exception:
+        pass
+    # 长词优先：更具体的品类词（如"仿真花"3字）优先于宽泛词（如"摆件"2字），避免宽泛词抢占
+    merged.sort(key=lambda x: len(x[0]), reverse=True)
+    for kw, path, ckw in merged:
         if kw in title:
             cfg["categoryPath"] = path
             cfg["categoryKeyword"] = ckw

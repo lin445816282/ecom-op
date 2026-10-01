@@ -125,11 +125,13 @@ async function fillByType(c, selector, text){
     if(_parts.length>=2 && _parts[1] && _parts[1].length>=2){ searchKw=_parts[1]; }
     const _kwCands=[searchKw,cfg.categoryKeyword,_parts[_parts.length-1]].filter((v,i,a)=>v&&v.length>=1&&a.indexOf(v)===i);
     let sel='no category';
+    let learnedCat='';  // 选中的真实类目文本
+    let learnedKw='';   // 实际命中的搜索词
     for(let _attempt=0;_attempt<_kwCands.length&&sel!=='ok';_attempt++){
       const _kw=_kwCands[_attempt];
       await fillByType(c,'input[placeholder="请输入关键词搜索分类"]',_kw);
       await sleep(4000);
-      sel=await ev(c,`(()=>{
+      const r=await ev(c,`(()=>{
         const want=${JSON.stringify(cfg.categoryPath)};
         const parts=want.split(' > ');
         const lastWord=parts[parts.length-1]||'';
@@ -141,10 +143,27 @@ async function fillByType(c, selector, text){
         if(!el&&midWord)el=cands.find(e=>norm(e).includes(midWord));
         if(!el&&lastWord)el=cands.find(e=>norm(e).includes(lastWord));
         if(!el)el=cands.find(e=>norm(e).includes(${JSON.stringify(cfg.categoryKeyword)}));
-        if(el){el.scrollIntoView({block:'center'});el.click();return 'ok';}
-        return 'no category';
+        if(el){el.scrollIntoView({block:'center'});el.click();return norm(el);}
+        return '';
       })()`);
-      if(sel!=='ok')log('  类目匹配失败(搜索词='+_kw+')，换词重试…');
+      if(r){ sel='ok'; learnedKw=_kw; learnedCat=r; }
+      else log('  类目匹配失败(搜索词='+_kw+')，换词重试…');
+    }
+    // 选中真实类目后，把「关键词→真实类目」写回文件，供后端自动固化（下次同类商品直接命中）
+    if(sel==='ok' && learnedCat){
+      // keyword 用选中类目的最后一级（三级类目名，最具体最干净），保证「关键词→类目」自洽
+      // 避免用 AI 的 categoryKeyword（可能和实际选中类目不一致，导致学出「南瓜灯→气球」这种错映射）
+      let lastLevel=(learnedCat.split(' > ').pop()||'').trim();
+      if(lastLevel.includes('/')) lastLevel=lastLevel.split('/')[0].trim();  // "仿真花/假花"→"仿真花"
+      if(lastLevel && lastLevel.length>=2){
+        const learned={keyword:lastLevel, category_path:learnedCat, matched_kw:learnedKw};
+        try{
+          fs.writeFileSync(CONFIG.replace(/\.json$/, '.category_learn.json'), JSON.stringify(learned), 'utf8');
+          log('  类目学习记录:', learned.keyword, '→', learned.category_path);
+        }catch(e){ log('  类目学习写文件失败:', e.message); }
+      } else {
+        log('  类目学习跳过(最后一级非干净品类词):', learnedCat);
+      }
     }
     return sel;
   }

@@ -982,6 +982,7 @@ async function loadCategoryMap() {
       <span style="color:#94a3b8;flex-shrink:0">→</span>
       <span style="flex:1;color:#475569">${esc(m.category_path)}</span>
       <span style="flex-shrink:0;background:#f0fdf4;color:#16a34a;padding:2px 8px;border-radius:5px;font-weight:600">${esc(m.category_keyword)}</span>
+      ${m.source === 'learned' ? `<span style="flex-shrink:0;background:#e0f2fe;color:#0369a1;padding:2px 8px;border-radius:5px;font-weight:600">自动学习${m.hit_count ? '×'+m.hit_count : ''}</span>` : ''}
     </div>`).join('');
 }
 

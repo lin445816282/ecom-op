@@ -621,6 +621,17 @@ CREATE TABLE IF NOT EXISTS ai_boss_research (
     content TEXT DEFAULT '',
     created_at TEXT DEFAULT (datetime('now','localtime'))
 );
+CREATE TABLE IF NOT EXISTS category_map (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    keyword TEXT NOT NULL,
+    category_path TEXT NOT NULL,
+    category_keyword TEXT DEFAULT '',
+    hit_count INTEGER DEFAULT 1,
+    source TEXT DEFAULT 'learned',
+    created_at TEXT DEFAULT (datetime('now','localtime')),
+    updated_at TEXT DEFAULT (datetime('now','localtime')),
+    UNIQUE(keyword, category_path)
+);
 """
 
 
@@ -704,6 +715,38 @@ def hit_error_by_type(error_type: str, description: str = "") -> dict:
 
 
 # ----------------------------- 一键上架 pipeline -----------------------------
+
+def add_category_map(keyword: str, category_path: str, category_keyword: str = "", source: str = "learned") -> dict:
+    """固化一条类目映射（自动学习/手动）。按 keyword+category_path 去重，已存在则 hit_count+1。"""
+    keyword = (keyword or "").strip()
+    category_path = (category_path or "").strip()
+    if not keyword or not category_path:
+        return {}
+    category_keyword = (category_keyword or "").strip() or keyword
+    with closing(_conn()) as c:
+        c.execute(
+            "INSERT INTO category_map(keyword, category_path, category_keyword, hit_count, source) "
+            "VALUES(?,?,?,1,?) "
+            "ON CONFLICT(keyword, category_path) DO UPDATE SET "
+            "hit_count=hit_count+1, updated_at=datetime('now','localtime')",
+            (keyword, category_path, category_keyword, source),
+        )
+        c.commit()
+        row = c.execute(
+            "SELECT * FROM category_map WHERE keyword=? AND category_path=?",
+            (keyword, category_path),
+        ).fetchone()
+        return dict(row) if row else {}
+
+
+def list_category_map_db() -> list[dict]:
+    """数据库里已固化的类目映射（按命中次数降序）。"""
+    with closing(_conn()) as c:
+        rows = c.execute(
+            "SELECT * FROM category_map ORDER BY hit_count DESC, id DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
 
 def create_autopublish_task(source_url: str, shop_id: int = 5) -> dict:
     """新建一键上架任务，初始状态 queued。"""
