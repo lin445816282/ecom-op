@@ -284,7 +284,7 @@ async function fillByType(c, selector, text){
       });
       rows.sort((a,b)=>a.y-b.y);
       // 每轮最多填 3 行（多 SKU 商品 17 行时，一次填 48 个值会触发 React 重渲染风暴导致 CDP 超时）
-      rows = rows.slice(0, 3);
+      rows.splice(3);
       // 3) native setter 填空框；空行 SKU 序号 = 已填行数(__filledRows) + 空行序号 ri
       const setter=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
       const vals=window.__skuVals||[];
