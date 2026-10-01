@@ -1442,6 +1442,11 @@ class Handler(BaseHTTPRequestHandler):
             task["publish_progress"] = _read_publish_progress(task_id)
             return _json(self, task)
 
+        if path == "/api/category-map" and self.command == "GET":
+            items = [{"keyword": kw, "category_path": cp, "category_keyword": ck}
+                     for kw, cp, ck in data.CATEGORY_MAP]
+            return _json(self, {"items": items})
+
         if path == "/api/published-goods" and self.command == "GET":
             shop_id = qs.get("shop_id", [""])[0]
             status = qs.get("status", [""])[0]

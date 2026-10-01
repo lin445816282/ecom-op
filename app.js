@@ -708,6 +708,12 @@ async function renderAutopublish() {
         </div>
       </div>
 
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:18px;margin-bottom:16px">
+        <div style="font-weight:700;font-size:15px;margin-bottom:4px">🗂️ 类目匹配表</div>
+        <div style="color:#64748b;font-size:13px;margin-bottom:12px">1688 标题关键词 → 拼多多真实类目。AI 猜错类目时按此表自动修正（命中顺序从上到下，靠前的优先）。</div>
+        <div id="category-map-list"><div class="empty" style="color:#94a3b8">加载中…</div></div>
+      </div>
+
       <div id="ap-current" style="margin-bottom:16px"></div>
       <div style="font-weight:700;font-size:14px;margin-bottom:10px;color:#334155">历史任务</div>
       <div id="ap-list"><div class="empty" style="color:#94a3b8">暂无任务，输入链接点「开始上架」。</div></div>
@@ -813,6 +819,7 @@ async function renderAutopublish() {
     await loadCdpStatus();
   };
   loadCdpStatus();
+  loadCategoryMap();
 
   $('#ap-start-btn').onclick = async () => {
     if ($('#ap-start-btn').disabled) return;  // 双保险：禁用时忽略点击，防重复提交
@@ -957,6 +964,25 @@ function renderApCurrent(t) {
       ${steps || '<div style="color:#94a3b8">等待启动…</div>'}
     </div>
   `;
+}
+
+async function loadCategoryMap() {
+  const el = $('#category-map-list');
+  if (!el) return;
+  let items = [];
+  try {
+    const resp = await api('/api/category-map');
+    items = (resp && resp.items) || [];
+  } catch (e) { items = []; }
+  if (!items.length) { el.innerHTML = '<div class="empty" style="color:#94a3b8">无映射。</div>'; return; }
+  el.innerHTML = items.map((m, i) => `
+    <div style="display:flex;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid #f1f5f9;font-size:12px">
+      <span style="width:24px;color:#94a3b8;text-align:center;flex-shrink:0">${i + 1}</span>
+      <span style="width:80px;flex-shrink:0"><code style="background:#f1f5f9;padding:2px 7px;border-radius:5px;color:#334155">${esc(m.keyword)}</code></span>
+      <span style="color:#94a3b8;flex-shrink:0">→</span>
+      <span style="flex:1;color:#475569">${esc(m.category_path)}</span>
+      <span style="flex-shrink:0;background:#f0fdf4;color:#16a34a;padding:2px 8px;border-radius:5px;font-weight:600">${esc(m.category_keyword)}</span>
+    </div>`).join('');
 }
 
 async function loadApList() {
