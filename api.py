@@ -1403,6 +1403,47 @@ class Handler(BaseHTTPRequestHandler):
             return _json(self, {"ok": True, "verified": verified, "changed": changed,
                                 "statuses": statuses})
 
+        if path.startswith("/api/autopublish/") and path.endswith("/republish") and self.command == "POST":
+            # 历史失败/草稿任务一键重新上架：先回查该商品是否已在售（避免重复上架），未上架才重跑全流程
+            import threading
+            mid = path[len("/api/autopublish/"):-len("/republish")]
+            if not mid.isdigit():
+                return _json(self, {"error": "任务ID无效"}, 400)
+            task_id = int(mid)
+            task = catalog.get_autopublish_task(task_id)
+            if not task:
+                return _json(self, {"error": "任务不存在"}, 404)
+            shop_id = task.get("shop_id") or 5
+            gid = str(task.get("pdd_goods_id") or "").strip()
+            # 1. 已有商品ID → 先回查真实在售状态，在售则不再重上架
+            if gid:
+                port = SHOP_CDP_PORT.get(shop_id)
+                if port:
+                    try:
+                        res = _run_node_script("verify_publish.js", [str(port), gid], timeout=150)
+                        statuses = (res.get("data") or {}).get("statuses") or {}
+                        real = statuses.get(gid)
+                        if real == "published":
+                            catalog.update_autopublish_task(task_id, status="published")
+                            catalog.save_published_good(goods_id=gid, status="published",
+                                                         remark="重新上架回查：已在售")
+                            catalog.append_autopublish_log(task_id, "publish", "done",
+                                                           f"✅ 回查已在售（商品ID {gid}），无需重上架")
+                            return _json(self, {"ok": True, "already": True, "status": "published",
+                                                "message": "商品已在售，无需重新上架"})
+                        catalog.append_autopublish_log(task_id, "publish", "done",
+                                                       f"回查状态 {real}，继续重新上架")
+                    except Exception as e:
+                        catalog.append_autopublish_log(task_id, "publish", "done",
+                                                       f"回查失败({e})，继续重新上架")
+            # 2. 重置任务并完整重跑（scrape→ai→publish，新类目映射自动生效）
+            catalog.update_autopublish_task(task_id, status="queued", stage="", error="")
+            catalog.append_autopublish_log(task_id, "scrape", "running", "🔄 手动重新上架：开始完整重跑…")
+            threading.Thread(target=_autopublish_bg, args=(task_id, None), daemon=True).start()
+            return _json(self, {"ok": True, "already": False,
+                                "task": catalog.get_autopublish_task(task_id),
+                                "message": "已启动重新上架"})
+
         # CDP 实例管理：查状态 + 手动重启（页面「CDP 实例」卡片用）
         if path == "/api/cdp/status" and self.command == "GET":
             return _json(self, {"instances": _cdp_status_all()})

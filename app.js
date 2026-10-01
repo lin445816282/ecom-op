@@ -994,7 +994,7 @@ async function loadApList() {
     items = (resp && resp.items) || [];
   } catch (e) { items = []; }
   if (!items.length) { el.innerHTML = '<div class="empty" style="color:#94a3b8">暂无任务。</div>'; return; }
-  const statusTag = { queued:'排队', crawling:'抓取', ai:'AI配置', publishing:'上架中', published:'✅已上架', failed:'❌失败' };
+  const statusTag = { queued:'排队', crawling:'抓取', ai:'AI配置', publishing:'上架中', published:'✅已上架', submitted:'⏳待审核', draft:'📄草稿', failed:'❌失败' };
   el.innerHTML = items.map(t => `
     <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin-bottom:8px;display:flex;gap:12px;align-items:center;cursor:pointer" onclick="startApPolling(${t.id})">
       <div style="font-size:14px;color:#94a3b8">#${t.id}</div>
@@ -1003,11 +1003,28 @@ async function loadApList() {
         <div style="color:#94a3b8;font-size:12px;margin-top:2px">${esc((t.source_url||'').slice(0,60))}</div>
       </div>
       <span style="background:#f1f5f9;border-radius:6px;padding:3px 10px;font-size:12px;color:#475569">${statusTag[t.status] || t.status}</span>
+      ${(t.status === 'failed' || t.status === 'draft') ? `<button class="btn mini" style="padding:4px 12px;font-size:12px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;white-space:nowrap" onclick="event.stopPropagation();republishTask(${t.id})">重新上架</button>` : ''}
       ${t.publish_progress && t.publish_progress.step ? `<span style="background:#e0f2fe;color:#0369a1;border-radius:6px;padding:3px 8px;font-size:11px;font-weight:600;white-space:nowrap">${esc(t.publish_progress.step_name)} ${t.publish_progress.step}/8</span>` : ''}
       ${t.pdd_goods_id ? `<span style="font-size:12px;color:#16a34a">${esc(t.pdd_goods_id)}</span>` : ''}
       <div style="color:#94a3b8;font-size:12px">${esc((t.created_at||'').slice(5,16))}</div>
     </div>
   `).join('');
+}
+
+async function republishTask(taskId) {
+  try {
+    const resp = await api(`/api/autopublish/${taskId}/republish`, 'POST', {});
+    if (resp && resp.already) {
+      toast('✅ 商品已在售，无需重新上架');
+      loadApList();
+    } else {
+      toast(`任务 #${taskId} 已启动重新上架…`);
+      loadApList();
+      startApPolling(taskId);
+    }
+  } catch (e) {
+    toast('重新上架失败：' + (e.message || e));
+  }
 }
 
 function startApListPolling() {
