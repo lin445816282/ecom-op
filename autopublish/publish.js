@@ -26,7 +26,7 @@ async function conn(wsUrl){
   const ws=new WebSocket(wsUrl);let id=0;const p=new Map();
   const send=(m,pa)=>new Promise((res,rej)=>{
     const mid=++id;p.set(mid,{res,rej});
-    const to=setTimeout(()=>{ if(p.has(mid)){ p.delete(mid); rej(new Error('CDP超时:'+m)); } }, 15000);
+    const to=setTimeout(()=>{ if(p.has(mid)){ p.delete(mid); rej(new Error('CDP超时:'+m)); } }, 60000);
     ws.send(JSON.stringify({id:mid,method:m,params:pa}));
   });
   ws.addEventListener('message',ev=>{const m=JSON.parse(ev.data);if(m.id&&p.has(m.id)){const q=p.get(m.id);p.delete(m.id);m.error?q.rej(new Error(m.error.message)):q.res(m.result)}});
@@ -283,6 +283,8 @@ async function fillByType(c, selector, text){
         });
       });
       rows.sort((a,b)=>a.y-b.y);
+      // 每轮最多填 3 行（多 SKU 商品 17 行时，一次填 48 个值会触发 React 重渲染风暴导致 CDP 超时）
+      rows = rows.slice(0, 3);
       // 3) native setter 填空框；空行 SKU 序号 = 已填行数(__filledRows) + 空行序号 ri
       const setter=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
       const vals=window.__skuVals||[];
