@@ -714,6 +714,21 @@ async function renderAutopublish() {
         <div id="category-map-list"><div class="empty" style="color:#94a3b8">加载中…</div></div>
       </div>
 
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:18px;margin-bottom:16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="toggleBannedWords()">
+          <div style="font-weight:700;font-size:15px">🚫 标题禁词表 <span id="banned-count" style="font-size:12px;color:#94a3b8;font-weight:400"></span></div>
+          <span id="banned-toggle-icon" style="color:#94a3b8;font-size:12px">展开 ▼</span>
+        </div>
+        <div style="color:#64748b;font-size:13px;margin:4px 0 0">上架拼多多前，标题里这些词会被自动剔除（平台词/违规营销词）。</div>
+        <div id="banned-words-body" style="display:none;margin-top:12px">
+          <div style="display:flex;gap:8px;margin-bottom:12px">
+            <input id="banned-word-input" placeholder="新增禁词，如：全网最低" style="flex:1;padding:8px 12px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;font-family:inherit">
+            <button class="btn primary" onclick="addBannedWord()" style="padding:8px 16px;font-size:13px;white-space:nowrap">添加</button>
+          </div>
+          <div id="banned-words-list"><div class="empty" style="color:#94a3b8">加载中…</div></div>
+        </div>
+      </div>
+
       <div id="ap-current" style="margin-bottom:16px"></div>
       <div style="font-weight:700;font-size:14px;margin-bottom:10px;color:#334155">历史任务</div>
       <div id="ap-list"><div class="empty" style="color:#94a3b8">暂无任务，输入链接点「开始上架」。</div></div>
@@ -820,6 +835,7 @@ async function renderAutopublish() {
   };
   loadCdpStatus();
   loadCategoryMap();
+  loadBannedWords();
 
   $('#ap-start-btn').onclick = async () => {
     if ($('#ap-start-btn').disabled) return;  // 双保险：禁用时忽略点击，防重复提交
@@ -984,6 +1000,55 @@ async function loadCategoryMap() {
       <span style="flex-shrink:0;background:#f0fdf4;color:#16a34a;padding:2px 8px;border-radius:5px;font-weight:600">${esc(m.category_keyword)}</span>
       ${m.source === 'learned' ? `<span style="flex-shrink:0;background:#e0f2fe;color:#0369a1;padding:2px 8px;border-radius:5px;font-weight:600">自动学习${m.hit_count ? '×'+m.hit_count : ''}</span>` : ''}
     </div>`).join('');
+}
+
+function toggleBannedWords() {
+  const body = $('#banned-words-body');
+  const icon = $('#banned-toggle-icon');
+  if (!body) return;
+  const isHidden = body.style.display === 'none';
+  body.style.display = isHidden ? 'block' : 'none';
+  if (icon) icon.textContent = isHidden ? '收起 ▲' : '展开 ▼';
+  if (isHidden) loadBannedWords();
+}
+
+async function loadBannedWords() {
+  const el = $('#banned-words-list');
+  const cnt = $('#banned-count');
+  let items = [];
+  try {
+    const resp = await api('/api/title-banned-words');
+    items = (resp && resp.items) || [];
+  } catch (e) { items = []; }
+  if (cnt) cnt.textContent = items.length ? `（${items.length} 个）` : '';
+  if (el) {
+    if (!items.length) { el.innerHTML = '<div class="empty" style="color:#94a3b8">暂无禁词。</div>'; }
+    else {
+      el.innerHTML = items.map(w => `
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 12px;border:1px solid #f1f5f9;border-radius:8px;margin-bottom:6px;background:#fafafa">
+          <code style="background:#fff;padding:2px 9px;border-radius:5px;color:#b91c1c;font-size:13px">${esc(w.word)}</code>
+          <button onclick="removeBannedWord(${w.id})" style="background:none;border:none;color:#cbd5e1;cursor:pointer;font-size:16px;line-height:1" title="删除">✕</button>
+        </div>`).join('');
+    }
+  }
+}
+
+async function addBannedWord() {
+  const input = $('#banned-word-input');
+  const word = (input && input.value || '').trim();
+  if (!word) { toast('请输入禁词'); return; }
+  try {
+    await api('/api/title-banned-words', 'POST', { word });
+    if (input) input.value = '';
+    loadBannedWords();
+  } catch (e) { toast('添加失败：' + (e.message || e)); }
+}
+
+async function removeBannedWord(id) {
+  try {
+    await api(`/api/title-banned-words/${id}`, 'DELETE');
+    loadBannedWords();
+  } catch (e) { toast('删除失败：' + (e.message || e)); }
 }
 
 async function loadApList() {

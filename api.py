@@ -1496,6 +1496,25 @@ class Handler(BaseHTTPRequestHandler):
                 })
             return _json(self, {"items": items})
 
+        if path == "/api/title-banned-words" and self.command == "GET":
+            return _json(self, {"items": catalog.list_banned_words()})
+
+        if path == "/api/title-banned-words" and self.command == "POST":
+            item = self._read_body()
+            word = str(item.get("word") or "").strip()
+            if not word:
+                return _json(self, {"error": "禁词不能为空"}, 400)
+            row = catalog.add_banned_word(word)
+            return _json(self, {"ok": True, "item": row})
+
+        if path.startswith("/api/title-banned-words/") and self.command == "DELETE":
+            try:
+                word_id = int(path.rsplit("/", 1)[-1])
+            except ValueError:
+                return _json(self, {"error": "非法 id"}, 400)
+            catalog.remove_banned_word(word_id)
+            return _json(self, {"ok": True})
+
         if path == "/api/published-goods" and self.command == "GET":
             shop_id = qs.get("shop_id", [""])[0]
             status = qs.get("status", [""])[0]

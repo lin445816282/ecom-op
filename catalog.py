@@ -632,6 +632,11 @@ CREATE TABLE IF NOT EXISTS category_map (
     updated_at TEXT DEFAULT (datetime('now','localtime')),
     UNIQUE(keyword, category_path)
 );
+CREATE TABLE IF NOT EXISTS title_banned_words (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    word TEXT NOT NULL UNIQUE,
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+);
 """
 
 
@@ -746,6 +751,49 @@ def list_category_map_db() -> list[dict]:
             "SELECT * FROM category_map ORDER BY hit_count DESC, id DESC"
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+# 标题禁词默认值（上架拼多多不能出现的词），表空时 seed，之后可在前端增删改
+BANNED_WORDS_DEFAULT = [
+    # 平台词（竞品平台名，必禁）
+    "抖音", "快手", "小红书", "淘宝", "天猫", "京东", "拼多多", "拼夕夕",
+    "微信", "微博", "唯品会", "1688", "阿里巴巴", "闲鱼", "得物", "美团",
+    "抖店", "微店",
+    # 营销违规词（拼多多常见判违规）
+    "爆款", "同款", "网红", "直播", "带货", "全网", "秒杀", "清仓",
+    "最低价", "亏本", "正品", "旗舰店", "官方", "专柜", "代购",
+]
+
+
+def list_banned_words() -> list[dict]:
+    """标题禁词列表（含 id + word，按 id 升序）。"""
+    with closing(_conn()) as c:
+        rows = c.execute(
+            "SELECT id, word FROM title_banned_words ORDER BY id ASC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def add_banned_word(word: str) -> dict:
+    """新增禁词（按 word 去重）。"""
+    word = (word or "").strip()
+    if not word:
+        return {}
+    with closing(_conn()) as c:
+        c.execute("INSERT OR IGNORE INTO title_banned_words(word) VALUES(?)", (word,))
+        c.commit()
+        row = c.execute(
+            "SELECT * FROM title_banned_words WHERE word=?", (word,)
+        ).fetchone()
+        return dict(row) if row else {}
+
+
+def remove_banned_word(word_id: int) -> bool:
+    """删除禁词（按 id），返回是否删除成功。"""
+    with closing(_conn()) as c:
+        c.execute("DELETE FROM title_banned_words WHERE id=?", (word_id,))
+        c.commit()
+        return True
 
 
 def create_autopublish_task(source_url: str, shop_id: int = 5) -> dict:
@@ -915,6 +963,7 @@ def init_db() -> None:
         _seed_scatter_shops(c)
         _seed_pack_mapping(c)
         _seed_cost_params(c)
+        _seed_banned_words(c)
     seed_scheduled_tasks()  # 幂等 seed 定时任务清单
 
 
@@ -961,6 +1010,15 @@ def _seed_cost_params(conn: sqlite3.Connection) -> None:
             (key, value, unit, note),
         )
     conn.commit()
+
+
+def _seed_banned_words(conn: sqlite3.Connection) -> None:
+    """标题禁词初始数据，仅在表为空时 seed（用户后续增删改不再覆盖）。"""
+    n = conn.execute("SELECT COUNT(*) FROM title_banned_words").fetchone()[0]
+    if n == 0:
+        for w in BANNED_WORDS_DEFAULT:
+            conn.execute("INSERT OR IGNORE INTO title_banned_words(word) VALUES(?)", (w,))
+        conn.commit()
 
 
 def get_cost_params() -> dict:

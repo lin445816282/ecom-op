@@ -2410,9 +2410,21 @@ TITLE_BANNED_WORDS = [
 
 
 def _clean_title(title: str) -> str:
-    """清洗标题：去掉平台词/违规词，压缩多余空格。确定性过滤，不依赖 AI。"""
+    """清洗标题：去掉平台词/违规词，压缩多余空格。确定性过滤，不依赖 AI。
+
+    禁词主列表在 catalog.db 的 title_banned_words 表（前端可增删改），
+    TITLE_BANNED_WORDS 仅作数据库读取失败/表空时的兜底。
+    """
     t = (title or "").strip()
-    for w in TITLE_BANNED_WORDS:
+    words = list(TITLE_BANNED_WORDS)
+    try:
+        import catalog
+        db_words = catalog.list_banned_words()
+        if db_words:
+            words = [r["word"] for r in db_words if r.get("word")]
+    except Exception:
+        pass
+    for w in words:
         t = t.replace(w, "")
     t = " ".join(t.split())          # 压缩连续空格
     t = t.strip(" -·,，。|、·")      # 去掉首尾残留分隔符
