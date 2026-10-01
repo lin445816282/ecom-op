@@ -1321,7 +1321,7 @@ class Handler(BaseHTTPRequestHandler):
             if not url:
                 return _json(self, {"error": "请填写 1688 商品链接"}, 400)
             task = catalog.create_autopublish_task(url, shop_id)
-            threading.Thread(target=_autopublish_bg, args=(task["id"], pricing), daemon=True).start()
+            _enqueue_autopublish(task["id"], task["shop_id"], pricing)
             return _json(self, {"ok": True, "task": task})
 
         if path == "/api/autopublish/batch" and self.command == "POST":
@@ -1355,7 +1355,7 @@ class Handler(BaseHTTPRequestHandler):
                 for sid in shop_ids:
                     t = catalog.create_autopublish_task(u, sid)
                     tasks.append(t)
-                    threading.Thread(target=_autopublish_bg, args=(t["id"], pricing), daemon=True).start()
+                    _enqueue_autopublish(t["id"], t["shop_id"], pricing)
             return _json(self, {"ok": True, "tasks": tasks, "count": len(tasks),
                                 "urls": len(urls), "shops": len(shop_ids)})
 
@@ -1439,7 +1439,7 @@ class Handler(BaseHTTPRequestHandler):
             # 2. 重置任务并完整重跑（scrape→ai→publish，新类目映射自动生效）
             catalog.update_autopublish_task(task_id, status="queued", stage="", error="")
             catalog.append_autopublish_log(task_id, "scrape", "running", "🔄 手动重新上架：开始完整重跑…")
-            threading.Thread(target=_autopublish_bg, args=(task_id, None), daemon=True).start()
+            _enqueue_autopublish(task_id, shop_id, None)
             return _json(self, {"ok": True, "already": False,
                                 "task": catalog.get_autopublish_task(task_id),
                                 "message": "已启动重新上架"})
@@ -2265,6 +2265,39 @@ def _extract_1688_url(text: str) -> str:
 _SCRAPE_LOCK = threading.Lock()
 _SHOP_LOCKS = {}
 
+# 店铺级任务队列：每店铺同时最多 1 个上架任务。
+# 批量上架若全部并发启动线程，同店任务会抢 publish 锁排队，等锁时间从任务启动起算、
+# 被误判成「环节超时」（历史 publish 超时 106 次的主因）。改为每店 worker 串行消费，排队发生在队列里、不进任务计时。
+import queue as _queue
+_SHOP_QUEUES = {}
+_SHOP_QUEUE_GUARD = threading.Lock()
+
+
+def _shop_worker(shop_id):
+    """店铺上架 worker：串行消费本店任务队列，一次一个。"""
+    q = _SHOP_QUEUES[shop_id]
+    while True:
+        item = q.get()
+        if item is None:
+            break
+        task_id, pricing = item
+        try:
+            _autopublish_bg(task_id, pricing)
+        except Exception:
+            pass
+        q.task_done()
+
+
+def _enqueue_autopublish(task_id, shop_id, pricing):
+    """把上架任务加入店铺串行队列（每店同时最多 1 个任务），worker 自动消费。"""
+    with _SHOP_QUEUE_GUARD:
+        q = _SHOP_QUEUES.get(shop_id)
+        if q is None:
+            q = _queue.Queue()
+            _SHOP_QUEUES[shop_id] = q
+            threading.Thread(target=_shop_worker, args=(shop_id,), daemon=True).start()
+    q.put((task_id, pricing))
+
 
 def _shop_lock(shop_id: int):
     return _SHOP_LOCKS.setdefault(shop_id, threading.Lock())
@@ -2474,8 +2507,9 @@ def _autopublish_bg(task_id: int, pricing: dict = None):
     url = task["source_url"]
     shop_id = task["shop_id"]
 
-    # 单链接整体超时（5 分钟）。超时后任何环节都要立即终止并真实记录。
-    OVERALL_TIMEOUT = int(os.environ.get("AUTOPUBLISH_TIMEOUT", "300"))
+    # 单链接整体超时（10 分钟）。超时后任何环节都要立即终止并真实记录。
+    # 曾设 300s：批量上架时同店任务排队等锁，等锁时间误算进环节耗时，导致大量「假超时」。
+    OVERALL_TIMEOUT = int(os.environ.get("AUTOPUBLISH_TIMEOUT", "600"))
     _t0 = time.time()
 
     def _overtime(stage):
@@ -2581,7 +2615,7 @@ def _autopublish_bg(task_id: int, pricing: dict = None):
     if not port:
         return _fail("publish", f"店铺 {shop_id} 未配置 CDP 端口")
     with _shop_lock(shop_id):
-        res = _run_node_script("publish.js", [config_win, str(port)], timeout=180)
+        res = _run_node_script("publish.js", [config_win, str(port)], timeout=240)
     # 读取 publish.js 自动学习的类目映射，固化到数据库（下次同类商品直接命中）
     try:
         _learn_path = os.path.join(outdir_wsl, "config.category_learn.json")
