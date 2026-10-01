@@ -709,9 +709,14 @@ async function renderAutopublish() {
       </div>
 
       <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:18px;margin-bottom:16px">
-        <div style="font-weight:700;font-size:15px;margin-bottom:4px">🗂️ 类目匹配表</div>
-        <div style="color:#64748b;font-size:13px;margin-bottom:12px">1688 标题关键词 → 拼多多真实类目。AI 猜错类目时按此表自动修正（命中顺序从上到下，靠前的优先）。</div>
-        <div id="category-map-list"><div class="empty" style="color:#94a3b8">加载中…</div></div>
+        <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="toggleCategoryMap()">
+          <div style="font-weight:700;font-size:15px">🗂️ 类目匹配表 <span id="category-map-count" style="font-size:12px;color:#94a3b8;font-weight:400"></span></div>
+          <span id="category-map-toggle-icon" style="color:#94a3b8;font-size:12px">展开 ▼</span>
+        </div>
+        <div id="category-map-body" style="display:none;margin-top:12px">
+          <div style="color:#64748b;font-size:13px;margin-bottom:12px">1688 标题关键词 → 拼多多真实类目。AI 猜错类目时按此表自动修正（命中顺序从上到下，靠前的优先）。</div>
+          <div id="category-map-list"><div class="empty" style="color:#94a3b8">加载中…</div></div>
+        </div>
       </div>
 
       <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:18px;margin-bottom:16px">
@@ -982,14 +987,29 @@ function renderApCurrent(t) {
   `;
 }
 
+function toggleCategoryMap() {
+  const body = $('#category-map-body');
+  const icon = $('#category-map-toggle-icon');
+  if (!body) return;
+  const isHidden = body.style.display === 'none';
+  body.style.display = isHidden ? 'block' : 'none';
+  if (icon) icon.textContent = isHidden ? '收起 ▲' : '展开 ▼';
+  if (isHidden) loadCategoryMap();
+}
+
 async function loadCategoryMap() {
   const el = $('#category-map-list');
-  if (!el) return;
+  const cnt = $('#category-map-count');
   let items = [];
   try {
     const resp = await api('/api/category-map');
     items = (resp && resp.items) || [];
   } catch (e) { items = []; }
+  if (cnt) cnt.textContent = items.length ? `（${items.length} 条）` : '';
+  if (!el) return;
+  // 折叠时不渲染列表（展开时才渲染），节省资源
+  const body = $('#category-map-body');
+  if (body && body.style.display === 'none') return;
   if (!items.length) { el.innerHTML = '<div class="empty" style="color:#94a3b8">无映射。</div>'; return; }
   el.innerHTML = items.map((m, i) => `
     <div style="display:flex;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid #f1f5f9;font-size:12px">
