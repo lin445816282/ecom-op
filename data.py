@@ -2401,6 +2401,24 @@ def _fix_category_by_map(cfg: dict, title: str) -> bool:
     return False
 
 
+# 上架拼多多标题禁词：平台词/竞品平台名，确定性硬过滤（AI 不可靠，代码层兜底）
+TITLE_BANNED_WORDS = [
+    "抖音", "快手", "小红书", "淘宝", "天猫", "京东", "拼多多", "拼夕夕",
+    "微信", "微博", "唯品会", "1688", "阿里巴巴", "闲鱼", "得物", "美团",
+    "抖店", "微店",
+]
+
+
+def _clean_title(title: str) -> str:
+    """清洗标题：去掉平台词/违规词，压缩多余空格。确定性过滤，不依赖 AI。"""
+    t = (title or "").strip()
+    for w in TITLE_BANNED_WORDS:
+        t = t.replace(w, "")
+    t = " ".join(t.split())          # 压缩连续空格
+    t = t.strip(" -·,，。|、·")      # 去掉首尾残留分隔符
+    return t
+
+
 def ai_generate_publish_config(product: dict, pricing: dict = None) -> dict:
     """DeepSeek 把 1688 抓取的 product 自动生成 publish.js 的 config。
 
@@ -2436,7 +2454,7 @@ def ai_generate_publish_config(product: dict, pricing: dict = None) -> dict:
         "{\n"
         '  "categoryKeyword": "类目搜索关键词（2-4字，取 categoryPath 第二级最具体品类词，如 手套/婚庆/仿真花/气球）",\n'
         '  "categoryPath": "完整类目路径，严格用 > 分隔三级（一级>二级>三级），每级是拼多多真实类目名，禁止一级用 / 混多个词。例：服饰配件/饰品 > 手套 > 分指手套",\n'
-        '  "title": "优化后标题，≤30个汉字、≤60字符，保留核心卖点+场景词，不要夸张违规词",\n'
+        '  "title": "优化后标题，≤30个汉字、≤60字符，保留核心卖点+场景词，不要夸张违规词，严禁出现平台名（抖音/快手/淘宝/天猫/京东/拼多多/小红书/微信等）",\n'
         '  "specs": [{"type":"规格类型名(颜色/款式/尺寸/型号)","values":["值1","值2"]}],\n'
         '  "priceBySpec2": {"规格2的值":{"cost":进价(元)}},\n'
         '  "stock": 库存数字(默认500),\n'
@@ -2484,6 +2502,8 @@ def ai_generate_publish_config(product: dict, pricing: dict = None) -> dict:
         return {"config": None, "warning": "", "error": "AI 未提取到规格"}
     if not cfg.get("title"):
         cfg["title"] = title[:60]
+    # 硬过滤平台词/违规词（抖音/快手/淘宝等），AI 不可靠，代码层兜底；清空则回退原始标题
+    cfg["title"] = _clean_title(cfg["title"]) or _clean_title(title)[:60] or title[:60]
     if not cfg.get("categoryKeyword"):
         cfg["categoryKeyword"] = "婚庆"
     # 规格类型名规范化：颜色/色号/花色 → 款式（拼多多「颜色/色号」用色卡选择填不了，「花色」不在规格类型列表）
