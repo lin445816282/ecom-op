@@ -1518,9 +1518,13 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/published-goods" and self.command == "GET":
             shop_id = qs.get("shop_id", [""])[0]
             status = qs.get("status", [""])[0]
+            category = qs.get("category", [""])[0]
             shop_id = int(shop_id) if str(shop_id).isdigit() and shop_id else None
             return _json(self, {"items": catalog.list_published_goods(
-                shop_id=shop_id, status=(status or None))})
+                shop_id=shop_id, status=(status or None), category=(category or None))})
+
+        if path == "/api/published-goods/categories" and self.command == "GET":
+            return _json(self, {"categories": catalog.list_published_categories()})
 
         if path == "/api/published-goods/image" and self.command == "GET":
             return self._serve_pdd_image(qs.get("path", [""])[0])

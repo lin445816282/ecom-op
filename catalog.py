@@ -932,8 +932,8 @@ def save_published_good(**fields) -> dict:
         return dict(c.execute("SELECT * FROM published_goods WHERE id=?", (cur.lastrowid,)).fetchone())
 
 
-def list_published_goods(shop_id: int = None, status: str = None, limit: int = 300) -> list[dict]:
-    """上架商品列表，可按店铺/状态筛选；sku_details 解析成数组返回。"""
+def list_published_goods(shop_id: int = None, status: str = None, category: str = None, limit: int = 300) -> list[dict]:
+    """上架商品列表，可按店铺/状态/类目筛选；sku_details 解析成数组返回。"""
     sql = "SELECT * FROM published_goods WHERE 1=1"
     args = []
     if shop_id:
@@ -942,6 +942,9 @@ def list_published_goods(shop_id: int = None, status: str = None, limit: int = 3
     if status:
         sql += " AND status=?"
         args.append(status)
+    if category:
+        sql += " AND category=?"
+        args.append(category)
     sql += " ORDER BY id DESC LIMIT ?"
     args.append(limit)
     with closing(_conn()) as c:
@@ -952,6 +955,16 @@ def list_published_goods(shop_id: int = None, status: str = None, limit: int = 3
         except Exception:
             r["sku_details"] = []
     return rows
+
+
+def list_published_categories() -> list[str]:
+    """已上架商品出现过的所有类目（去重、非空、排序），供前端筛选下拉使用。"""
+    with closing(_conn()) as c:
+        rows = c.execute(
+            "SELECT DISTINCT category FROM published_goods "
+            "WHERE category IS NOT NULL AND category != '' ORDER BY category"
+        ).fetchall()
+    return [r[0] for r in rows]
 
 
 def init_db() -> None:

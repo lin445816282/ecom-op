@@ -1120,18 +1120,44 @@ function startApListPolling() {
 
 // 上架列表：已上架商品台账（存表 published_goods），一键上架成功后自动归档
 const PG_SHOP = {5:'嘉裕工艺品', 3:'如若月下', 1:'闲时来工艺', 6:'欧世艺'};
-const pgFilter = { shop_id: '', status: '' };
+const pgFilter = { shop_id: '', status: '', category: '' };
+let pgCategoriesCache = null;
+async function getPgCategories() {
+  if (pgCategoriesCache) return pgCategoriesCache;
+  try {
+    const resp = await api('/api/published-goods/categories');
+    pgCategoriesCache = (resp && resp.categories) || [];
+  } catch (e) { pgCategoriesCache = []; }
+  return pgCategoriesCache;
+}
+// 类目下拉：按一级类目分组（optgroup），完整路径为选项值
+function pgCategoryOptions(cats) {
+  const groups = {};
+  cats.forEach(c => {
+    const l1 = String(c).split(' > ')[0] || '其他';
+    (groups[l1] = groups[l1] || []).push(c);
+  });
+  return Object.entries(groups).map(([l1, list]) =>
+    `<optgroup label="${esc(l1)}">` +
+    list.map(c => `<option value="${esc(c)}" ${pgFilter.category === c ? 'selected' : ''}>${esc(c)}</option>`).join('') +
+    `</optgroup>`).join('');
+}
 
 async function renderPublishedGoods() {
   const el = $('#view-publishedgoods');
   el.innerHTML = '<div style="padding:24px;color:#666">加载中…</div>';
-  let items = [];
+  let items = [], cats = [];
   try {
     const qs = [];
     if (pgFilter.shop_id) qs.push('shop_id=' + pgFilter.shop_id);
     if (pgFilter.status) qs.push('status=' + pgFilter.status);
-    const resp = await api('/api/published-goods' + (qs.length ? '?' + qs.join('&') : ''));
+    if (pgFilter.category) qs.push('category=' + encodeURIComponent(pgFilter.category));
+    const [resp, catResp] = await Promise.all([
+      api('/api/published-goods' + (qs.length ? '?' + qs.join('&') : '')),
+      getPgCategories(),
+    ]);
     items = (resp && resp.items) || [];
+    cats = catResp || [];
   } catch (e) { items = []; }
 
   const published = items.filter(x => x.status === 'published');
@@ -1228,6 +1254,10 @@ async function renderPublishedGoods() {
           <option value="published" ${pgFilter.status === 'published' ? 'selected' : ''}>✅ 已上架</option>
           <option value="failed" ${pgFilter.status === 'failed' ? 'selected' : ''}>❌ 失败</option>
         </select>
+        <select id="pg-category" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;background:#fff;max-width:320px">
+          <option value="">全部类目</option>
+          ${pgCategoryOptions(cats)}
+        </select>
         <button class="btn" id="pg-refresh" style="font-size:13px;padding:8px 14px">🔄 刷新</button>
       </div>
       <div id="pg-list">${cards || '<div class="empty" style="color:#94a3b8">暂无上架记录。去「一键上架」跑一单，成功后自动归档到这里。</div>'}</div>
@@ -1236,6 +1266,7 @@ async function renderPublishedGoods() {
 
   $('#pg-shop').onchange = () => { pgFilter.shop_id = $('#pg-shop').value; renderPublishedGoods(); };
   $('#pg-status').onchange = () => { pgFilter.status = $('#pg-status').value; renderPublishedGoods(); };
+  $('#pg-category').onchange = () => { pgFilter.category = $('#pg-category').value; renderPublishedGoods(); };
   $('#pg-refresh').onclick = () => renderPublishedGoods();
 }
 
