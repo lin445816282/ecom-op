@@ -148,7 +148,7 @@ async function api(path, method='GET', body) {
   const res = await fetch(BASE + path, opt);
   if (res.status === 401 && !path.includes('/auth/login')) {
     localStorage.removeItem('ecom_op_token');
-    showLogin();
+    redirectLogin();
     throw new Error('未授权，请先登录');
   }
   if (!res.ok) {
@@ -157,6 +157,10 @@ async function api(path, method='GET', body) {
     throw new Error(msg);
   }
   return res.json();
+}
+
+function redirectLogin() {
+  location.replace(BASE + '/login.html');
 }
 
 function showLogin() {
@@ -6582,7 +6586,7 @@ function bindShopButtons() {
 }
 
 async function init() {
-  if (!getToken()) { showLogin(); return; }
+  if (!getToken()) { redirectLogin(); return; }
   $('#date-pill').textContent = todayCN();
   renderGuideSubMenu();
   applyPermFilter();  // 按当前用户权限隐藏无权限导航（含 admin-only）

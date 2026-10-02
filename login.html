@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>登录 · 电商运营工作台</title>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body {
+      min-height:100vh; display:flex; align-items:center; justify-content:center;
+      background:linear-gradient(135deg,#0f172a 0%,#1e3a8a 100%);
+      font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;
+      padding:24px;
+    }
+    .box {
+      background:#fff; border-radius:20px; padding:36px 32px;
+      width:100%; max-width:380px; box-shadow:0 24px 80px rgba(0,0,0,.35);
+    }
+    .logo {
+      width:56px; height:56px; border-radius:16px;
+      background:linear-gradient(135deg,#2563eb,#1d4ed8);
+      color:#fff; font-size:28px; font-weight:800;
+      display:flex; align-items:center; justify-content:center; margin:0 auto 16px;
+    }
+    h1 { font-size:22px; font-weight:700; color:#17203a; text-align:center; }
+    .sub { font-size:13px; color:#8899b0; text-align:center; margin-top:6px; margin-bottom:28px; }
+    .field { margin-bottom:14px; }
+    label { display:block; font-size:12px; color:#66708a; font-weight:600; margin-bottom:6px; }
+    input {
+      width:100%; padding:12px 14px; border:1px solid #e4e7f1; border-radius:10px;
+      font-size:14px; outline:none; transition:border-color .15s;
+    }
+    input:focus { border-color:#2563eb; box-shadow:0 0 0 3px rgba(37,99,235,.1); }
+    button {
+      width:100%; padding:13px; margin-top:6px; background:#2563eb; color:#fff;
+      border:none; border-radius:10px; font-size:15px; font-weight:600; cursor:pointer; transition:background .15s;
+    }
+    button:hover { background:#1d4ed8; }
+    button:disabled { background:#93c5fd; cursor:not-allowed; }
+    .err { min-height:20px; margin-top:12px; font-size:13px; color:#dc2626; text-align:center; }
+    .hint { font-size:11px; color:#94a3b8; text-align:center; margin-top:20px; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <div class="logo">营</div>
+    <h1>电商运营工作台</h1>
+    <div class="sub">账号密码登录</div>
+    <div class="field">
+      <label>账号</label>
+      <input id="username" type="text" placeholder="请输入账号" autocomplete="username">
+    </div>
+    <div class="field">
+      <label>密码</label>
+      <input id="password" type="password" placeholder="请输入密码" autocomplete="current-password">
+    </div>
+    <button id="login-btn">登 录</button>
+    <div class="err" id="err"></div>
+    <div class="hint">默认密码 8283103 · 账号由管理员分配</div>
+  </div>
+  <script>
+    (function () {
+      var BASE = location.pathname.indexOf('/ecom-op') === 0 ? '/ecom-op' : '';
+      // 已登录则直接回主页
+      if (localStorage.getItem('ecom_op_token')) {
+        location.replace(BASE + '/');
+        return;
+      }
+      var btn = document.getElementById('login-btn');
+      var err = document.getElementById('err');
+      function doLogin() {
+        var u = document.getElementById('username').value.trim();
+        var p = document.getElementById('password').value.trim();
+        if (!u || !p) { err.textContent = '请输入账号和密码'; return; }
+        btn.disabled = true; btn.textContent = '登录中…';
+        fetch(BASE + '/api/auth/login', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: u, password: p })
+        }).then(function (r) { return r.json().catch(function () { return null; }); })
+          .then(function (j) {
+            if (j && j.ok) {
+              localStorage.setItem('ecom_op_token', j.token);
+              localStorage.setItem('ecom_op_user', (j.user && j.user.name) || u);
+              localStorage.setItem('ecom_op_user_info', JSON.stringify(j.user || {}));
+              localStorage.setItem('ecom_op_perms', JSON.stringify((j.user && j.user.permissions) || ['*']));
+              location.replace(BASE + '/');
+            } else {
+              btn.disabled = false; btn.textContent = '登 录';
+              err.textContent = (j && j.error) || '账号或密码错误';
+            }
+          })
+          .catch(function () { btn.disabled = false; btn.textContent = '登 录'; err.textContent = '网络错误'; });
+      }
+      btn.onclick = doLogin;
+      document.getElementById('password').onkeydown = function (e) { if (e.key === 'Enter') doLogin(); };
+      document.getElementById('username').focus();
+    })();
+  </script>
+</body>
+</html>

@@ -47,7 +47,7 @@ PDD_COMMENTS_FULL_JS = r"C:\tmp\fetch_comments_full.js"
 
 # 访问口令：环境变量 ECOM_OP_TOKEN 可覆盖，默认见下。静态资源公开，/api/* 需带口令。
 ACCESS_TOKEN = os.environ.get("ECOM_OP_TOKEN", "Alcz8283103")
-AUTH_WHITELIST = {"/", "/index.html", "/app.js", "/style.css", "/favicon.ico", "/api/auth/login"}
+AUTH_WHITELIST = {"/", "/index.html", "/app.js", "/style.css", "/favicon.ico", "/login.html", "/api/auth/login"}
 
 
 def _sanitize(obj):
@@ -1845,6 +1845,8 @@ class Handler(BaseHTTPRequestHandler):
         # 静态页面
         if path in ("/", "/index.html") and self.command == "GET":
             return self._serve_file("index.html", "text/html; charset=utf-8")
+        if path in ("/login.html",) and self.command == "GET":
+            return self._serve_file("login.html", "text/html; charset=utf-8")
         if path in ("/app.js",) and self.command == "GET":
             return self._serve_file("app.js", "text/javascript; charset=utf-8")
         if path in ("/style.css",) and self.command == "GET":
