@@ -423,7 +423,8 @@ async function fillByType(c, selector, text){
     // 累计已填行数（空行数 = 本轮填的行数）
     await ev(c, `window.__filledRows += ${o.rows||0};`);
     // 单调向下滚动，触发虚拟列表渲染更多行
-    await ev(c, `window.scrollBy(0, 400)`);
+    // (task_241 教训：30行SKU时表格有独立滚动容器 sh>ch，window.scrollBy 滚页面不触发表格渲染，必须滚表格容器)
+    await ev(c, `(()=>{const sku=document.querySelector('.skuModule')||document.querySelector('.sku-list')||document;const sc=[...sku.querySelectorAll('div')].find(d=>d.scrollHeight>d.clientHeight+10);if(sc){sc.scrollTop+=400;return 'sku';}window.scrollBy(0,400);return 'window';})()`);
     await sleep(500);
   }
   log('  累计填', totalFilled, '个单元格 / 目标', totalSku*3, '个');

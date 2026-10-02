@@ -2615,7 +2615,7 @@ def _autopublish_bg(task_id: int, pricing: dict = None):
     if not port:
         return _fail("publish", f"店铺 {shop_id} 未配置 CDP 端口")
     with _shop_lock(shop_id):
-        res = _run_node_script("publish.js", [config_win, str(port)], timeout=240)
+        res = _run_node_script("publish.js", [config_win, str(port)], timeout=360)
     # 读取 publish.js 自动学习的类目映射，固化到数据库（下次同类商品直接命中）
     try:
         _learn_path = os.path.join(outdir_wsl, "config.category_learn.json")
