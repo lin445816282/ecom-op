@@ -645,6 +645,7 @@ CREATE TABLE IF NOT EXISTS users (
     password_hash TEXT NOT NULL,
     name TEXT NOT NULL,
     role TEXT DEFAULT 'operator',
+    permissions TEXT DEFAULT '["*"]',
     created_at TEXT DEFAULT (datetime('now','localtime'))
 );
 CREATE TABLE IF NOT EXISTS sessions (
@@ -1543,6 +1544,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
         _cols = {r[1] for r in conn.execute(f"PRAGMA table_info({_t})").fetchall()}
         if "operator_name" not in _cols:
             conn.execute(f"ALTER TABLE {_t} ADD COLUMN operator_name TEXT DEFAULT ''")
+    # users 表 permissions 列（模块访问权限，JSON 数组，["*"]=全权限）
+    ucols = {r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
+    if "permissions" not in ucols:
+        conn.execute("ALTER TABLE users ADD COLUMN permissions TEXT DEFAULT '[\"*\"]'")
+        # 存量员工账号修正为员工默认权限（仅 admin 保持全权限）
+        conn.execute("UPDATE users SET permissions='[\"dashboard\",\"autopublish\",\"publishedgoods\"]' WHERE role='operator'")
     conn.commit()
 
 
@@ -1566,16 +1573,47 @@ def _verify_password(password: str, stored: str) -> bool:
         return False
 
 
-def create_user(username: str, password: str, name: str, role: str = 'operator') -> dict:
+def create_user(username: str, password: str, name: str, role: str = 'operator', permissions=None) -> dict:
+    if permissions is None:
+        # admin 全权限；员工默认只给上架相关基础权限
+        permissions = '["*"]' if role == 'admin' else '["dashboard","autopublish","publishedgoods"]'
+    if isinstance(permissions, (list, tuple)):
+        permissions = json.dumps(list(permissions), ensure_ascii=False)
     with closing(_conn()) as c:
         h = _hash_password(password)
         cur = c.execute(
-            "INSERT INTO users(username, password_hash, name, role) VALUES(?,?,?,?)",
-            (username.strip(), h, name.strip(), role),
+            "INSERT INTO users(username, password_hash, name, role, permissions) VALUES(?,?,?,?,?)",
+            (username.strip(), h, name.strip(), role, permissions),
         )
         c.commit()
         row = c.execute("SELECT * FROM users WHERE id=?", (cur.lastrowid,)).fetchone()
         return dict(row) if row else {}
+
+
+def update_user_permissions(user_id: int, permissions) -> dict:
+    """更新用户模块权限（JSON 数组）。返回更新后的用户。"""
+    if isinstance(permissions, (list, tuple)):
+        permissions = json.dumps(list(permissions), ensure_ascii=False)
+    with closing(_conn()) as c:
+        c.execute("UPDATE users SET permissions=? WHERE id=?", (permissions, user_id))
+        c.commit()
+        row = c.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+        return dict(row) if row else {}
+
+
+def get_user_permissions(user_id: int) -> list:
+    """解析用户权限为 list，admin 恒为全权限。"""
+    with closing(_conn()) as c:
+        row = c.execute("SELECT role, permissions FROM users WHERE id=?", (user_id,)).fetchone()
+    if not row:
+        return []
+    if row["role"] == "admin":
+        return ["*"]
+    try:
+        perms = json.loads(row["permissions"] or '["*"]')
+        return perms if isinstance(perms, list) else ["*"]
+    except Exception:
+        return ["*"]
 
 
 def verify_login(username: str, password: str) -> dict:
@@ -1610,6 +1648,8 @@ def list_users() -> list[dict]:
         for r in rows:
             d = dict(r)
             d.pop("password_hash", None)  # 绝不泄露密码哈希
+            # permissions 解析成数组，admin 恒为 ["*"]
+            d["permissions"] = get_user_permissions(d["id"])
             out.append(d)
         return out
 

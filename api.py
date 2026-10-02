@@ -145,27 +145,56 @@ class Handler(BaseHTTPRequestHandler):
                 token = catalog.create_session(user["id"])
                 return _json(self, {"ok": True, "token": token,
                                     "user": {"id": user["id"], "username": user["username"],
-                                             "name": user["name"], "role": user["role"]}})
+                                             "name": user["name"], "role": user["role"],
+                                             "permissions": catalog.get_user_permissions(user["id"])}})
             return _json(self, {"error": "账号或密码错误"}, 401)
 
-        # 用户管理（管理员创建/查看/删除员工账号）
+        # 用户管理（管理员创建/查看/删除员工账号 + 权限赋予）
+        def _require_admin():
+            u = self._current_user(qs) or {}
+            if u.get("role") != "admin":
+                return None
+            return u
         if path == "/api/users" and self.command == "GET":
+            if not _require_admin():
+                return _json(self, {"error": "仅管理员可管理用户"}, 403)
             return _json(self, {"items": catalog.list_users()})
         if path == "/api/users" and self.command == "POST":
+            if not _require_admin():
+                return _json(self, {"error": "仅管理员可管理用户"}, 403)
             item = self._read_body()
             username = str(item.get("username") or "").strip()
             name = str(item.get("name") or "").strip() or username
             password = str(item.get("password") or "8283103").strip() or "8283103"
             role = str(item.get("role") or "operator").strip()
+            permissions = item.get("permissions")
             if not username:
                 return _json(self, {"error": "账号不能为空"}, 400)
             try:
-                user = catalog.create_user(username, password, name, role)
+                user = catalog.create_user(username, password, name, role, permissions)
                 return _json(self, {"ok": True, "user": {"id": user["id"], "username": user["username"],
-                                                         "name": user["name"], "role": user["role"]}})
+                                                         "name": user["name"], "role": user["role"],
+                                                         "permissions": catalog.get_user_permissions(user["id"])}})
             except Exception as e:
                 return _json(self, {"error": f"创建失败（账号可能已存在）: {e}"}, 400)
+        if path.startswith("/api/users/") and self.command == "POST" and path.endswith("/permissions"):
+            if not _require_admin():
+                return _json(self, {"error": "仅管理员可管理用户"}, 403)
+            item = self._read_body()
+            try:
+                uid = int(path.rsplit("/", 2)[-2])
+            except (ValueError, IndexError):
+                return _json(self, {"error": "非法 id"}, 400)
+            perms = item.get("permissions")
+            if not isinstance(perms, list):
+                return _json(self, {"error": "permissions 必须是数组"}, 400)
+            user = catalog.update_user_permissions(uid, perms)
+            if not user:
+                return _json(self, {"error": "用户不存在"}, 404)
+            return _json(self, {"ok": True, "permissions": catalog.get_user_permissions(uid)})
         if path.startswith("/api/users/") and self.command == "DELETE":
+            if not _require_admin():
+                return _json(self, {"error": "仅管理员可管理用户"}, 403)
             try:
                 uid = int(path.rsplit("/", 1)[-1])
             except ValueError:

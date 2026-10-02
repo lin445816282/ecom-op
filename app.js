@@ -32,7 +32,31 @@ const VIEWS = {
   autopublish: {title:'一键上架', sub:'输入 1688 链接 → 自动抓取 → AI 生成配置 → CDP 上架到拼多多。'},
   publishedgoods: {title:'上架列表', sub:'已上架商品台账：主图/标题/SKU价格/店铺/类目/状态，一键上架成功后自动归档。'},
   aiboss: {title:'AI老板', sub:'AI 自主经营台账：选品 → 出单 → 用户下单填单号 → 独立利润记账，从 0 起算，不虚报。'},
+  useradmin: {title:'用户与权限', sub:'管理员工账号，按模块勾选各员工可访问的功能。'},
 };
+
+// 可授权模块清单（权限赋予勾选用）。dashboard 运营总览 + 运营指南始终放行，不在此列。
+const PERM_MODULES = [
+  { key:'packing', name:'打单登记', icon:'🖨' },
+  { key:'products', name:'商品投产', icon:'✚' },
+  { key:'catalog', name:'商品库', icon:'📦' },
+  { key:'freight', name:'运费结算', icon:'🚚' },
+  { key:'competitors', name:'竞品监控', icon:'🔍' },
+  { key:'titleopt', name:'标题优化', icon:'✏️' },
+  { key:'suppliers', name:'供应商', icon:'🏭' },
+  { key:'keywords', name:'关键词库', icon:'⌘' },
+  { key:'tasks', name:'SOP任务', icon:'✔' },
+  { key:'scheduler', name:'任务调度', icon:'⏰' },
+  { key:'reviews', name:'评价监控', icon:'⭐' },
+  { key:'logs', name:'运营日志', icon:'◷' },
+  { key:'errors', name:'错误处理', icon:'⚠️' },
+  { key:'autopublish', name:'一键上架', icon:'🚀' },
+  { key:'publishedgoods', name:'上架列表', icon:'📋' },
+  { key:'aiboss', name:'AI老板', icon:'🤖' },
+  { key:'promofinance', name:'推广财务', icon:'💰' },
+  { key:'profit', name:'盈利看板', icon:'📊' },
+  { key:'sale', name:'销售看板', icon:'📈' },
+];
 
 // 运营指南分组（单一数据源：新增子模块只需在这里加一条，侧边栏子菜单 + 目录页自动生成）
 const GUIDE_ITEMS = [
@@ -89,6 +113,33 @@ const BASE = location.pathname.startsWith('/ecom-op') ? '/ecom-op' : '';
 
 function getToken() { return localStorage.getItem('ecom_op_token') || ''; }
 
+function getPerms() {
+  try { return JSON.parse(localStorage.getItem('ecom_op_perms') || '["*"]'); }
+  catch (e) { return ['*']; }
+}
+function getUserInfo() {
+  try { return JSON.parse(localStorage.getItem('ecom_op_user_info') || '{}'); }
+  catch (e) { return {}; }
+}
+function getUserRole() { return getUserInfo().role || ''; }
+// 判断当前用户能否访问某视图：dashboard/运营指南始终放行，useradmin 仅管理员
+function canView(view) {
+  if (['dashboard','guidehub','guide','douyin','knowledge','calendar'].includes(view)) return true;
+  if (view === 'useradmin') return getUserRole() === 'admin';
+  const perms = getPerms();
+  if (perms.includes('*')) return true;
+  return perms.includes(view);
+}
+// 按权限过滤侧边栏导航（无权限的隐藏，admin-only 的仅管理员可见）
+function applyPermFilter() {
+  $$('.nav-item[data-view]').forEach(b => {
+    const v = b.dataset.view;
+    const adminOnly = b.dataset.adminOnly === '1';
+    if (adminOnly) { b.hidden = getUserRole() !== 'admin'; return; }
+    b.hidden = !canView(v);
+  });
+}
+
 async function api(path, method='GET', body) {
   const opt = {method, headers:{'Content-Type':'application/json'}};
   const token = getToken();
@@ -133,6 +184,8 @@ function showLogin() {
       if (r.ok && j && j.ok) {
         localStorage.setItem('ecom_op_token', j.token);
         localStorage.setItem('ecom_op_user', (j.user && j.user.name) || username);
+        localStorage.setItem('ecom_op_user_info', JSON.stringify(j.user || {}));
+        localStorage.setItem('ecom_op_perms', JSON.stringify((j.user && j.user.permissions) || ['*']));
         location.reload();
       } else {
         $('#login-err').textContent = (j && j.error) || '账号或密码错误';
@@ -537,6 +590,8 @@ function setNav(active) {
 }
 
 function setView(view) {
+  // 权限拦截：无权限的视图直接拒绝（含 useradmin 仅管理员）
+  if (!canView(view)) { toast('无权限访问该模块'); return; }
   state.view = view;
   setNav(view);
   $$('.view').forEach(v => v.hidden = true);
@@ -568,6 +623,7 @@ function setView(view) {
   if (view === 'autopublish') renderAutopublish();
   if (view === 'publishedgoods') renderPublishedGoods();
   if (view === 'aiboss') renderAiBoss();
+  if (view === 'useradmin') renderUserAdmin();
 }
 
 // 错误处理：错误知识库（错误类型 → 处理技能 + 出现次数，遇到一次点一次）
@@ -933,7 +989,7 @@ async function renderAutopublish() {
   const batchBtn = $('#ap-batch-repub-btn');
   if (batchBtn) batchBtn.onclick = batchRepublish;
   const userMgrBtn = $('#ap-user-mgr-btn');
-  if (userMgrBtn) userMgrBtn.onclick = showUserManager;
+  if (userMgrBtn) userMgrBtn.onclick = () => setView('useradmin');
 }
 
 const AP_STAGE = { scrape:'抓取1688', ai:'AI生成配置', publish:'CDP上架' };
@@ -1219,6 +1275,125 @@ function showUserManager() {
 
   $('#user-mgr-close').onclick = () => overlay.remove();
   overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+
+  loadUsers();
+}
+
+// 用户与权限视图（独立 tab，仅管理员可见）：用户列表 + 权限赋予
+let _uaUsers = [];
+function renderUserAdmin() {
+  const el = $('#view-useradmin');
+  el.innerHTML = `
+    <div style="padding:20px;max-width:920px">
+      <div class="panel" style="padding:16px;margin-bottom:16px;border-radius:12px">
+        <div style="font-size:15px;font-weight:700;color:#17203a;margin-bottom:12px">➕ 添加员工账号</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <input id="ua-username" placeholder="登录账号" style="flex:1;min-width:130px;padding:9px 12px;border:1px solid #e4e7f1;border-radius:8px;font-size:13px">
+          <input id="ua-name" placeholder="姓名（业绩显示）" style="flex:1;min-width:130px;padding:9px 12px;border:1px solid #e4e7f1;border-radius:8px;font-size:13px">
+          <select id="ua-role" style="padding:9px 12px;border:1px solid #e4e7f1;border-radius:8px;font-size:13px;background:#fff">
+            <option value="operator">👤 员工</option>
+            <option value="admin">👑 管理员</option>
+          </select>
+          <button id="ua-add-btn" style="padding:9px 18px;background:#2563eb;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap">添加</button>
+        </div>
+        <div style="font-size:12px;color:#94a3b8;margin-top:8px">默认密码 <b>8283103</b>。员工默认权限 = 一键上架 + 上架列表，添加后点「🔐 权限」调整。</div>
+      </div>
+      <div id="ua-list" style="display:flex;flex-direction:column;gap:12px"><div style="color:#94a3b8;font-size:13px;padding:12px">加载中…</div></div>
+    </div>`;
+
+  const permSummary = u => {
+    const p = u.permissions || [];
+    if (u.role === 'admin' || p.includes('*')) return '全部模块';
+    return p.length ? p.length + ' 个模块' : '无模块';
+  };
+  const userCard = u => `
+    <div style="background:#fff;border:1px solid #eef1f5;border-radius:12px;padding:14px 16px">
+      <div style="display:flex;align-items:center;gap:12px">
+        <div style="width:40px;height:40px;border-radius:50%;background:${u.role==='admin'?'#f59e0b':'#2563eb'};color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:16px;flex-shrink:0">${esc((u.name||u.username||'?')[0])}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:600;font-size:14px;color:#17203a">${esc(u.name)} <span style="color:#94a3b8;font-weight:400">@${esc(u.username)}</span></div>
+          <div style="font-size:12px;color:#94a3b8;margin-top:2px">${u.role==='admin'?'👑 管理员':'👤 员工'} · 权限：${permSummary(u)} · 创建于 ${esc((u.created_at||'').slice(0,10))}</div>
+        </div>
+        ${u.username !== 'admin' ? `
+          <button data-ua-perm="${u.id}" style="padding:6px 12px;background:#eef2ff;color:#2563eb;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap">🔐 权限</button>
+          <button data-ua-del="${u.id}" style="padding:6px 12px;background:#fef2f2;color:#dc2626;border:none;border-radius:8px;font-size:12px;cursor:pointer;white-space:nowrap">删除</button>
+        ` : '<span style="font-size:11px;color:#94a3b8;white-space:nowrap">内置管理员</span>'}
+      </div>
+      <div id="ua-perm-${u.id}" style="display:none;margin-top:12px;padding-top:12px;border-top:1px dashed #eef1f5"></div>
+    </div>`;
+
+  async function loadUsers() {
+    const box = $('#ua-list');
+    try {
+      const resp = await api('/api/users');
+      _uaUsers = (resp && resp.items) || [];
+      box.innerHTML = _uaUsers.map(userCard).join('');
+      box.querySelectorAll('[data-ua-del]').forEach(btn => {
+        btn.onclick = async () => {
+          if (!confirm('确认删除该用户？其登录与操作记录将保留，但无法再登录。')) return;
+          try { await api('/api/users/' + btn.dataset.uaDel, 'DELETE'); toast('已删除'); loadUsers(); }
+          catch (e) { toast('删除失败：' + e.message); }
+        };
+      });
+      box.querySelectorAll('[data-ua-perm]').forEach(btn => {
+        btn.onclick = () => togglePermEditor(btn.dataset.uaPerm);
+      });
+    } catch (e) { box.innerHTML = '<div style="color:#dc2626;font-size:13px;padding:12px">加载失败：' + e.message + '</div>'; }
+  }
+
+  function togglePermEditor(uid) {
+    const box = $('#ua-perm-' + uid);
+    if (!box) return;
+    if (box.style.display !== 'none') { box.style.display = 'none'; box.innerHTML = ''; return; }
+    const user = _uaUsers.find(u => String(u.id) === String(uid));
+    if (!user) return;
+    const cur = new Set((user.permissions || []).filter(p => p !== '*'));
+    const isAll = (user.permissions || []).includes('*');
+    box.style.display = 'block';
+    box.innerHTML = `
+      <div style="font-size:13px;font-weight:600;color:#17203a;margin-bottom:10px">🔐 赋予「${esc(user.name)}」模块权限</div>
+      <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+        <button data-ua-all="1" style="padding:4px 12px;background:#f1f5f9;color:#475569;border:1px solid #e2e8f0;border-radius:6px;font-size:12px;cursor:pointer">全选</button>
+        <button data-ua-all="0" style="padding:4px 12px;background:#f1f5f9;color:#475569;border:1px solid #e2e8f0;border-radius:6px;font-size:12px;cursor:pointer">清空</button>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-bottom:12px">
+        ${PERM_MODULES.map(m => `
+          <label style="display:flex;align-items:center;gap:6px;padding:8px 10px;border:1px solid #eef1f5;border-radius:8px;font-size:12px;color:#334155;cursor:pointer">
+            <input type="checkbox" data-ua-mod="${m.key}" ${cur.has(m.key) ? 'checked' : ''} style="width:15px;height:15px;accent-color:#2563eb">
+            <span>${m.icon} ${m.name}</span>
+          </label>`).join('')}
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button data-ua-cancel style="padding:7px 14px;background:#f1f5f9;color:#475569;border:none;border-radius:8px;font-size:12px;cursor:pointer">取消</button>
+        <button data-ua-save style="padding:7px 16px;background:#2563eb;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">保存权限</button>
+      </div>`;
+    box.querySelector('[data-ua-all="1"]').onclick = () => box.querySelectorAll('[data-ua-mod]').forEach(c => c.checked = true);
+    box.querySelector('[data-ua-all="0"]').onclick = () => box.querySelectorAll('[data-ua-mod]').forEach(c => c.checked = false);
+    box.querySelector('[data-ua-cancel]').onclick = () => { box.style.display = 'none'; box.innerHTML = ''; };
+    box.querySelector('[data-ua-save]').onclick = async () => {
+      const perms = [...box.querySelectorAll('[data-ua-mod]:checked')].map(c => c.dataset.uaMod);
+      if (!perms.includes('dashboard')) perms.unshift('dashboard');  // dashboard 基础页始终保留
+      try {
+        await api(`/api/users/${uid}/permissions`, 'POST', { permissions: perms });
+        toast('权限已保存');
+        box.style.display = 'none'; box.innerHTML = '';
+        loadUsers();
+      } catch (e) { toast('保存失败：' + e.message); }
+    };
+  }
+
+  $('#ua-add-btn').onclick = async () => {
+    const username = ($('#ua-username').value || '').trim();
+    const name = ($('#ua-name').value || '').trim();
+    const role = $('#ua-role').value;
+    if (!username) { toast('请填登录账号'); return; }
+    try {
+      await api('/api/users', 'POST', { username, name: name || username, role });
+      toast('已添加 ' + (name || username));
+      $('#ua-username').value = ''; $('#ua-name').value = '';
+      loadUsers();
+    } catch (e) { toast('添加失败：' + e.message); }
+  };
 
   loadUsers();
 }
@@ -6410,6 +6585,7 @@ async function init() {
   if (!getToken()) { showLogin(); return; }
   $('#date-pill').textContent = todayCN();
   renderGuideSubMenu();
+  applyPermFilter();  // 按当前用户权限隐藏无权限导航（含 admin-only）
   $$('.nav-item').forEach(b => {
     if (b.classList.contains('nav-parent')) {
       b.onclick = () => toggleNavGroup(b.dataset.group || 'guide');
