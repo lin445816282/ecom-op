@@ -151,6 +151,12 @@ h2 { font-size: 18px; margin: 0; letter-spacing: -.01em; font-weight: 700; }
 }
 .shop-btn:hover { color: var(--brand); }
 .shop-btn.active { background: var(--grad); color: white; box-shadow: var(--shadow-sm); }
+.logout-btn {
+  border: 1px solid transparent; background: transparent; color: #dc2626;
+  padding: 4px 13px; border-radius: 999px; font-size: 12px; font-weight: 600;
+  cursor: pointer; transition: .18s;
+}
+.logout-btn:hover { color: #b91c1c; }
 
 /* ==========================================================================
    Hero
