@@ -88,7 +88,7 @@ class Handler(BaseHTTPRequestHandler):
             return {}
 
     def _authed(self, path, qs):
-        """鉴权：静态资源 + 登录接口放行，其余 /api/* 校验访问口令。"""
+        """鉴权：静态资源 + 登录接口放行，其余 /api/* 校验访问口令（系统 token 或用户 session）。"""
         if path in AUTH_WHITELIST:
             return True
         if path.startswith("/static/"):
@@ -98,7 +98,20 @@ class Handler(BaseHTTPRequestHandler):
         token = self.headers.get("Authorization", "").replace("Bearer ", "").strip()
         if not token:
             token = (qs.get("token") or [""])[0]
-        return token == ACCESS_TOKEN
+        if not token:
+            return False
+        if token == ACCESS_TOKEN:
+            return True
+        return bool(catalog.get_user_by_token(token))
+
+    def _current_user(self, qs):
+        """从请求解析当前操作人（系统 token → AI老板；session token → 用户）。"""
+        token = self.headers.get("Authorization", "").replace("Bearer ", "").strip()
+        if not token:
+            token = (qs.get("token") or [""])[0]
+        if token == ACCESS_TOKEN:
+            return {"id": 0, "username": "system", "name": "AI老板", "role": "system"}
+        return catalog.get_user_by_token(token)
 
     def _route(self):
         parsed = urlparse(self.path)
@@ -118,13 +131,49 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authed(path, qs):
             return _json(self, {"error": "未授权，请先登录"}, 401)
 
-        # 登录接口
+        # 登录接口（账号密码 + 兼容旧口令）
         if path == "/api/auth/login" and self.command == "POST":
             item = self._read_body()
-            token = str(item.get("token") or "").strip()
-            if token == ACCESS_TOKEN:
-                return _json(self, {"ok": True})
-            return _json(self, {"error": "口令错误"}, 401)
+            legacy_token = str(item.get("token") or "").strip()
+            if legacy_token == ACCESS_TOKEN:
+                return _json(self, {"ok": True, "token": ACCESS_TOKEN,
+                                    "user": {"id": 0, "username": "system", "name": "AI老板", "role": "system"}})
+            username = str(item.get("username") or "").strip()
+            password = str(item.get("password") or "").strip()
+            user = catalog.verify_login(username, password)
+            if user:
+                token = catalog.create_session(user["id"])
+                return _json(self, {"ok": True, "token": token,
+                                    "user": {"id": user["id"], "username": user["username"],
+                                             "name": user["name"], "role": user["role"]}})
+            return _json(self, {"error": "账号或密码错误"}, 401)
+
+        # 用户管理（管理员创建/查看/删除员工账号）
+        if path == "/api/users" and self.command == "GET":
+            return _json(self, {"items": catalog.list_users()})
+        if path == "/api/users" and self.command == "POST":
+            item = self._read_body()
+            username = str(item.get("username") or "").strip()
+            name = str(item.get("name") or "").strip() or username
+            password = str(item.get("password") or "8283103").strip() or "8283103"
+            role = str(item.get("role") or "operator").strip()
+            if not username:
+                return _json(self, {"error": "账号不能为空"}, 400)
+            try:
+                user = catalog.create_user(username, password, name, role)
+                return _json(self, {"ok": True, "user": {"id": user["id"], "username": user["username"],
+                                                         "name": user["name"], "role": user["role"]}})
+            except Exception as e:
+                return _json(self, {"error": f"创建失败（账号可能已存在）: {e}"}, 400)
+        if path.startswith("/api/users/") and self.command == "DELETE":
+            try:
+                uid = int(path.rsplit("/", 1)[-1])
+            except ValueError:
+                return _json(self, {"error": "非法 id"}, 400)
+            if uid == 0:
+                return _json(self, {"error": "不能删除系统账号"}, 400)
+            catalog.delete_user(uid)
+            return _json(self, {"ok": True})
 
         # 错误知识库
         if path == "/api/errors" and self.command == "GET":
@@ -756,6 +805,12 @@ class Handler(BaseHTTPRequestHandler):
             limit = qs.get("limit", ["500"])[0]
             return _json(self, {"items": catalog.sale_sku_detail(start, end, int(limit))})
 
+        if path == "/api/catalog/sale-sku-summary" and self.command == "GET":
+            start = qs.get("start", [None])[0]
+            end = qs.get("end", [None])[0]
+            limit = qs.get("limit", ["500"])[0]
+            return _json(self, {"items": catalog.sale_sku_summary(start, end, int(limit))})
+
         if path == "/api/order-time-analysis" and self.command == "GET":
             shop_id = qs.get("shop_id", [None])[0]
             days = qs.get("days", [None])[0]
@@ -1320,7 +1375,8 @@ class Handler(BaseHTTPRequestHandler):
             pricing = item.get("pricing") or {}
             if not url:
                 return _json(self, {"error": "请填写 1688 商品链接"}, 400)
-            task = catalog.create_autopublish_task(url, shop_id)
+            operator = (self._current_user(qs) or {}).get("name") or ""
+            task = catalog.create_autopublish_task(url, shop_id, operator)
             _enqueue_autopublish(task["id"], task["shop_id"], pricing)
             return _json(self, {"ok": True, "task": task})
 
@@ -1350,10 +1406,11 @@ class Handler(BaseHTTPRequestHandler):
             if not urls:
                 return _json(self, {"error": "未识别到有效的 1688 链接"}, 400)
             # 生成 url × shop 任务清单并逐个启动（并发控制靠 scrape/publish 锁，见 _SCRAPE_LOCK/_shop_lock）
+            operator = (self._current_user(qs) or {}).get("name") or ""
             tasks = []
             for u in urls:
                 for sid in shop_ids:
-                    t = catalog.create_autopublish_task(u, sid)
+                    t = catalog.create_autopublish_task(u, sid, operator)
                     tasks.append(t)
                     _enqueue_autopublish(t["id"], t["shop_id"], pricing)
             return _json(self, {"ok": True, "tasks": tasks, "count": len(tasks),
@@ -2666,6 +2723,7 @@ def _autopublish_bg(task_id: int, pricing: dict = None):
         "profit_rate": _pr.get("profit_rate"),
         "freight": _pr.get("freight"),
         "stock": cfg.get("stock"),
+        "operator_name": (catalog.get_autopublish_task(task_id) or {}).get("operator_name") or "",
     }
     if "RESULT_SUBMITTED" in out:
         m = __import__("re").search(r"RESULT_SUBMITTED goods_id=(\d+)", out)

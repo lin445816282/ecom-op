@@ -494,6 +494,7 @@ CREATE TABLE IF NOT EXISTS autopublish_tasks (
     images TEXT DEFAULT '[]',
     pdd_goods_id TEXT DEFAULT '',
     error TEXT DEFAULT '',
+    operator_name TEXT DEFAULT '',
     log TEXT DEFAULT '[]',
     created_at TEXT DEFAULT (datetime('now','localtime')),
     updated_at TEXT DEFAULT (datetime('now','localtime'))
@@ -523,6 +524,7 @@ CREATE TABLE IF NOT EXISTS published_goods (
     status TEXT DEFAULT 'published',
     published_at TEXT DEFAULT '',
     remark TEXT DEFAULT '',
+    operator_name TEXT DEFAULT '',
     created_at TEXT DEFAULT (datetime('now','localtime'))
 );
 CREATE INDEX IF NOT EXISTS idx_published_goods_status ON published_goods(status);
@@ -635,6 +637,19 @@ CREATE TABLE IF NOT EXISTS category_map (
 CREATE TABLE IF NOT EXISTS title_banned_words (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     word TEXT NOT NULL UNIQUE,
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    name TEXT NOT NULL,
+    role TEXT DEFAULT 'operator',
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+CREATE TABLE IF NOT EXISTS sessions (
+    token TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
     created_at TEXT DEFAULT (datetime('now','localtime'))
 );
 """
@@ -796,12 +811,12 @@ def remove_banned_word(word_id: int) -> bool:
         return True
 
 
-def create_autopublish_task(source_url: str, shop_id: int = 5) -> dict:
+def create_autopublish_task(source_url: str, shop_id: int = 5, operator_name: str = '') -> dict:
     """新建一键上架任务，初始状态 queued。"""
     with closing(_conn()) as c:
         cur = c.execute(
-            "INSERT INTO autopublish_tasks(source_url, shop_id, status) VALUES(?,?,?)",
-            (source_url.strip(), shop_id, "queued"),
+            "INSERT INTO autopublish_tasks(source_url, shop_id, status, operator_name) VALUES(?,?,?,?)",
+            (source_url.strip(), shop_id, "queued", operator_name.strip()),
         )
         c.commit()
         row = c.execute(
@@ -1522,7 +1537,83 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE competitors ADD COLUMN ai_status TEXT DEFAULT ''")
     if "ai_reason" not in compcols:
         conn.execute("ALTER TABLE competitors ADD COLUMN ai_reason TEXT DEFAULT ''")
+    # autopublish_tasks / published_goods 表 operator_name 列（上架操作人，员工业绩标记）
+    for _t in ("autopublish_tasks", "published_goods"):
+        _cols = {r[1] for r in conn.execute(f"PRAGMA table_info({_t})").fetchall()}
+        if "operator_name" not in _cols:
+            conn.execute(f"ALTER TABLE {_t} ADD COLUMN operator_name TEXT DEFAULT ''")
     conn.commit()
+
+
+# ----------------------------- 用户 / 会话 -----------------------------
+import hashlib as _hashlib
+import secrets as _secrets
+
+
+def _hash_password(password: str) -> str:
+    salt = _secrets.token_hex(8)
+    h = _hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), salt.encode('utf-8'), 100000)
+    return f"{salt}${h.hex()}"
+
+
+def _verify_password(password: str, stored: str) -> bool:
+    try:
+        salt, h = stored.split('$', 1)
+        calc = _hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), salt.encode('utf-8'), 100000)
+        return _secrets.compare_digest(calc.hex(), h)
+    except Exception:
+        return False
+
+
+def create_user(username: str, password: str, name: str, role: str = 'operator') -> dict:
+    with closing(_conn()) as c:
+        h = _hash_password(password)
+        cur = c.execute(
+            "INSERT INTO users(username, password_hash, name, role) VALUES(?,?,?,?)",
+            (username.strip(), h, name.strip(), role),
+        )
+        c.commit()
+        row = c.execute("SELECT * FROM users WHERE id=?", (cur.lastrowid,)).fetchone()
+        return dict(row) if row else {}
+
+
+def verify_login(username: str, password: str) -> dict:
+    with closing(_conn()) as c:
+        row = c.execute("SELECT * FROM users WHERE username=?", (username.strip(),)).fetchone()
+        if row and _verify_password(password, row["password_hash"]):
+            return dict(row)
+        return {}
+
+
+def create_session(user_id: int) -> str:
+    token = _secrets.token_hex(32)
+    with closing(_conn()) as c:
+        c.execute("INSERT OR REPLACE INTO sessions(token, user_id) VALUES(?,?)", (token, user_id))
+        c.commit()
+    return token
+
+
+def get_user_by_token(token: str) -> dict:
+    with closing(_conn()) as c:
+        row = c.execute(
+            "SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token=?",
+            (token,),
+        ).fetchone()
+        return dict(row) if row else {}
+
+
+def list_users() -> list[dict]:
+    with closing(_conn()) as c:
+        rows = c.execute("SELECT * FROM users ORDER BY id").fetchall()
+        return [dict(r) for r in rows]
+
+
+def delete_user(user_id: int) -> bool:
+    with closing(_conn()) as c:
+        c.execute("DELETE FROM users WHERE id=?", (user_id,))
+        c.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
+        c.commit()
+        return True
 
 
 # ----------------------------- 平台 / 店铺 -----------------------------

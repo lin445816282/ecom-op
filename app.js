@@ -116,28 +116,32 @@ function showLogin() {
   overlay.innerHTML = `
     <div style="background:#fff;border-radius:16px;padding:28px;width:100%;max-width:340px;box-shadow:0 20px 60px rgba(0,0,0,.4)">
       <div style="font-size:20px;font-weight:700;color:#17203a;text-align:center">🔐 电商运营工作台</div>
-      <div style="font-size:12px;color:#8899b0;text-align:center;margin-top:6px">请输入访问口令</div>
-      <input id="login-token" type="password" placeholder="访问口令" style="width:100%;margin-top:16px;padding:11px 14px;border:1px solid #e4e7f1;border-radius:10px;font-size:14px;box-sizing:border-box">
-      <button id="login-btn" style="width:100%;margin-top:12px;padding:11px;background:#2563eb;color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer">进入</button>
+      <div style="font-size:12px;color:#8899b0;text-align:center;margin-top:6px">账号密码登录</div>
+      <input id="login-username" type="text" placeholder="账号" autocomplete="username" style="width:100%;margin-top:16px;padding:11px 14px;border:1px solid #e4e7f1;border-radius:10px;font-size:14px;box-sizing:border-box">
+      <input id="login-password" type="password" placeholder="密码" autocomplete="current-password" style="width:100%;margin-top:10px;padding:11px 14px;border:1px solid #e4e7f1;border-radius:10px;font-size:14px;box-sizing:border-box">
+      <button id="login-btn" style="width:100%;margin-top:14px;padding:11px;background:#2563eb;color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer">登录</button>
       <div id="login-err" style="margin-top:10px;font-size:12px;color:#dc2626;text-align:center;min-height:16px"></div>
     </div>`;
   document.body.appendChild(overlay);
   const doLogin = async () => {
-    const t = ($('#login-token').value || '').trim();
-    if (!t) return;
+    const username = ($('#login-username').value || '').trim();
+    const password = ($('#login-password').value || '').trim();
+    if (!username || !password) return;
     try {
-      const r = await fetch(BASE + '/api/auth/login', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({token:t})});
-      if (r.ok) {
-        localStorage.setItem('ecom_op_token', t);
+      const r = await fetch(BASE + '/api/auth/login', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({username, password})});
+      const j = await r.json().catch(() => null);
+      if (r.ok && j && j.ok) {
+        localStorage.setItem('ecom_op_token', j.token);
+        localStorage.setItem('ecom_op_user', (j.user && j.user.name) || username);
         location.reload();
       } else {
-        $('#login-err').textContent = '口令错误';
+        $('#login-err').textContent = (j && j.error) || '账号或密码错误';
       }
     } catch (e) { $('#login-err').textContent = '网络错误'; }
   };
   $('#login-btn').onclick = doLogin;
-  $('#login-token').onkeydown = e => { if (e.key === 'Enter') doLogin(); };
-  $('#login-token').focus();
+  $('#login-password').onkeydown = e => { if (e.key === 'Enter') doLogin(); };
+  $('#login-username').focus();
 }
 
 // 图片大图预览弹框（点击缩略图弹出，点遮罩/✕关闭）
@@ -740,6 +744,7 @@ async function renderAutopublish() {
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
           <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:#64748b;cursor:pointer"><input type="checkbox" id="ap-check-all" style="accent-color:#2563eb"> 全选可重上架</label>
           <button class="btn mini" id="ap-batch-repub-btn" style="padding:5px 12px;font-size:12px;background:#dc2626;color:#fff;border:none;border-radius:6px;cursor:pointer;white-space:nowrap">批量重新生成</button>
+          <button class="btn mini" id="ap-user-mgr-btn" style="padding:5px 12px;font-size:12px;background:#475569;color:#fff;border:none;border-radius:6px;cursor:pointer;white-space:nowrap">👥 用户管理</button>
         </div>
       </div>
       <div id="ap-list"><div class="empty" style="color:#94a3b8">暂无任务，输入链接点「开始上架」。</div></div>
@@ -927,6 +932,8 @@ async function renderAutopublish() {
   };
   const batchBtn = $('#ap-batch-repub-btn');
   if (batchBtn) batchBtn.onclick = batchRepublish;
+  const userMgrBtn = $('#ap-user-mgr-btn');
+  if (userMgrBtn) userMgrBtn.onclick = showUserManager;
 }
 
 const AP_STAGE = { scrape:'抓取1688', ai:'AI生成配置', publish:'CDP上架' };
@@ -1104,7 +1111,7 @@ async function loadApList() {
       <div class="ap-task-id">#${t.id}</div>
       <div class="ap-task-main" onclick="startApPolling(${t.id})">
         <div class="ap-task-title">${esc(t.raw_title || t.ai_title || t.source_url || '')}</div>
-        <div class="ap-task-sub">🏪 ${esc(shopName)} · ${esc((t.source_url||'').slice(0,50))}</div>
+        <div class="ap-task-sub">🏪 ${esc(shopName)} · 👤 ${esc(t.operator_name || '—')} · ${esc((t.source_url||'').slice(0,40))}</div>
       </div>
       <span class="ap-task-status">${statusTag[t.status] || t.status}</span>
       ${canRepub ? `<button class="ap-task-repub" onclick="event.stopPropagation();republishTask(${t.id})">重新上架</button>` : ''}
@@ -1148,6 +1155,72 @@ async function batchRepublish() {
   toast(`批量重新生成完成：启动 ${ok} 个，已在售跳过 ${skip} 个${fail ? '，失败 ' + fail + ' 个' : ''}`);
   loadApList();
   if (!window._apListTimer) startApListPolling();
+}
+
+function showUserManager() {
+  if (document.getElementById('user-mgr-overlay')) return;
+  const overlay = document.createElement('div');
+  overlay.id = 'user-mgr-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.6);z-index:9000;display:flex;align-items:center;justify-content:center;padding:24px';
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:16px;padding:24px;width:100%;max-width:480px;max-height:82vh;overflow:auto;box-shadow:0 20px 60px rgba(0,0,0,.3)">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+        <div style="font-size:17px;font-weight:700;color:#17203a">👥 用户管理</div>
+        <button id="user-mgr-close" style="background:none;border:none;font-size:22px;color:#94a3b8;cursor:pointer;line-height:1">×</button>
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:6px;flex-wrap:wrap">
+        <input id="um-username" placeholder="账号（登录用）" style="flex:1;min-width:120px;padding:9px 12px;border:1px solid #e4e7f1;border-radius:8px;font-size:13px">
+        <input id="um-name" placeholder="姓名（业绩显示）" style="flex:1;min-width:120px;padding:9px 12px;border:1px solid #e4e7f1;border-radius:8px;font-size:13px">
+        <button id="um-add-btn" style="padding:9px 16px;background:#2563eb;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap">添加</button>
+      </div>
+      <div style="font-size:12px;color:#94a3b8;margin-bottom:12px">默认密码 <b>8283103</b>，员工用「账号 + 8283103」登录。</div>
+      <div id="um-list" style="display:flex;flex-direction:column;gap:8px"><div style="color:#94a3b8;font-size:13px">加载中…</div></div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const loadUsers = async () => {
+    const box = $('#um-list');
+    try {
+      const resp = await api('/api/users');
+      const items = (resp && resp.items) || [];
+      box.innerHTML = items.map(u => `
+        <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid #eef1f5;border-radius:8px">
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:600;font-size:13px;color:#17203a">${esc(u.name)} <span style="color:#94a3b8;font-weight:400">@${esc(u.username)}</span></div>
+            <div style="font-size:11px;color:#94a3b8;margin-top:2px">${u.role === 'admin' ? '👑 管理员' : '👤 员工'} · 创建于 ${esc((u.created_at||'').slice(0,10))}</div>
+          </div>
+          ${u.username !== 'admin' ? `<button data-um-del="${u.id}" style="padding:4px 10px;background:#fef2f2;color:#dc2626;border:none;border-radius:6px;font-size:12px;cursor:pointer">删除</button>` : ''}
+        </div>`).join('');
+      box.querySelectorAll('[data-um-del]').forEach(btn => {
+        btn.onclick = async () => {
+          if (!confirm('确认删除该用户？')) return;
+          try {
+            await api('/api/users/' + btn.dataset.umDel, 'DELETE');
+            toast('已删除');
+            loadUsers();
+          } catch (e) { toast('删除失败：' + e.message); }
+        };
+      });
+    } catch (e) { box.innerHTML = '<div style="color:#dc2626;font-size:13px">加载失败：' + e.message + '</div>'; }
+  };
+
+  $('#um-add-btn').onclick = async () => {
+    const username = ($('#um-username').value || '').trim();
+    const name = ($('#um-name').value || '').trim();
+    if (!username) { toast('请填账号'); return; }
+    try {
+      await api('/api/users', 'POST', { username, name: name || username });
+      toast('已添加用户 ' + (name || username));
+      $('#um-username').value = '';
+      $('#um-name').value = '';
+      loadUsers();
+    } catch (e) { toast('添加失败：' + e.message); }
+  };
+
+  $('#user-mgr-close').onclick = () => overlay.remove();
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+
+  loadUsers();
 }
 
 function startApListPolling() {
@@ -1235,6 +1308,7 @@ async function renderPublishedGoods() {
             <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px;font-size:12px;color:#64748b">
               <span>🗂 ${esc(x.category || '—')}</span>
               <span>🏪 ${esc(shopName)}</span>
+              <span>👤 ${esc(x.operator_name || '—')}</span>
               <span>🕒 ${esc((x.published_at || x.created_at || '').slice(0, 16))}</span>
               ${x.goods_id ? `<span>🆔 ${esc(x.goods_id)}</span>` : ''}
               ${sku.length ? `<span>📦 ${sku.length} SKU</span>` : ''}
