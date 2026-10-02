@@ -186,7 +186,15 @@ async function fillByType(c, selector, text){
 
     // ===== 旗舰店：弹窗选类目 =====
     log('[1/8] 选类目(旗舰店弹窗): ' + cfg.categoryPath);
-    await ev(c,`(()=>{const b=[...document.querySelectorAll('button')].find(x=>(x.textContent||'').trim().replace(/\\s+/g,' ').includes('手动选择商品分类'));if(!b)return 'no btn';b.click();return 'ok'})()`);
+    // 新版 V4 页面：「手动选择商品分类」默认隐藏（需先点「查看更多推荐」展开），且不是 button 标签
+    // (task_240 教训：老逻辑直接找 button 里的「手动选择商品分类」，新版默认隐藏+非 button，弹窗打不开→类目匹配失败)
+    let _manualExists = await ev(c, `(()=>{const b=[...document.querySelectorAll('*')].find(x=>x.children.length===0&&(x.textContent||'').trim()==='手动选择商品分类'&&x.getBoundingClientRect().width>0);return !!b;})()`);
+    if(!_manualExists){
+      await ev(c,`(()=>{const m=[...document.querySelectorAll('*')].find(e=>e.children.length===0&&(e.textContent||'').trim()==='查看更多推荐'&&e.getBoundingClientRect().width>0);if(!m)return 'no more';m.click();return 'ok'})()`);
+      await sleep(3000);
+    }
+    const _manualClick = await ev(c, `(()=>{const b=[...document.querySelectorAll('*')].find(x=>x.children.length===0&&(x.textContent||'').trim()==='手动选择商品分类'&&x.getBoundingClientRect().width>0);if(!b)return 'no btn';b.click();return 'ok'})()`);
+    log('  手动选择商品分类:', _manualClick);
     await sleep(5000);
     const sel=await searchAndSelectCategory();
     log('  类目选择:', sel);
