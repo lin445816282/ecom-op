@@ -334,7 +334,10 @@ async function fillByType(c, selector, text){
   let noProgress=0;
   for(let round=0; round<60; round++){
     const r = await ev(c, `(()=>{
-      const inps=[...document.querySelectorAll('input[placeholder="请输入"]')].filter(i=>i.getBoundingClientRect().width>0);
+      // 只在 SKU 表容器内找输入框（.skuModule > table > tbody > tr 数据行），排除顶部「价格及库存」批量设置区/底部批量设置区的干扰
+      // (task_232 教训：全局找会把顶部「单买价」批量设置框 x~506 误当 SKU 价格列，导致库存/拼单价/单买价漏填)
+      const _skuRoot=document.querySelector('.skuModule')||document.querySelector('.sku-list')||document;
+      const inps=[..._skuRoot.querySelectorAll('input[placeholder="请输入"]')].filter(i=>i.getBoundingClientRect().width>0);
       if(!inps.length) return JSON.stringify({cols:0,rows:0,filled:0});
       // 1) 按 x 中心聚类成列（同一列 x 差 < 50）
       const colClusters=[];
@@ -398,6 +401,13 @@ async function fillByType(c, selector, text){
     await sleep(500);
   }
   log('  累计填', totalFilled, '个单元格 / 目标', totalSku*3, '个');
+  // 校验：价格库存必须填全，否则提交会产生「价格0/空」的错误商品
+  // (task_232 教训：定位错位漏填时，提交前「错误计数0」拦不住，商品照样提交成价格0/空)
+  if(totalFilled < totalSku*3){
+    log('❌ 价格库存未填全（'+totalFilled+'/'+(totalSku*3)+'），终止避免提交错误商品');
+    c.ws.close();
+    process.exit(1);
+  }
 
   // ===== Step 6: 上传规格预览图（逐个，每次找第一个未上传行） =====
   log('[6/8] 上传规格预览图');
