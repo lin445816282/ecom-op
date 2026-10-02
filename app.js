@@ -7,7 +7,7 @@ const fmtPct = (n) => (n === null || n === undefined || Number.isNaN(n)) ? '—'
 const todayCN = () => new Intl.DateTimeFormat('zh-CN', {dateStyle:'full'}).format(new Date());
 
 const VIEWS = {
-  dashboard: {title:'运营总览', sub:'把资料里的经验，变成每天可执行的运营动作。'},
+  dashboard: {title:'运营总览1', sub:'把资料里的经验，变成每天可执行的运营动作。'},
   guidehub: {title:'运营指南', sub:'运营方法论、平台操作、选品规划，一站查阅。'},
   guide: {title:'操作手册', sub:'从第一次打开，到每天跑完一套运营动作。'},
   products: {title:'商品投产', sub:'记录售价、毛利与广告数据，自动计算保本/目标 ROI。'},
