@@ -735,7 +735,13 @@ async function renderAutopublish() {
       </div>
 
       <div id="ap-current" style="margin-bottom:16px"></div>
-      <div style="font-weight:700;font-size:14px;margin-bottom:10px;color:#334155">历史任务</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <div style="font-weight:700;font-size:14px;color:#334155">历史任务</div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:#64748b;cursor:pointer"><input type="checkbox" id="ap-check-all" style="accent-color:#2563eb"> 全选可重上架</label>
+          <button class="btn mini" id="ap-batch-repub-btn" style="padding:5px 12px;font-size:12px;background:#dc2626;color:#fff;border:none;border-radius:6px;cursor:pointer;white-space:nowrap">批量重新生成</button>
+        </div>
+      </div>
       <div id="ap-list"><div class="empty" style="color:#94a3b8">暂无任务，输入链接点「开始上架」。</div></div>
     </div>
   `;
@@ -913,6 +919,14 @@ async function renderAutopublish() {
 
   await loadApList();
   startApListPolling();
+
+  // 全选可重上架 + 批量重新生成
+  const checkAll = $('#ap-check-all');
+  if (checkAll) checkAll.onchange = () => {
+    [...document.querySelectorAll('.ap-task-check:not(:disabled)')].forEach(c => { c.checked = checkAll.checked; });
+  };
+  const batchBtn = $('#ap-batch-repub-btn');
+  if (batchBtn) batchBtn.onclick = batchRepublish;
 }
 
 const AP_STAGE = { scrape:'抓取1688', ai:'AI生成配置', publish:'CDP上架' };
@@ -1081,20 +1095,24 @@ async function loadApList() {
   } catch (e) { items = []; }
   if (!items.length) { el.innerHTML = '<div class="empty" style="color:#94a3b8">暂无任务。</div>'; return; }
   const statusTag = { queued:'排队', crawling:'抓取', ai:'AI配置', publishing:'上架中', published:'✅已上架', submitted:'⏳待审核', draft:'📄草稿', failed:'❌失败' };
-  el.innerHTML = items.map(t => `
-    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin-bottom:8px;display:flex;gap:12px;align-items:center;cursor:pointer" onclick="startApPolling(${t.id})">
+  el.innerHTML = items.map(t => {
+    const shopName = t.shop_name || (typeof PG_SHOP !== 'undefined' && PG_SHOP[t.shop_id]) || ('店铺' + (t.shop_id || '?'));
+    const canRepub = (t.status === 'failed' || t.status === 'draft');
+    return `
+    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin-bottom:8px;display:flex;gap:12px;align-items:center">
+      <input type="checkbox" class="ap-task-check" value="${t.id}" ${canRepub ? '' : 'disabled'} onclick="event.stopPropagation()" style="width:16px;height:16px;cursor:pointer;flex-shrink:0;accent-color:#2563eb">
       <div style="font-size:14px;color:#94a3b8">#${t.id}</div>
-      <div style="flex:1;min-width:0">
+      <div style="flex:1;min-width:0;cursor:pointer" onclick="startApPolling(${t.id})">
         <div style="font-weight:600;font-size:14px;color:#17203a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.raw_title || t.ai_title || t.source_url || '')}</div>
-        <div style="color:#94a3b8;font-size:12px;margin-top:2px">${esc((t.source_url||'').slice(0,60))}</div>
+        <div style="color:#94a3b8;font-size:12px;margin-top:2px">🏪 ${esc(shopName)} · ${esc((t.source_url||'').slice(0,50))}</div>
       </div>
-      <span style="background:#f1f5f9;border-radius:6px;padding:3px 10px;font-size:12px;color:#475569">${statusTag[t.status] || t.status}</span>
-      ${(t.status === 'failed' || t.status === 'draft') ? `<button class="btn mini" style="padding:4px 12px;font-size:12px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;white-space:nowrap" onclick="event.stopPropagation();republishTask(${t.id})">重新上架</button>` : ''}
+      <span style="background:#f1f5f9;border-radius:6px;padding:3px 10px;font-size:12px;color:#475569;white-space:nowrap">${statusTag[t.status] || t.status}</span>
+      ${canRepub ? `<button class="btn mini" style="padding:4px 12px;font-size:12px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;white-space:nowrap" onclick="event.stopPropagation();republishTask(${t.id})">重新上架</button>` : ''}
       ${t.publish_progress && t.publish_progress.step ? `<span style="background:#e0f2fe;color:#0369a1;border-radius:6px;padding:3px 8px;font-size:11px;font-weight:600;white-space:nowrap">${esc(t.publish_progress.step_name)} ${t.publish_progress.step}/8</span>` : ''}
-      ${t.pdd_goods_id ? `<span style="font-size:12px;color:#16a34a">${esc(t.pdd_goods_id)}</span>` : ''}
-      <div style="color:#94a3b8;font-size:12px">${esc((t.created_at||'').slice(5,16))}</div>
+      ${t.pdd_goods_id ? `<span style="font-size:12px;color:#16a34a;white-space:nowrap">${esc(t.pdd_goods_id)}</span>` : ''}
+      <div style="color:#94a3b8;font-size:12px;white-space:nowrap">${esc((t.created_at||'').slice(5,16))}</div>
     </div>
-  `).join('');
+  `;}).join('');
 }
 
 async function republishTask(taskId) {
@@ -1111,6 +1129,25 @@ async function republishTask(taskId) {
   } catch (e) {
     toast('重新上架失败：' + (e.message || e));
   }
+}
+
+async function batchRepublish() {
+  const checks = [...document.querySelectorAll('.ap-task-check:checked')];
+  if (!checks.length) { toast('请先勾选要重新生成的任务'); return; }
+  const ids = checks.map(c => c.value);
+  const btn = $('#ap-batch-repub-btn');
+  if (btn) { btn.disabled = true; btn.textContent = `重新生成中(${ids.length})…`; }
+  let ok = 0, skip = 0, fail = 0;
+  for (const id of ids) {
+    try {
+      const resp = await api(`/api/autopublish/${id}/republish`, 'POST', {});
+      if (resp && resp.already) skip++; else ok++;
+    } catch (e) { fail++; }
+  }
+  if (btn) { btn.disabled = false; btn.textContent = '批量重新生成'; }
+  toast(`批量重新生成完成：启动 ${ok} 个，已在售跳过 ${skip} 个${fail ? '，失败 ' + fail + ' 个' : ''}`);
+  loadApList();
+  if (!window._apListTimer) startApListPolling();
 }
 
 function startApListPolling() {
@@ -1398,7 +1435,7 @@ async function renderSale() {
     const [catResp, monthlyResp, skuResp, dailyResp] = await Promise.all([
       api('/api/catalog/sale-category'),
       api('/api/catalog/sale-monthly'),
-      api('/api/catalog/sale-sku?limit=500'),
+      api('/api/catalog/sale-sku-summary?limit=500'),
       api('/api/catalog/sale-daily?limit=90'),
     ]);
     cats = (catResp && catResp.items) || [];
@@ -1469,28 +1506,21 @@ async function renderSale() {
     </div>
   </div>`;
 
-  // SKU 明细（可折叠）
-  html += `<details class="pf-fold" style="margin-bottom:14px"><summary style="cursor:pointer;font-weight:600;font-size:15px;padding:12px 16px;background:#fff;border-radius:10px;border:1px solid #e2e8f0;list-style:none">🧾 SKU 明细（${skus.length} 个 SKU，点击展开）</summary>
-    <div style="margin-top:8px;max-height:520px;overflow:auto">
-      <table style="width:100%;border-collapse:collapse;font-size:12px">
-        <tr style="color:#94a3b8;text-align:left;position:sticky;top:0;background:#fff">
-          <th style="padding:6px 4px;font-weight:500">品类</th><th style="padding:6px 4px;font-weight:500">商品</th>
-          <th style="padding:6px 4px;font-weight:500">SKU（规格）</th><th style="padding:6px 4px;font-weight:500;text-align:right">销量(件)</th>
-          <th style="padding:6px 4px;font-weight:500;text-align:right">挂钩数</th>
-          <th style="padding:6px 4px;font-weight:500;text-align:right">成交额</th><th style="padding:6px 4px;font-weight:500;text-align:right">单数</th>
-        </tr>
-        ${skus.map(s => `<tr style="border-top:1px solid #f1f5f9">
-          <td style="padding:6px 4px;color:#475569;white-space:nowrap">${s.category}</td>
-          <td style="padding:6px 4px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(s.name)}">${esc(s.name)}</td>
-          <td style="padding:6px 4px;color:#64748b;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(s.spec)}">${esc(s.spec || '—')}</td>
-          <td style="padding:6px 4px;text-align:right">${s.qty}</td>
-          <td style="padding:6px 4px;text-align:right;color:#7c3aed;font-weight:600">${s.hook_count ? s.hook_count : '—'}</td>
-          <td style="padding:6px 4px;text-align:right;font-weight:600">¥${ym(s.amt).toFixed(2)}</td>
-          <td style="padding:6px 4px;text-align:right;color:#64748b">${s.cnt}</td>
-        </tr>`).join('')}
-      </table>
+  // SKU 明细（按商品汇总 / 按规格明细 可切换 + 月份可选）
+  html += `<div class="panel" style="padding:16px 18px;margin-bottom:14px">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+      <b id="sale-sku-label" style="font-size:15px">🧾 SKU 明细（${skus.length} · 按商品汇总 · 全部累计）</b>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <div style="display:flex;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden">
+          <button type="button" id="sku-mode-summary" onclick="setSkuMode('summary')" style="border:none;padding:6px 12px;font-size:13px;background:#0f766e;color:#fff;cursor:pointer;font-weight:600">按商品汇总</button>
+          <button type="button" id="sku-mode-detail" onclick="setSkuMode('detail')" style="border:none;padding:6px 12px;font-size:13px;background:#fff;color:#475569;cursor:pointer">按规格明细</button>
+        </div>
+        <button type="button" onclick="loadSkuDetail('')" style="border:1px solid #e2e8f0;border-radius:8px;padding:6px 12px;font-size:13px;background:#fff;color:#0f766e;cursor:pointer;font-weight:600">全部累计</button>
+        <input type="month" id="sale-sku-month" value="${curMonth}" style="border:1px solid #e2e8f0;border-radius:8px;padding:6px 10px;font-size:13px;color:#475569;background:#fff;max-width:150px" onchange="loadSkuDetail(this.value)">
+      </div>
     </div>
-  </details>`;
+    <div id="sale-sku-body" style="margin-top:12px">${skuSummaryTable(skus)}</div>
+  </div>`;
 
   html += '</div>';
   el.innerHTML = html;
@@ -1551,6 +1581,130 @@ window.loadCategoryDist = async function(ymStr) {
     const resp = await api(`/api/catalog/sale-category?start=${start}&end=${end}`);
     const cats = (resp && resp.items) || [];
     body.innerHTML = categoryDistBody(cats);
+  } catch (e) {
+    body.innerHTML = '<div style="padding:16px;color:#dc2626;text-align:center">加载失败：' + esc(e.message || e) + '</div>';
+  }
+};
+
+// SKU 明细表格（含合计行：销量/挂钩数/成交额/单数）
+function skuDetailTable(skus) {
+  const ym = (v) => (v == null || Number.isNaN(Number(v))) ? 0 : Number(v);
+  if (!skus || !skus.length) return '<div style="padding:24px;color:#94a3b8;text-align:center">该月份暂无成交数据</div>';
+  const totQty = skus.reduce((s, x) => s + ym(x.qty), 0);
+  const totHook = skus.reduce((s, x) => s + ym(x.hook_count), 0);
+  const totAmt = skus.reduce((s, x) => s + ym(x.amt), 0);
+  const totCnt = skus.reduce((s, x) => s + ym(x.cnt), 0);
+  return `
+    <div style="max-height:520px;overflow:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <tr style="color:#94a3b8;text-align:left;position:sticky;top:0;background:#fff">
+          <th style="padding:6px 4px;font-weight:500">品类</th><th style="padding:6px 4px;font-weight:500">商品</th>
+          <th style="padding:6px 4px;font-weight:500">SKU（规格）</th><th style="padding:6px 4px;font-weight:500;text-align:right">销量(件)</th>
+          <th style="padding:6px 4px;font-weight:500;text-align:right">挂钩数</th>
+          <th style="padding:6px 4px;font-weight:500;text-align:right">成交额</th><th style="padding:6px 4px;font-weight:500;text-align:right">单数</th>
+        </tr>
+        ${skus.map(s => `<tr style="border-top:1px solid #f1f5f9">
+          <td style="padding:6px 4px;color:#475569;white-space:nowrap">${s.category}</td>
+          <td style="padding:6px 4px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(s.name)}">${esc(s.name)}</td>
+          <td style="padding:6px 4px;color:#64748b;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(s.spec)}">${esc(s.spec || '—')}</td>
+          <td style="padding:6px 4px;text-align:right">${s.qty}</td>
+          <td style="padding:6px 4px;text-align:right;color:#7c3aed;font-weight:600">${s.hook_count ? s.hook_count : '—'}</td>
+          <td style="padding:6px 4px;text-align:right;font-weight:600">¥${ym(s.amt).toFixed(2)}</td>
+          <td style="padding:6px 4px;text-align:right;color:#64748b">${s.cnt}</td>
+        </tr>`).join('')}
+        <tr style="border-top:2px solid #e2e8f0;background:#f8fafc;font-weight:700">
+          <td style="padding:8px 4px" colspan="3">合计</td>
+          <td style="padding:8px 4px;text-align:right">${totQty}</td>
+          <td style="padding:8px 4px;text-align:right;color:#7c3aed">${totHook || '—'}</td>
+          <td style="padding:8px 4px;text-align:right">¥${totAmt.toFixed(2)}</td>
+          <td style="padding:8px 4px;text-align:right">${totCnt}</td>
+        </tr>
+      </table>
+    </div>`;
+}
+
+// SKU 明细视图状态：summary=按商品汇总（合并同商品多规格） / detail=按规格明细
+let _skuMode = 'summary';
+let _skuMonth = '';
+
+// SKU 明细按商品汇总表格（合并同商品不同规格，含合计行）
+function skuSummaryTable(items) {
+  const ym = (v) => (v == null || Number.isNaN(Number(v))) ? 0 : Number(v);
+  if (!items || !items.length) return '<div style="padding:24px;color:#94a3b8;text-align:center">该月份暂无成交数据</div>';
+  const totQty = items.reduce((s, x) => s + ym(x.qty), 0);
+  const totHook = items.reduce((s, x) => s + ym(x.hook_count), 0);
+  const totAmt = items.reduce((s, x) => s + ym(x.amt), 0);
+  const totCnt = items.reduce((s, x) => s + ym(x.cnt), 0);
+  return `
+    <div style="max-height:520px;overflow:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <tr style="color:#94a3b8;text-align:left;position:sticky;top:0;background:#fff">
+          <th style="padding:6px 4px;font-weight:500">品类</th><th style="padding:6px 4px;font-weight:500">商品</th>
+          <th style="padding:6px 4px;font-weight:500">规格（含销量）</th><th style="padding:6px 4px;font-weight:500;text-align:right">销量(件)</th>
+          <th style="padding:6px 4px;font-weight:500;text-align:right">挂钩数</th>
+          <th style="padding:6px 4px;font-weight:500;text-align:right">成交额</th><th style="padding:6px 4px;font-weight:500;text-align:right">单数</th>
+        </tr>
+        ${items.map(s => `<tr style="border-top:1px solid #f1f5f9;vertical-align:top">
+          <td style="padding:6px 4px;color:#475569;white-space:nowrap">${s.category}</td>
+          <td style="padding:6px 4px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(s.name)}">${esc(s.name)}</td>
+          <td style="padding:6px 4px;color:#64748b;max-width:260px;font-size:11px;line-height:1.6;word-break:break-all" title="${esc(s.spec)}">${esc(s.spec || '—')}</td>
+          <td style="padding:6px 4px;text-align:right">${s.qty}</td>
+          <td style="padding:6px 4px;text-align:right;color:#7c3aed;font-weight:600">${s.hook_count ? s.hook_count : '—'}</td>
+          <td style="padding:6px 4px;text-align:right;font-weight:600">¥${ym(s.amt).toFixed(2)}</td>
+          <td style="padding:6px 4px;text-align:right;color:#64748b">${s.cnt}</td>
+        </tr>`).join('')}
+        <tr style="border-top:2px solid #e2e8f0;background:#f8fafc;font-weight:700">
+          <td style="padding:8px 4px" colspan="3">合计</td>
+          <td style="padding:8px 4px;text-align:right">${totQty}</td>
+          <td style="padding:8px 4px;text-align:right;color:#7c3aed">${totHook || '—'}</td>
+          <td style="padding:8px 4px;text-align:right">¥${totAmt.toFixed(2)}</td>
+          <td style="padding:8px 4px;text-align:right">${totCnt}</td>
+        </tr>
+      </table>
+    </div>`;
+}
+
+// 切换 SKU 明细视图（按商品汇总 / 按规格明细）
+window.setSkuMode = function(mode) {
+  _skuMode = mode;
+  const bSummary = $('#sku-mode-summary'), bDetail = $('#sku-mode-detail');
+  if (bSummary && bDetail) {
+    const on = { background: '#0f766e', color: '#fff', fontWeight: '600' };
+    const off = { background: '#fff', color: '#475569', fontWeight: '400' };
+    Object.assign(bSummary.style, mode === 'summary' ? on : off);
+    Object.assign(bDetail.style, mode === 'detail' ? on : off);
+  }
+  loadSkuDetail(_skuMonth);
+};
+
+// SKU 明细切换月份：空=全部累计，否则查该月 start~end
+window.loadSkuDetail = async function(ymStr) {
+  _skuMonth = ymStr || '';
+  const body = $('#sale-sku-body');
+  const label = $('#sale-sku-label');
+  if (!body) return;
+  if (!_skuMonth) {
+    const mi = $('#sale-sku-month');
+    if (mi) mi.value = '';
+  }
+  body.innerHTML = '<div style="padding:16px;color:#94a3b8;text-align:center">加载中…</div>';
+  const endpoint = _skuMode === 'summary' ? '/api/catalog/sale-sku-summary' : '/api/catalog/sale-sku';
+  let url = endpoint + '?limit=500';
+  let rangeLabel = '全部累计';
+  if (_skuMonth) {
+    const [y, m] = _skuMonth.split('-').map(Number);
+    const lastDay = new Date(y, m, 0).getDate();
+    const start = _skuMonth + '-01';
+    const end = _skuMonth + '-' + String(lastDay).padStart(2, '0');
+    url += `&start=${start}&end=${end}`;
+    rangeLabel = _skuMonth;
+  }
+  try {
+    const resp = await api(url);
+    const items = (resp && resp.items) || [];
+    body.innerHTML = _skuMode === 'summary' ? skuSummaryTable(items) : skuDetailTable(items);
+    const modeLabel = _skuMode === 'summary' ? '按商品汇总' : '按规格明细';
+    if (label) label.textContent = `🧾 SKU 明细（${items.length} · ${modeLabel} · ${rangeLabel}）`;
   } catch (e) {
     body.innerHTML = '<div style="padding:16px;color:#dc2626;text-align:center">加载失败：' + esc(e.message || e) + '</div>';
   }

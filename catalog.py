@@ -821,7 +821,9 @@ def get_autopublish_task(task_id: int) -> dict:
 def list_autopublish_tasks(limit: int = 50) -> list[dict]:
     with closing(_conn()) as c:
         rows = c.execute(
-            "SELECT * FROM autopublish_tasks ORDER BY id DESC LIMIT ?", (limit,)
+            "SELECT t.*, s.name AS shop_name FROM autopublish_tasks t "
+            "LEFT JOIN shops s ON s.id = t.shop_id "
+            "ORDER BY t.id DESC LIMIT ?", (limit,)
         ).fetchall()
         return [dict(r) for r in rows]
 
@@ -1422,6 +1424,59 @@ def sale_sku_detail(start=None, end=None, limit=500) -> list[dict]:
             "cnt": r["cnt"] or 0,
         })
     return out
+
+
+def sale_sku_summary(start=None, end=None, limit=500) -> list[dict]:
+    """SKU 明细按商品汇总：合并同一商品的不同规格（几个装），销量/挂钩数/金额/单数合计。
+
+    同一款商品常因「1个装/2个装」等规格拆成多行，这里按 platform_product_id 合并，
+    挂钩数 = Σ(件数 × 个装数)，spec 列列出各规格及销量供核对，按金额倒序。
+    """
+    where, args = _sale_where(start, end)
+    with closing(_conn()) as c:
+        rows = c.execute(
+            "SELECT o.shop_id, o.platform_product_id, p.name, o.spec, "
+            "SUM(o.quantity) qty, SUM(o.seller_amount) amt, COUNT(*) cnt FROM orders o "
+            "LEFT JOIN products p ON p.platform_product_id=o.platform_product_id AND p.shop_id=o.shop_id "
+            f"WHERE {where} GROUP BY o.shop_id, o.platform_product_id, o.spec",
+            args,
+        ).fetchall()
+    groups = {}
+    for r in rows:
+        key = (r["shop_id"], r["platform_product_id"])
+        g = groups.setdefault(key, {
+            "shop_id": r["shop_id"], "platform_product_id": r["platform_product_id"],
+            "name": r["name"] or "", "qty": 0, "amt": 0.0, "cnt": 0,
+            "hook_count": 0, "specs": [],
+        })
+        spec = r["spec"] or ""
+        qty = r["qty"] or 0
+        g["qty"] += qty
+        g["amt"] += r["amt"] or 0.0
+        g["cnt"] += r["cnt"] or 0
+        if spec:
+            g["specs"].append({"spec": spec, "qty": qty})
+        if "个装" in spec or "件装" in spec:
+            n_per, _ = _parse_hook_spec(spec)
+            g["hook_count"] += qty * n_per
+    out = []
+    for g in groups.values():
+        g["specs"].sort(key=lambda s: -s["qty"])
+        specs_desc = "；".join(f'{s["spec"]}(×{s["qty"]})' for s in g["specs"])
+        out.append({
+            "shop_id": g["shop_id"],
+            "platform_product_id": g["platform_product_id"],
+            "name": g["name"],
+            "category": _classify_category(g["name"]),
+            "spec": specs_desc,
+            "spec_count": len(g["specs"]),
+            "qty": g["qty"],
+            "hook_count": g["hook_count"],
+            "amt": round(g["amt"], 2),
+            "cnt": g["cnt"],
+        })
+    out.sort(key=lambda x: -x["amt"])
+    return out[:limit]
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
