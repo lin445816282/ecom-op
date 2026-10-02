@@ -160,7 +160,7 @@ async function api(path, method='GET', body) {
 }
 
 function redirectLogin() {
-  location.replace(BASE + '/login.html');
+  location.replace(BASE + '/login.html?v=' + Date.now());
 }
 
 function showLogin() {
