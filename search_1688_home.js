@@ -39,7 +39,7 @@ const sleep = ms => new Promise(r=>setTimeout(r,ms));
         ta.dispatchEvent(new Event('input', {bubbles:true}));
         ta.dispatchEvent(new Event('change', {bubbles:true}));
         var form = document.getElementById('alisearch-form');
-        if(form){ form.target = '_self'; form.submit(); return 'SUBMITTED'; }
+        if(form){ form.target = '_self'; form.requestSubmit(); return 'SUBMITTED'; }
         return 'NO_FORM';
       })()`, returnByValue:true});
       return (r && r.result && r.result.value) || '';
