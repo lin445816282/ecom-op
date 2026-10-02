@@ -47,7 +47,7 @@ PDD_COMMENTS_FULL_JS = r"C:\tmp\fetch_comments_full.js"
 
 # 访问口令：环境变量 ECOM_OP_TOKEN 可覆盖，默认见下。静态资源公开，/api/* 需带口令。
 ACCESS_TOKEN = os.environ.get("ECOM_OP_TOKEN", "Alcz8283103")
-AUTH_WHITELIST = {"/", "/index.html", "/app.js", "/style.css", "/favicon.ico", "/api/auth/login", "/api/published-goods/image"}
+AUTH_WHITELIST = {"/", "/index.html", "/app.js", "/style.css", "/favicon.ico", "/api/auth/login"}
 
 
 def _sanitize(obj):
@@ -88,13 +88,11 @@ class Handler(BaseHTTPRequestHandler):
             return {}
 
     def _authed(self, path, qs):
-        """鉴权：静态资源 + 登录接口放行，其余 /api/* 校验访问口令（系统 token 或用户 session）。"""
+        """鉴权：仅白名单静态资源 + 登录接口放行，其余（含所有 /api/* 和未知路径）默认需登录。"""
         if path in AUTH_WHITELIST:
             return True
         if path.startswith("/static/"):
             return True
-        if not path.startswith("/api/"):
-            return True  # 非 API 路径（如未知静态）不做鉴权，交给后续 404
         token = self.headers.get("Authorization", "").replace("Bearer ", "").strip()
         if not token:
             token = (qs.get("token") or [""])[0]

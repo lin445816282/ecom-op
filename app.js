@@ -1462,7 +1462,7 @@ async function renderPublishedGoods() {
     const sale = Number(x.sale_price), danmai = Number(x.danmai_price), fr = Number(x.freight) || 0;
     const profit = (sale > 0 && cost != null && !Number.isNaN(cost)) ? (sale - cost - fr) : null;
     const margin = (profit != null && sale > 0) ? (profit / sale * 100).toFixed(1) + '%' : '—';
-    const imgUrl = x.main_image ? (BASE + '/api/published-goods/image?path=' + encodeURIComponent(x.main_image)) : '';
+    const imgUrl = x.main_image ? (BASE + '/api/published-goods/image?path=' + encodeURIComponent(x.main_image) + '&token=' + encodeURIComponent(getToken())) : '';
     const shopName = x.shop_name || PG_SHOP[x.shop_id] || (x.shop_id ? '店铺' + x.shop_id : '—');
     const skuRows = sku.map(s => `
       <tr style="border-top:1px solid #f1f5f9">
