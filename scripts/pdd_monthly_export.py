@@ -24,7 +24,7 @@ SHOP_ID = 3  # 默认如若月下
 CDP_PORT = 9230
 
 # 店铺映射：shop_id -> CDP 端口
-SHOP_CDP_PORT = {3: 9230, 5: 9232, 1: 9222, 6: 9228}
+SHOP_CDP_PORT = {3: 9230, 5: 9232, 1: 9234, 6: 9228}
 
 def last_month_range():
     """返回 (上月1日 00:00, 本月1日 00:00) 字符串，用于 pay_time 过滤。"""
@@ -79,7 +79,7 @@ def main():
         end_day = sys.argv[3] if len(sys.argv) > 3 else sys.argv[2]
         _, end = day_range(end_day)
     else:
-        start, end = day_range()
+        start, end = last_month_range()
     log = {"start": start, "end": end, "steps": []}
 
     # 1. 调 node 脚本导出（后台，等报表生成，最多 ~15 分钟）

@@ -312,6 +312,8 @@ async function fillByType(c, selector, text){
       await sleep(250);
       await c.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});
       await c.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});
+      // blur 失焦触发规格值标签化 + SKU 表格行生成（task_241 教训：最后一个规格值 Enter 不触发行生成，blur 才触发——实测 blur 后 tr 4→6）
+      await ev(c, `(()=>{const a=document.activeElement;if(a&&a.tagName==='INPUT'){a.blur();return 'blurred'}return 'no active'})()`);
       await sleep(600);
       filled++;
     }
