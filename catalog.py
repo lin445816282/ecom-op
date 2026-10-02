@@ -914,6 +914,7 @@ def save_published_good(**fields) -> dict:
         "ai_title", "category", "shop_id", "shop_name", "sku_count",
         "sku_details", "cost_price", "sale_price", "danmai_price", "ref_price",
         "profit_rate", "freight", "stock", "status", "published_at", "remark",
+        "operator_name",
     }
     data = {k: v for k, v in fields.items() if k in allowed}
     if not data:
@@ -1605,7 +1606,12 @@ def get_user_by_token(token: str) -> dict:
 def list_users() -> list[dict]:
     with closing(_conn()) as c:
         rows = c.execute("SELECT * FROM users ORDER BY id").fetchall()
-        return [dict(r) for r in rows]
+        out = []
+        for r in rows:
+            d = dict(r)
+            d.pop("password_hash", None)  # 绝不泄露密码哈希
+            out.append(d)
+        return out
 
 
 def delete_user(user_id: int) -> bool:
