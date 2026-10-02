@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>电商运营工作台</title>
-  <link rel="stylesheet" href="style.css?v=20261003a">
+  <link rel="stylesheet" href="style.css?v=20261003b">
 </head>
 <body>
   <div class="app">
@@ -52,6 +52,10 @@
             <button class="shop-btn" data-shop="淘宝">淘宝</button>
           </div>
           <div class="pill" id="date-pill"></div>
+          <div class="pill" id="user-pill" style="display:flex;align-items:center;gap:8px">
+            <span id="current-user" style="font-weight:600;color:#17203a"></span>
+            <button class="shop-btn" id="logout-btn" style="color:#dc2626">退出登录</button>
+          </div>
         </div>
       </div>
 
@@ -85,6 +89,6 @@
   </div>
 
   <div class="toast" id="toast"></div>
-  <script src="app.js?v=20261003a"></script>
+  <script src="app.js?v=20261003b"></script>
 </body>
 </html>

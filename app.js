@@ -6588,6 +6588,15 @@ function bindShopButtons() {
 async function init() {
   if (!getToken()) { redirectLogin(); return; }
   $('#date-pill').textContent = todayCN();
+  const _u = getUserInfo();
+  $('#current-user').textContent = (_u.name || localStorage.getItem('ecom_op_user')) || '';
+  $('#logout-btn').onclick = () => {
+    localStorage.removeItem('ecom_op_token');
+    localStorage.removeItem('ecom_op_user');
+    localStorage.removeItem('ecom_op_user_info');
+    localStorage.removeItem('ecom_op_perms');
+    redirectLogin();
+  };
   renderGuideSubMenu();
   applyPermFilter();  // 按当前用户权限隐藏无权限导航（含 admin-only）
   $$('.nav-item').forEach(b => {
