@@ -735,9 +735,9 @@ async function renderAutopublish() {
       </div>
 
       <div id="ap-current" style="margin-bottom:16px"></div>
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:10px">
         <div style="font-weight:700;font-size:14px;color:#334155">历史任务</div>
-        <div style="display:flex;align-items:center;gap:10px">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
           <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:#64748b;cursor:pointer"><input type="checkbox" id="ap-check-all" style="accent-color:#2563eb"> 全选可重上架</label>
           <button class="btn mini" id="ap-batch-repub-btn" style="padding:5px 12px;font-size:12px;background:#dc2626;color:#fff;border:none;border-radius:6px;cursor:pointer;white-space:nowrap">批量重新生成</button>
         </div>
@@ -1099,18 +1099,18 @@ async function loadApList() {
     const shopName = t.shop_name || (typeof PG_SHOP !== 'undefined' && PG_SHOP[t.shop_id]) || ('店铺' + (t.shop_id || '?'));
     const canRepub = (t.status === 'failed' || t.status === 'draft');
     return `
-    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin-bottom:8px;display:flex;gap:12px;align-items:center">
-      <input type="checkbox" class="ap-task-check" value="${t.id}" ${canRepub ? '' : 'disabled'} onclick="event.stopPropagation()" style="width:16px;height:16px;cursor:pointer;flex-shrink:0;accent-color:#2563eb">
-      <div style="font-size:14px;color:#94a3b8">#${t.id}</div>
-      <div style="flex:1;min-width:0;cursor:pointer" onclick="startApPolling(${t.id})">
-        <div style="font-weight:600;font-size:14px;color:#17203a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.raw_title || t.ai_title || t.source_url || '')}</div>
-        <div style="color:#94a3b8;font-size:12px;margin-top:2px">🏪 ${esc(shopName)} · ${esc((t.source_url||'').slice(0,50))}</div>
+    <div class="ap-task-item">
+      <input type="checkbox" class="ap-task-check" value="${t.id}" ${canRepub ? '' : 'disabled'} onclick="event.stopPropagation()">
+      <div class="ap-task-id">#${t.id}</div>
+      <div class="ap-task-main" onclick="startApPolling(${t.id})">
+        <div class="ap-task-title">${esc(t.raw_title || t.ai_title || t.source_url || '')}</div>
+        <div class="ap-task-sub">🏪 ${esc(shopName)} · ${esc((t.source_url||'').slice(0,50))}</div>
       </div>
-      <span style="background:#f1f5f9;border-radius:6px;padding:3px 10px;font-size:12px;color:#475569;white-space:nowrap">${statusTag[t.status] || t.status}</span>
-      ${canRepub ? `<button class="btn mini" style="padding:4px 12px;font-size:12px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;white-space:nowrap" onclick="event.stopPropagation();republishTask(${t.id})">重新上架</button>` : ''}
-      ${t.publish_progress && t.publish_progress.step ? `<span style="background:#e0f2fe;color:#0369a1;border-radius:6px;padding:3px 8px;font-size:11px;font-weight:600;white-space:nowrap">${esc(t.publish_progress.step_name)} ${t.publish_progress.step}/8</span>` : ''}
-      ${t.pdd_goods_id ? `<span style="font-size:12px;color:#16a34a;white-space:nowrap">${esc(t.pdd_goods_id)}</span>` : ''}
-      <div style="color:#94a3b8;font-size:12px;white-space:nowrap">${esc((t.created_at||'').slice(5,16))}</div>
+      <span class="ap-task-status">${statusTag[t.status] || t.status}</span>
+      ${canRepub ? `<button class="ap-task-repub" onclick="event.stopPropagation();republishTask(${t.id})">重新上架</button>` : ''}
+      ${t.publish_progress && t.publish_progress.step ? `<span class="ap-task-progress">${esc(t.publish_progress.step_name)} ${t.publish_progress.step}/8</span>` : ''}
+      ${t.pdd_goods_id ? `<span class="ap-task-gid">${esc(t.pdd_goods_id)}</span>` : ''}
+      <div class="ap-task-time">${esc((t.created_at||'').slice(5,16))}</div>
     </div>
   `;}).join('');
 }

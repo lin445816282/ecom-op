@@ -731,3 +731,33 @@ textarea { min-height: 72px; resize: vertical; }
   .pg-price .pg-price-row > div { white-space: nowrap; }
 }
 
+/* 历史任务列表（一键上架） */
+.ap-task-item {
+  display: flex; align-items: center; gap: 12px;
+  background: #fff; border: 1px solid #e2e8f0; border-radius: 10px;
+  padding: 12px; margin-bottom: 8px; flex-wrap: wrap;
+}
+.ap-task-check { width: 16px; height: 16px; cursor: pointer; flex-shrink: 0; accent-color: #2563eb; }
+.ap-task-id { font-size: 14px; color: #94a3b8; flex-shrink: 0; }
+.ap-task-main { flex: 1 1 240px; min-width: 0; cursor: pointer; }
+.ap-task-title { font-weight: 600; font-size: 14px; color: #17203a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ap-task-sub { color: #94a3b8; font-size: 12px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ap-task-status { background: #f1f5f9; border-radius: 6px; padding: 3px 10px; font-size: 12px; color: #475569; white-space: nowrap; }
+.ap-task-repub { padding: 4px 12px; font-size: 12px; background: #2563eb; color: #fff; border: none; border-radius: 6px; cursor: pointer; white-space: nowrap; }
+.ap-task-progress { background: #e0f2fe; color: #0369a1; border-radius: 6px; padding: 3px 8px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+.ap-task-gid { font-size: 12px; color: #16a34a; white-space: nowrap; }
+.ap-task-time { color: #94a3b8; font-size: 12px; white-space: nowrap; }
+
+/* 历史任务列表：手机端自适应 */
+@media (max-width: 640px) {
+  .ap-task-item { gap: 8px 10px; padding: 10px 12px; }
+  .ap-task-check { order: 0; }
+  .ap-task-id { order: 1; }
+  .ap-task-status { order: 2; margin-left: auto; }
+  .ap-task-main { flex: 1 1 100%; order: 3; }
+  .ap-task-repub { order: 4; }
+  .ap-task-progress { order: 5; }
+  .ap-task-gid { order: 6; }
+  .ap-task-time { order: 7; margin-left: auto; }
+}
+
