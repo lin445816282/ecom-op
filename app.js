@@ -6590,7 +6590,9 @@ async function init() {
   $('#date-pill').textContent = todayCN();
   const _u = getUserInfo();
   $('#current-user').textContent = (_u.name || localStorage.getItem('ecom_op_user')) || '';
-  $('#logout-btn').onclick = () => {
+  $('#logout-btn').onclick = async () => {
+    const ok = await confirmDialog('确定要退出当前账号吗？', { title: '退出登录', confirmText: '退出', cancelText: '取消', danger: true });
+    if (!ok) return;
     localStorage.removeItem('ecom_op_token');
     localStorage.removeItem('ecom_op_user');
     localStorage.removeItem('ecom_op_user_info');
