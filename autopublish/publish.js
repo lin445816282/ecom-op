@@ -111,11 +111,21 @@ async function fillByType(c, selector, text){
   // 普通店(闲时来等)：/goods/category 是类目选择页，先搜索选类目 → 点「确认发布该类商品」→ 跳转发布页再填主图标题
   await c.send('Page.navigate',{url:'https://mms.pinduoduo.com/goods/category'});
   await sleep(6000);
-  const isFlagship = await ev(c, `(()=>{
-    const confirm=[...document.querySelectorAll('button')].find(b=>(b.textContent||'').trim()==='确认发布该类商品');
-    const next=[...document.querySelectorAll('button')].find(b=>(b.textContent||'').trim().replace(/\\s+/g,' ').includes('下一步'));
-    return !confirm && !!next;
-  })()`);
+  // 店铺类型检测带重试：旗舰店发布页加载慢，「下一步」按钮可能延迟渲染，6s 后检测不到会误判普通店
+  // (task_234 教训：9228 旗舰店发布页加载慢，isFlagship 误判普通店→走普通店流程→类目匹配失败)
+  let isFlagship = false;
+  for(let _t=0; _t<6; _t++){
+    const _type = await ev(c, `(()=>{
+      const confirm=[...document.querySelectorAll('button')].find(b=>(b.textContent||'').trim()==='确认发布该类商品');
+      const next=[...document.querySelectorAll('button')].find(b=>(b.textContent||'').trim().replace(/\s+/g,' ').includes('下一步'));
+      if(confirm) return 'normal';
+      if(next) return 'flagship';
+      return 'loading';
+    })()`);
+    if(_type==='normal'){ isFlagship=false; break; }
+    if(_type==='flagship'){ isFlagship=true; break; }
+    await sleep(2000);
+  }
   log('店铺类型:', isFlagship ? '旗舰店(先主图标题→弹窗选类目→品牌→下一步)' : '普通店(先选类目)');
 
   // 通用：搜索框选类目（普通店页面 / 旗舰店弹窗 共用，搜索框 placeholder 一致）
@@ -187,13 +197,19 @@ async function fillByType(c, selector, text){
     // ===== 旗舰店：弹窗选类目 =====
     log('[1/8] 选类目(旗舰店弹窗): ' + cfg.categoryPath);
     // 新版 V4 页面：「手动选择商品分类」默认隐藏（需先点「查看更多推荐」展开），且不是 button 标签
-    // (task_240 教训：老逻辑直接找 button 里的「手动选择商品分类」，新版默认隐藏+非 button，弹窗打不开→类目匹配失败)
-    let _manualExists = await ev(c, `(()=>{const b=[...document.querySelectorAll('*')].find(x=>x.children.length===0&&(x.textContent||'').trim()==='手动选择商品分类'&&x.getBoundingClientRect().width>0);return !!b;})()`);
-    if(!_manualExists){
-      await ev(c,`(()=>{const m=[...document.querySelectorAll('*')].find(e=>e.children.length===0&&(e.textContent||'').trim()==='查看更多推荐'&&e.getBoundingClientRect().width>0);if(!m)return 'no more';m.click();return 'ok'})()`);
-      await sleep(3000);
+    // 新版 V4 页面：「手动选择商品分类」默认隐藏（需先点「查看更多推荐」展开），且不是 button 标签
+    // (task_240/task_234 教训：直接找 button 找不到；「查看更多推荐」点击后按钮出现有延迟，需重试)
+    let _manualClick = 'no btn';
+    for(let _t=0; _t<4 && _manualClick!=='ok'; _t++){
+      const _find = await ev(c, `(()=>{const b=[...document.querySelectorAll('*')].find(x=>x.children.length===0&&(x.textContent||'').trim()==='手动选择商品分类'&&x.getBoundingClientRect().width>0);return !!b;})()`);
+      if(!_find){
+        await ev(c,`(()=>{const m=[...document.querySelectorAll('*')].find(e=>e.children.length===0&&(e.textContent||'').trim()==='查看更多推荐'&&e.getBoundingClientRect().width>0);if(!m)return 'no more';m.click();return 'ok'})()`);
+        await sleep(4000);
+      }
+      _manualClick = await ev(c, `(()=>{const b=[...document.querySelectorAll('*')].find(x=>x.children.length===0&&(x.textContent||'').trim()==='手动选择商品分类'&&x.getBoundingClientRect().width>0);if(!b)return 'no btn';b.click();return 'ok'})()`);
+      if(_manualClick==='ok') break;
+      await sleep(2000);
     }
-    const _manualClick = await ev(c, `(()=>{const b=[...document.querySelectorAll('*')].find(x=>x.children.length===0&&(x.textContent||'').trim()==='手动选择商品分类'&&x.getBoundingClientRect().width>0);if(!b)return 'no btn';b.click();return 'ok'})()`);
     log('  手动选择商品分类:', _manualClick);
     await sleep(5000);
     const sel=await searchAndSelectCategory();
