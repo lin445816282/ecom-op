@@ -1122,9 +1122,32 @@ def _parse_hook_spec(spec: str):
     if m:
         g = m.group(1)
         n_per = int(g) if g.isdigit() else CN_NUM.get(g, 1)
+    # 「X只」写法（如「1只」「2只」）
+    if n_per == 1:
+        m = re.search(r"(\d+|一|二|三|四|五|六|七|八|九|十)\s*只", spec)
+        if m:
+            g = m.group(1)
+            n_per = int(g) if g.isdigit() else CN_NUM.get(g, 1)
+    # 「单层/双层/三层」写法
+    if n_per == 1:
+        if "三层" in spec:
+            n_per = 3
+        elif "双层" in spec:
+            n_per = 2
     if "加厚加粗" not in spec and "加粗" not in spec:
         grade = "light"
     return n_per, grade
+
+
+def _is_hook_goods(name: str) -> bool:
+    """判断商品名是否是挂钩类（门后挂钩/厨房挂钩等），用于挂钩数统计。
+
+    比 spec 是否含「个装/件装」更可靠：单件/1只/双层/七钩壁挂等无「个装」字样的
+    挂钩也能纳入累计，避免漏算全量挂钩数。
+    """
+    if not name:
+        return False
+    return any(k in name for k in ("挂钩", "挂衣钩", "挂衣架", "挂架", "衣帽架", "衣帽钩"))
 
 
 def _hook_freight(weight: float):
@@ -1424,9 +1447,9 @@ def sale_sku_detail(start=None, end=None, limit=500) -> list[dict]:
     out = []
     for r in rows:
         spec = r["spec"] or ""
-        # 挂钩个数 = 件数 × 个装数（门后挂钩类才计，1个装=1、2个装=2，数量2的2个装=2×2=4）
+        # 挂钩个数 = 件数 × 个装数（挂钩类商品才计；单件/1只/双层等无「个装」字样也按 1/2 计）
         hook_count = 0
-        if "个装" in spec or "件装" in spec:
+        if _is_hook_goods(r["name"] or ""):
             n_per, _ = _parse_hook_spec(spec)
             hook_count = (r["qty"] or 0) * n_per
         out.append({
@@ -1473,7 +1496,7 @@ def sale_sku_summary(start=None, end=None, limit=500) -> list[dict]:
         g["cnt"] += r["cnt"] or 0
         if spec:
             g["specs"].append({"spec": spec, "qty": qty})
-        if "个装" in spec or "件装" in spec:
+        if _is_hook_goods(r["name"] or ""):
             n_per, _ = _parse_hook_spec(spec)
             g["hook_count"] += qty * n_per
     out = []
