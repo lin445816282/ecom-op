@@ -1233,7 +1233,7 @@ function showUserManager() {
         <input id="um-name" placeholder="姓名（业绩显示）" style="flex:1;min-width:120px;padding:9px 12px;border:1px solid #e4e7f1;border-radius:8px;font-size:13px">
         <button id="um-add-btn" style="padding:9px 16px;background:#2563eb;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap">添加</button>
       </div>
-      <div style="font-size:12px;color:#94a3b8;margin-bottom:12px">默认密码 <b>8283103</b>，员工用「账号 + 8283103」登录。</div>
+      <div style="font-size:12px;color:#94a3b8;margin-bottom:12px">账号密码由管理员分配。</div>
       <div id="um-list" style="display:flex;flex-direction:column;gap:8px"><div style="color:#94a3b8;font-size:13px">加载中…</div></div>
     </div>`;
   document.body.appendChild(overlay);
@@ -1300,7 +1300,7 @@ function renderUserAdmin() {
           </select>
           <button id="ua-add-btn" style="padding:9px 18px;background:#2563eb;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap">添加</button>
         </div>
-        <div style="font-size:12px;color:#94a3b8;margin-top:8px">默认密码 <b>8283103</b>。员工默认权限 = 一键上架 + 上架列表，添加后点「🔐 权限」调整。</div>
+        <div style="font-size:12px;color:#94a3b8;margin-top:8px">员工默认权限 = 一键上架 + 上架列表，添加后点「🔐 权限」调整。</div>
       </div>
       <div id="ua-list" style="display:flex;flex-direction:column;gap:12px"><div style="color:#94a3b8;font-size:13px;padding:12px">加载中…</div></div>
     </div>`;
