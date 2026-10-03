@@ -1618,7 +1618,12 @@ def get_user_permissions(user_id: int) -> list:
 
 def verify_login(username: str, password: str) -> dict:
     with closing(_conn()) as c:
-        row = c.execute("SELECT * FROM users WHERE username=?", (username.strip(),)).fetchone()
+        uname = (username or "").strip()
+        # 同时支持登录账号(username)和中文姓名(name)登录
+        row = c.execute(
+            "SELECT * FROM users WHERE username=? OR name=?",
+            (uname, uname),
+        ).fetchone()
         if row and _verify_password(password, row["password_hash"]):
             return dict(row)
         return {}
