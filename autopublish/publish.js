@@ -255,25 +255,35 @@ async function fillByType(c, selector, text){
 
   // ===== Step 4: 填规格（幂等） =====
   log('[4/8] 填规格');
+  // 第一遍：先设置所有规格类型（避免改选规格类型2时清空规格类型1已填的值）
   for(let si=0; si<cfg.specs.length; si++){
     const spec=cfg.specs[si];
     const ph = si===0?'规格类型1':'规格类型2';
     const specTypeVal = await ev(c, `(()=>{const i=document.querySelector('input[placeholder="${ph}"]');return i?i.value:undefined})()`);
-    if(specTypeVal){
-      log(`  规格类型${si+1} 已填[${specTypeVal}]，跳过添加`);
+    if(specTypeVal === spec.type){
+      log(`  规格类型${si+1} 已填[${specTypeVal}]，跳过`);
     } else {
-      // 添加规格类型
-      await ev(c,`(()=>{const btn=[...document.querySelectorAll('button')].find(b=>(b.textContent||'').trim().includes('添加规格类型'));if(btn){btn.scrollIntoView({block:'center'});btn.click();return 'ok';}return 'no'})()`);
-      await sleep(2000);
-      await ev(c,`(()=>{const inp=document.querySelector('input[placeholder="${ph}"]');if(inp){inp.scrollIntoView({block:'center'});inp.click();return 'ok'}return 'no'})()`);
+      if(specTypeVal) log(`  规格类型${si+1} 当前[${specTypeVal}] 需改为[${spec.type}]`);
+      // input 不存在则先点「添加规格类型」（某些类目默认无规格类型占位）
+      const hasInp = await ev(c, `(()=>{const i=document.querySelector('input[placeholder="${ph}"]');return !!i})()`);
+      if(!hasInp){
+        await ev(c,`(()=>{const btn=[...document.querySelectorAll('button')].find(b=>(b.textContent||'').trim().includes('添加规格类型'));if(btn){btn.scrollIntoView({block:'center'});btn.click();return 'ok';}return 'no'})()`);
+        await sleep(2000);
+      }
+      // 点 input 打开下拉（对「已填但类型不匹配」也能改选）
+      await ev(c,`(()=>{const inp=document.querySelector('input[placeholder="${ph}"]');if(inp){inp.scrollIntoView({block:'center'});inp.click();inp.focus();return 'ok'}return 'no'})()`);
       await sleep(2000);
       // 选规格类型（下拉选项：直接找文本匹配的可见叶子，不依赖面板 class —— 不同类目面板 class 名不同）
       const selType=await ev(c,`(()=>{const items=[...document.querySelectorAll('*')].filter(e=>(e.textContent||'').trim()===${JSON.stringify(spec.type)}&&e.children.length===0&&e.getBoundingClientRect().width>0&&e.getBoundingClientRect().height>0);if(items.length){items[items.length-1].click();return 'ok';}return 'no ${spec.type}'})()`);
       await sleep(1500);
       // 验证规格类型是否真选上（value 应等于 spec.type）
       const selVal = await ev(c, `(()=>{const i=document.querySelector('input[placeholder="${ph}"]');return i?i.value:''})()`);
-      log(`  已添加规格类型${si+1}: ${spec.type} [${selType}, value=${selVal}]`);
+      log(`  规格类型${si+1}: 设为 ${spec.type} [${selType}, value=${selVal}]`);
     }
+  }
+  // 第二遍：填所有规格值（幂等：只填空 input）
+  for(let si=0; si<cfg.specs.length; si++){
+    const spec=cfg.specs[si];
     // 填规格值（幂等：只填空 input）
     let filled=0;
     for(const v of spec.values){
