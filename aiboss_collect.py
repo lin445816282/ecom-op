@@ -109,7 +109,12 @@ def collect(port: str, stat_date: str = None):
         stat_date = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
 
     # 1. node 抓取
-    r = subprocess.run([NODE_EXE, SCRAPE_JS, port, RAW_OUT], capture_output=True, text=True, timeout=180)
+    try:
+        r = subprocess.run([NODE_EXE, SCRAPE_JS, port, RAW_OUT], capture_output=True, text=True, timeout=180)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"采集超时180s：CDP {port} 可能登录态失效或页面卡死，请重新扫码登录") from None
+    if r.returncode != 0:
+        raise RuntimeError(f"抓取失败exit{r.returncode}: {(r.stderr or '').strip()[:120]}")
     print("抓取输出:", r.stdout.strip()[:200], r.stderr.strip()[:200])
 
     raw = json.load(open("/mnt/c/tmp/goods_effect_raw.json", encoding="utf-8"))
