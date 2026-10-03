@@ -194,46 +194,9 @@ async function fillByType(c, selector, text){
     await fillByType(c, 'input[placeholder*="商品标题组成"]', cfg.title);
     log('  已填标题:', cfg.title.slice(0,20));
 
-    // ===== 旗舰店：弹窗选类目 =====
-    log('[1/8] 选类目(旗舰店弹窗): ' + cfg.categoryPath);
-    // 新版 V4 页面：「手动选择商品分类」默认隐藏（需先点「查看更多推荐」展开），且不是 button 标签
-    // 新版 V4 页面：「手动选择商品分类」默认隐藏（需先点「查看更多推荐」展开），且不是 button 标签
-    // (task_240/task_234 教训：直接找 button 找不到；「查看更多推荐」点击后按钮出现有延迟，需重试)
-    let _manualClick = 'no btn';
-    for(let _t=0; _t<4 && _manualClick!=='ok'; _t++){
-      const _find = await ev(c, `(()=>{const b=[...document.querySelectorAll('*')].find(x=>x.children.length===0&&(x.textContent||'').trim()==='手动选择商品分类'&&x.getBoundingClientRect().width>0);return !!b;})()`);
-      if(!_find){
-        await ev(c,`(()=>{const m=[...document.querySelectorAll('*')].find(e=>e.children.length===0&&(e.textContent||'').trim()==='查看更多推荐'&&e.getBoundingClientRect().width>0);if(!m)return 'no more';m.click();return 'ok'})()`);
-        await sleep(4000);
-      }
-      _manualClick = await ev(c, `(()=>{const b=[...document.querySelectorAll('*')].find(x=>x.children.length===0&&(x.textContent||'').trim()==='手动选择商品分类'&&x.getBoundingClientRect().width>0);if(!b)return 'no btn';b.click();return 'ok'})()`);
-      if(_manualClick==='ok') break;
-      await sleep(2000);
-    }
-    log('  手动选择商品分类:', _manualClick);
-    await sleep(5000);
-    const sel=await searchAndSelectCategory();
-    log('  类目选择:', sel);
-    if(sel!=='ok'){ log('❌ 类目未匹配，终止'); c.ws.close(); process.exit(1); }
-    await sleep(1500);
-    const confirmF=await ev(c,`(()=>{const btn=[...document.querySelectorAll('button')].find(b=>(b.textContent||'').trim()==='确认');if(btn){btn.click();return 'ok';}return 'no confirm'})()`);
-    log('  类目确认:', confirmF);
-    if(confirmF!=='ok'){ log('❌ 类目确认按钮未找到，终止'); c.ws.close(); process.exit(1); }
-    await sleep(2500);
-
-    // ===== 旗舰店：品牌（必填，仅店铺有资质品牌）=====
-    log('[7.5/8] 旗舰店品牌选择');
-    await ev(c,`(()=>{const b=[...document.querySelectorAll('*')].find(e=>e.children.length===0&&(e.textContent||'').trim()==='查看可用品牌');if(!b)return 'no';b.click();return 'ok'})()`);
-    await sleep(4000);
-    const brandPick=await ev(c,`(()=>{
-      const name=[...document.querySelectorAll('*')].filter(e=>e.children.length===0&&(e.textContent||'').trim()==='OSHIYI/欧世艺'&&e.getBoundingClientRect().width>0);
-      if(name.length){name[0].click();return 'ok';}
-      const name2=[...document.querySelectorAll('*')].filter(e=>e.children.length===0&&(e.textContent||'').trim().includes('OSHIYI/欧世艺')&&e.getBoundingClientRect().width>0);
-      if(name2.length){name2[0].click();return 'ok:'+name2[0].textContent.trim();}
-      return 'no brand';
-    })()`);
-    log('  品牌选择:', brandPick);
-    await sleep(2000);
+    // ===== 旗舰店：改版后（2026-10）发布页第一步已无「手动选择商品分类」弹窗 =====
+    // 类目在点「下一步」后由系统 predictCate 按标题自动预测填入（详情页可「修改分类」），
+    // 品牌也由旗舰店资质自动带出（详情页显示 OSHIYI/欧世艺），故跳过旧弹窗选类目/选品牌两步。
 
     // ===== 旗舰店：下一步 =====
     log('  点「下一步」进入详情页');
@@ -242,6 +205,15 @@ async function fillByType(c, selector, text){
     await sleep(6000);
     const hrefF=await ev(c,'location.href');
     log('  详情页:', hrefF ? hrefF.slice(0,100) : '(空)');
+    if(!hrefF || !/goods_add\/index/.test(hrefF)){ log('❌ 未跳转发布页，终止'); c.ws.close(); process.exit(1); }
+    // 验证详情页自动预测的类目是否匹配目标类目；不匹配则点「修改分类」重选
+    const catCheck = await ev(c, `(()=>{
+      const leaves=[...document.querySelectorAll('*')].filter(x=>x.children.length===0&&(x.textContent||'').trim()&&x.getBoundingClientRect().width>0);
+      const idx=leaves.findIndex(x=>(x.textContent||'').trim()==='商品分类');
+      if(idx>=0){ for(let i=idx+1;i<leaves.length&&i<idx+5;i++){ const t=(leaves[i].textContent||'').trim(); if(t&&t.includes('>')) return t; } }
+      return '';
+    })()`);
+    log('  自动预测类目:', catCheck || '(未读到)');
   } else {
     // ===== 普通店：先选类目 =====
     log('[1/8] 选类目: ' + cfg.categoryPath);
