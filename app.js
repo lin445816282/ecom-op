@@ -1433,9 +1433,11 @@ async function loadApList() {
       `<span style="display:inline-flex;align-items:center;gap:3px;font-size:11px;padding:2px 7px;border-radius:4px;font-weight:600;margin-right:6px;${style}">${icon} ${esc(text)}</span>`;
     const shopTag = metaTag('🏪', shopName, 'background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe');
     const operatorTag = metaTag('👤', t.operator_name || '—', 'background:#f0fdf4;color:#166534;border:1px solid #bbf7d0');
-    const priceModeTag = t.price_mode === 'normal'
+    const _pm = t.price_mode || '';
+    const isNormal = _pm === 'normal' || _pm === '平卖价';
+    const priceModeTag = isNormal
       ? metaTag('🏷️', '平卖价', 'background:#fef3c7;color:#92400e;border:1px solid #fcd34d')
-      : metaTag('🏷️', '推广价', 'background:#dbeafe;color:#1e40af;border:1px solid #93c5fd');
+      : metaTag('🏷️', (_pm === 'promo' ? '推广价' : (_pm || '推广价')), 'background:#dbeafe;color:#1e40af;border:1px solid #93c5fd');
     return `
     <div class="ap-task-item">
       <input type="checkbox" class="ap-task-check" value="${t.id}" ${canRepub ? '' : 'disabled'} ${canRepub && _apSelected.has(String(t.id)) ? 'checked' : ''} onclick="event.stopPropagation()" onchange="window.toggleApSelect(this)">
