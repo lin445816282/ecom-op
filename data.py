@@ -2444,12 +2444,13 @@ def _clean_title(title: str) -> str:
     return t
 
 
-def ai_generate_publish_config(product: dict, pricing: dict = None, shop_name: str = "") -> dict:
+def ai_generate_publish_config(product: dict, pricing: dict = None, shop_name: str = "", shop_id: int = 0) -> dict:
     """DeepSeek 把 1688 抓取的 product 自动生成 publish.js 的 config。
 
     product: {title, bodyText, images, offerId}
     pricing: {profit_rate, roi, danmai_mult, ref_mult} 固定定价参数（默认 0.2/2/1.5/1.2）
     shop_name: 目标店铺名（批量铺多店时用于标题差异化，避免各店标题完全重复）
+    shop_id: 目标店铺 ID（用于主图轮换，避免各店主图顺序完全一致）
     返回: {config: {...}|None, warning: str, error: str|None}
 
     config 字段（见 pdd-goods-publish-cdp skill / config.example.json）：
@@ -2559,8 +2560,13 @@ def ai_generate_publish_config(product: dict, pricing: dict = None, shop_name: s
             _t *= max(1, len(s.get("values") or []))
         _trim_note = f"SKU 由 {_sku_total} 精简到 {_t} 个"
     # images 用真实抓取的图片路径（AI 只给索引，这里映射回真实路径）
-    cfg["images"] = images[:10]
-    # previewImages：AI 给的是索引 0-9，映射成真实图片路径
+    # 主图差异化：不同店铺轮换图序（同一 1688 货源铺多店时避免各店首图完全一致）
+    base_images = images[:10]
+    n_img = len(base_images)
+    offset = (int(shop_id) % n_img) if (n_img > 1 and shop_id) else 0
+    rotated_images = base_images[offset:] + base_images[:offset] if offset else base_images
+    cfg["images"] = rotated_images
+    # previewImages：AI 给的索引基于原始图序，轮换后索引同步偏移（新索引 = 旧索引 - offset，取模）
     pv = cfg.get("previewImages") or {}
     resolved_pv = {}
     for k, v in pv.items():
@@ -2568,7 +2574,9 @@ def ai_generate_publish_config(product: dict, pricing: dict = None, shop_name: s
             idx = int(v)
         except (TypeError, ValueError):
             idx = 0
-        resolved_pv[str(k)] = images[idx] if idx < len(images) else (images[0] if images else "")
+        if offset and n_img > 1:
+            idx = (idx - offset) % n_img
+        resolved_pv[str(k)] = rotated_images[idx] if idx < len(rotated_images) else (rotated_images[0] if rotated_images else "")
     cfg["previewImages"] = resolved_pv
     # 定价：AI 提取进价 cost，这里用固定公式算 pdd/danmai/refPrice（不再让 AI 自由定价）
     costs = cfg.get("priceBySpec2") or {}
