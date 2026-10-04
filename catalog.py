@@ -812,12 +812,13 @@ def remove_banned_word(word_id: int) -> bool:
         return True
 
 
-def create_autopublish_task(source_url: str, shop_id: int = 5, operator_name: str = '') -> dict:
-    """新建一键上架任务，初始状态 queued。"""
+def create_autopublish_task(source_url: str, shop_id: int = 5, operator_name: str = '',
+                            price_mode: str = 'promo') -> dict:
+    """新建一键上架任务，初始状态 queued。price_mode: promo 推广价 / normal 平卖价。"""
     with closing(_conn()) as c:
         cur = c.execute(
-            "INSERT INTO autopublish_tasks(source_url, shop_id, status, operator_name) VALUES(?,?,?,?)",
-            (source_url.strip(), shop_id, "queued", operator_name.strip()),
+            "INSERT INTO autopublish_tasks(source_url, shop_id, status, operator_name, price_mode) VALUES(?,?,?,?,?)",
+            (source_url.strip(), shop_id, "queued", operator_name.strip(), price_mode or "promo"),
         )
         c.commit()
         row = c.execute(
@@ -1657,6 +1658,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
         _cols = {r[1] for r in conn.execute(f"PRAGMA table_info({_t})").fetchall()}
         if "operator_name" not in _cols:
             conn.execute(f"ALTER TABLE {_t} ADD COLUMN operator_name TEXT DEFAULT ''")
+    # autopublish_tasks 表 price_mode 列（价格体系：promo 推广价 / normal 平卖价）
+    _apmcols = {r[1] for r in conn.execute("PRAGMA table_info(autopublish_tasks)").fetchall()}
+    if "price_mode" not in _apmcols:
+        conn.execute("ALTER TABLE autopublish_tasks ADD COLUMN price_mode TEXT DEFAULT 'promo'")
     # users 表 permissions 列（模块访问权限，JSON 数组，["*"]=全权限）
     ucols = {r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
     if "permissions" not in ucols:

@@ -1412,7 +1412,7 @@ class Handler(BaseHTTPRequestHandler):
             if not url:
                 return _json(self, {"error": "请填写 1688 商品链接"}, 400)
             operator = (self._current_user(qs) or {}).get("name") or ""
-            task = catalog.create_autopublish_task(url, shop_id, operator)
+            task = catalog.create_autopublish_task(url, shop_id, operator, pricing.get("price_mode", "promo"))
             _enqueue_autopublish(task["id"], task["shop_id"], pricing)
             return _json(self, {"ok": True, "task": task})
 
@@ -1446,7 +1446,7 @@ class Handler(BaseHTTPRequestHandler):
             tasks = []
             for u in urls:
                 for sid in shop_ids:
-                    t = catalog.create_autopublish_task(u, sid, operator)
+                    t = catalog.create_autopublish_task(u, sid, operator, pricing.get("price_mode", "promo"))
                     tasks.append(t)
                     _enqueue_autopublish(t["id"], t["shop_id"], pricing)
             return _json(self, {"ok": True, "tasks": tasks, "count": len(tasks),
