@@ -2458,6 +2458,9 @@ def ai_generate_publish_config(product: dict, pricing: dict = None, shop_name: s
       priceBySpec2{spec2值:{pdd,danmai}}, stock, refPrice, previewImages{spec1值:图}
     """
     import re
+    # 标题确定性差异化修饰词库（家居/工艺品类通用合规词），按 shop_id 轮选附加到标题尾部，
+    # 保证同一货源批量铺多店时各店标题不完全相同（不依赖 AI 随机性）。
+    _TITLE_DIFF_TAGS = ["家用", "简约", "北欧风", "实用", "创意", "复古", "田园", "ins风", "轻奢", "经典"]
     pricing = pricing or {}
     profit_rate = float(pricing.get("profit_rate", 0.2))
     roi = float(pricing.get("roi", 2.0))
@@ -2534,6 +2537,14 @@ def ai_generate_publish_config(product: dict, pricing: dict = None, shop_name: s
         cfg["title"] = title[:60]
     # 硬过滤平台词/违规词（抖音/快手/淘宝等），AI 不可靠，代码层兜底；清空则回退原始标题
     cfg["title"] = _clean_title(cfg["title"]) or _clean_title(title)[:60] or title[:60]
+    # 标题确定性差异化：AI 随机性不可靠，代码层按 shop_id 附加修饰词，保证批量铺多店标题不完全相同
+    if shop_id and cfg["title"]:
+        _base = (int(shop_id) - 1) % len(_TITLE_DIFF_TAGS)
+        for _i in range(len(_TITLE_DIFF_TAGS)):
+            _tag = _TITLE_DIFF_TAGS[(_base + _i) % len(_TITLE_DIFF_TAGS)]
+            if _tag and _tag not in cfg["title"] and (len(cfg["title"]) + len(_tag)) <= 30:
+                cfg["title"] = cfg["title"] + _tag
+                break
     if not cfg.get("categoryKeyword"):
         cfg["categoryKeyword"] = "婚庆"
     # 规格类型名规范化：颜色/色号/花色 → 款式（拼多多「颜色/色号」用色卡选择填不了，「花色」不在规格类型列表）
