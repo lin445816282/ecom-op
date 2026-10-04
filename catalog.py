@@ -1328,36 +1328,46 @@ def update_cost_params(params: dict) -> dict:
     return updated
 
 
-# 一键上架定价参数（存 fixed_cost_params 表，key 前缀 ap_），前端可分别修改保存入库
+# 一键上架定价参数（两套独立价格体系，分别入库）。
+# key 前缀：推广价 ap_、平卖价 ap_normal_。两套参数互不影响。
 AP_PRICING_FIELDS = {
-    "profit_rate":   {"key": "ap_profit_rate",   "default": 20.0},  # 利润率 %
-    "roi":           {"key": "ap_roi",           "default": 2.0},   # 投产比
-    "aftersale_rate":{"key": "ap_aftersale_rate","default": 5.0},   # 售后率 %
-    "freight":       {"key": "ap_freight",       "default": 3.0},   # 运费 元
-    "danmai_mult":   {"key": "ap_danmai_mult",   "default": 1.5},   # 单买倍数
+    "promo": {
+        "profit_rate":   {"key": "ap_profit_rate",   "default": 20.0},  # 利润率 %
+        "roi":           {"key": "ap_roi",           "default": 2.0},   # 投产比（仅推广价）
+        "aftersale_rate":{"key": "ap_aftersale_rate","default": 5.0},   # 售后率 %
+        "freight":       {"key": "ap_freight",       "default": 3.0},   # 运费 元
+        "danmai_mult":   {"key": "ap_danmai_mult",   "default": 1.5},   # 单买倍数
+    },
+    "normal": {
+        "profit_rate":   {"key": "ap_normal_profit_rate",   "default": 30.0},  # 平卖价利润率默认更高（不摊广告费）
+        "aftersale_rate":{"key": "ap_normal_aftersale_rate","default": 5.0},
+        "freight":       {"key": "ap_normal_freight",       "default": 3.0},
+        "danmai_mult":   {"key": "ap_normal_danmai_mult",   "default": 1.5},
+    },
 }
 
 
 def get_autopublish_pricing() -> dict:
-    """读取一键上架定价参数（未入库的字段回落到默认值）。"""
+    """读取一键上架两套定价参数，返回 {promo:{...}, normal:{...}}（未入库回落到默认值）。"""
+    keys = [m["key"] for fields in AP_PRICING_FIELDS.values() for m in fields.values()]
     with closing(_conn()) as c:
-        keys = [m["key"] for m in AP_PRICING_FIELDS.values()]
         rows = c.execute(
             f"SELECT key, value FROM fixed_cost_params WHERE key IN ({','.join('?' for _ in keys)})",
             keys,
         ).fetchall()
     got = {r["key"]: r["value"] for r in rows}
     out = {}
-    for field, meta in AP_PRICING_FIELDS.items():
-        out[field] = got.get(meta["key"], meta["default"])
+    for mode, fields in AP_PRICING_FIELDS.items():
+        out[mode] = {f: got.get(m["key"], m["default"]) for f, m in fields.items()}
     return out
 
 
-def update_autopublish_pricing(params: dict) -> dict:
-    """更新一键上架定价参数（白名单字段，写入 fixed_cost_params 表 ap_ 前缀）。"""
+def update_autopublish_pricing(params: dict, mode: str = "promo") -> dict:
+    """更新一键上架某套价格体系定价参数（白名单字段，写入 fixed_cost_params 表）。"""
+    fields = AP_PRICING_FIELDS.get(mode) or {}
     updated = {}
     with closing(_conn()) as c:
-        for field, meta in AP_PRICING_FIELDS.items():
+        for field, meta in fields.items():
             if field not in (params or {}):
                 continue
             try:

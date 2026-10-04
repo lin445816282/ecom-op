@@ -838,10 +838,29 @@ async function renderAutopublish() {
     </div>
   `;
 
-  // 当前价格体系（promo 推广价 / normal 平卖价）
-  const getPriceMode = () => {
-    const checked = document.querySelector('input[name="ap-price-mode"]:checked');
-    return checked ? checked.value : 'promo';
+  // 两套价格体系各自独立的定价参数（promo 推广价 / normal 平卖价），默认值兜底
+  const pricingCache = {
+    promo:  { profit_rate: 20, roi: 2, aftersale_rate: 5, freight: 3, danmai_mult: 1.5 },
+    normal: { profit_rate: 30, aftersale_rate: 5, freight: 3, danmai_mult: 1.5 },
+  };
+  let currentMode = 'promo';  // 当前编辑的价格体系
+  const getPriceMode = () => currentMode;
+  // 从输入框读取当前体系参数（平卖价的 roi 后端会自动忽略）
+  const readPricingInputs = () => ({
+    profit_rate: Number($('#ap-profit').value) || 20,
+    roi: Number($('#ap-roi').value) || 2,
+    aftersale_rate: Number($('#ap-aftersale').value) || 5,
+    freight: Number($('#ap-freight').value) || 3,
+    danmai_mult: Number($('#ap-danmai').value) || 1.5,
+  });
+  // 把某套体系参数写入输入框
+  const writePricingInputs = (mode) => {
+    const p = pricingCache[mode] || pricingCache.promo;
+    $('#ap-profit').value = p.profit_rate;
+    $('#ap-roi').value = p.roi;
+    $('#ap-aftersale').value = p.aftersale_rate;
+    $('#ap-freight').value = p.freight;
+    $('#ap-danmai').value = p.danmai_mult;
   };
   // 实时预览定价倍率 + 切换价格体系时同步投产比显隐/公式提示
   const updatePricePreview = () => {
@@ -879,45 +898,43 @@ async function renderAutopublish() {
     const inp = $('#' + id);
     if (inp) inp.oninput = updatePricePreview;
   });
+  // 切换价格体系：先存回旧体系参数 → 切换 → 载入新体系参数（两套独立，互不影响）
   document.querySelectorAll('input[name="ap-price-mode"]').forEach(r => {
-    r.onchange = () => { localStorage.setItem('ap_price_mode', getPriceMode()); updatePricePreview(); };
+    r.onchange = () => {
+      pricingCache[currentMode] = readPricingInputs();  // 存回旧体系
+      currentMode = r.value;                            // 切到新体系
+      localStorage.setItem('ap_price_mode', currentMode);
+      writePricingInputs(currentMode);                  // 载入新体系参数
+      updatePricePreview();
+    };
   });
-  // 保存定价参数到后端（入库）
+  // 保存当前体系的定价参数到后端（分别入库）
   const saveBtn = $('#ap-pricing-save');
   if (saveBtn) saveBtn.onclick = async () => {
-    const body = {
-      profit_rate: Number($('#ap-profit').value) || 20,
-      roi: Number($('#ap-roi').value) || 2,
-      aftersale_rate: Number($('#ap-aftersale').value) || 5,
-      freight: Number($('#ap-freight').value) || 3,
-      danmai_mult: Number($('#ap-danmai').value) || 1.5,
-    };
+    pricingCache[currentMode] = readPricingInputs();
+    const body = { mode: currentMode, ...pricingCache[currentMode] };
     saveBtn.disabled = true;
     saveBtn.textContent = '保存中…';
     try {
       const resp = await api('/api/autopublish/pricing', 'POST', body);
-      if (resp && resp.ok) toast('定价参数已保存入库');
+      if (resp && resp.ok) toast(`${currentMode === 'promo' ? '推广价' : '平卖价'}参数已保存入库`);
       else toast((resp && resp.error) || '保存失败');
     } catch (e) { toast('保存失败: ' + e.message); }
     saveBtn.disabled = false;
     saveBtn.textContent = '💾 保存定价参数';
   };
-  // 加载已入库的定价参数 + 恢复上次价格体系
+  // 加载两套已入库参数 + 恢复上次价格体系
   const loadPricingParams = async () => {
     try {
       const resp = await api('/api/autopublish/pricing');
-      if (resp) {
-        if (resp.profit_rate != null) $('#ap-profit').value = resp.profit_rate;
-        if (resp.roi != null) $('#ap-roi').value = resp.roi;
-        if (resp.aftersale_rate != null) $('#ap-aftersale').value = resp.aftersale_rate;
-        if (resp.freight != null) $('#ap-freight').value = resp.freight;
-        if (resp.danmai_mult != null) $('#ap-danmai').value = resp.danmai_mult;
-      }
+      if (resp && resp.promo) pricingCache.promo = { ...pricingCache.promo, ...resp.promo };
+      if (resp && resp.normal) pricingCache.normal = { ...pricingCache.normal, ...resp.normal };
     } catch (e) {}
-    const savedMode = localStorage.getItem('ap_price_mode') || 'promo';
+    currentMode = localStorage.getItem('ap_price_mode') || 'promo';
     document.querySelectorAll('input[name="ap-price-mode"]').forEach(r => {
-      r.checked = (r.value === savedMode);
+      r.checked = (r.value === currentMode);
     });
+    writePricingInputs(currentMode);
     updatePricePreview();
   };
   updatePricePreview();

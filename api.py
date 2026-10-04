@@ -1399,8 +1399,9 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/autopublish/pricing" and self.command == "POST":
             item = self._read_body()
-            updated = catalog.update_autopublish_pricing(item)
-            return _json(self, {"ok": True, "updated": updated})
+            mode = str(item.get("mode") or "promo")
+            updated = catalog.update_autopublish_pricing(item, mode)
+            return _json(self, {"ok": True, "updated": updated, "mode": mode})
 
         if path == "/api/autopublish" and self.command == "POST":
             import threading
