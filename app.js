@@ -37,6 +37,7 @@ const VIEWS = {
 
 // 可授权模块清单（权限赋予勾选用）。dashboard 运营总览 + 运营指南始终放行，不在此列。
 const PERM_MODULES = [
+  { key:'autopublish', name:'一键上架', icon:'🚀' },
   { key:'packing', name:'打单登记', icon:'🖨' },
   { key:'products', name:'商品投产', icon:'✚' },
   { key:'catalog', name:'商品库', icon:'📦' },
@@ -50,7 +51,6 @@ const PERM_MODULES = [
   { key:'reviews', name:'评价监控', icon:'⭐' },
   { key:'logs', name:'运营日志', icon:'◷' },
   { key:'errors', name:'错误处理', icon:'⚠️' },
-  { key:'autopublish', name:'一键上架', icon:'🚀' },
   { key:'publishedgoods', name:'上架列表', icon:'📋' },
   { key:'aiboss', name:'AI老板', icon:'🤖' },
   { key:'promofinance', name:'推广财务', icon:'💰' },
