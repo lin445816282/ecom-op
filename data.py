@@ -2579,11 +2579,38 @@ def ai_generate_publish_config(product: dict, pricing: dict = None, shop_name: s
             _t *= max(1, len(s.get("values") or []))
         _trim_note = f"SKU 由 {_sku_total} 精简到 {_t} 个"
     # images 用真实抓取的图片路径（AI 只给索引，这里映射回真实路径）
-    # 主图差异化：不同店铺轮换图序（同一 1688 货源铺多店时避免各店首图完全一致）
+    # 主图必须是正方形图：1688 抓图里常混长方图（如 800x1200 商详图），
+    # 先按「是否正方形」分组，正方形图排前作主图候选，长方图排后作商详图，避免长方图当主图被裁切。
     base_images = images[:10]
-    n_img = len(base_images)
-    offset = (int(shop_id) % n_img) if (is_batch and n_img > 1 and shop_id) else 0
-    rotated_images = base_images[offset:] + base_images[:offset] if offset else base_images
+
+    def _win_to_wsl(p):
+        p = str(p or "").replace("\\", "/")
+        if len(p) >= 2 and p[1] == ":":
+            return "/mnt/" + p[0].lower() + p[2:]
+        return p
+
+    def _img_is_square(p, tol=0.05):
+        try:
+            from PIL import Image
+            with Image.open(_win_to_wsl(p)) as _im:
+                _w, _h = _im.size
+            return _w > 0 and _h > 0 and abs(_w - _h) / max(_w, _h) <= tol
+        except Exception:
+            return False  # 读不到尺寸当作非正方形，排后不冒险当主图
+
+    square_imgs = []
+    other_imgs = []
+    for p in base_images:
+        (square_imgs if _img_is_square(p) else other_imgs).append(p)
+    ordered_images = square_imgs + other_imgs
+    n_square = len(square_imgs)
+    n_img = len(ordered_images)
+    _no_square_warn = ""
+    if not n_square:
+        _no_square_warn = "未检测到正方形图（货源图可能全为长方图），首图仍用原图序，拼多多可能裁切，建议人工补一张 800x800 主图"
+    # 主图差异化：不同店铺轮换图序（仅限正方形池，保证轮换后首图仍是正方形）
+    offset = (int(shop_id) % n_square) if (is_batch and n_square > 1 and shop_id) else 0
+    rotated_images = ordered_images[offset:] + ordered_images[:offset] if offset else ordered_images
     cfg["images"] = rotated_images
     # previewImages：AI 给的索引基于原始图序，轮换后索引同步偏移（新索引 = 旧索引 - offset，取模）
     pv = cfg.get("previewImages") or {}
@@ -2632,5 +2659,8 @@ def ai_generate_publish_config(product: dict, pricing: dict = None, shop_name: s
     # 类目修正：按标题关键词命中映射表（AI 不知道拼多多真实类目树，常猜错类目导致发布时搜不到）
     if _fix_category_by_map(cfg, title):
         warning = (warning + "；" if warning else "") + "类目已按映射修正为「" + cfg.get("categoryPath", "") + "」"
+
+    if _no_square_warn:
+        warning = (warning + "；" if warning else "") + _no_square_warn
 
     return {"config": cfg, "warning": warning, "error": None}
