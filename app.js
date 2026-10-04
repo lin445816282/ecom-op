@@ -1061,6 +1061,7 @@ async function renderAutopublish() {
     const shop_ids = [...document.querySelectorAll('.ap-batch-shop:checked')].map(c => Number(c.value));
     if (!shop_ids.length) { toast('请至少勾选一个店铺'); return; }
     const pricing = {
+      is_batch: true,
       price_mode: getPriceMode(),
       profit_rate: (Number($('#ap-profit').value) || 20) / 100,
       roi: Number($('#ap-roi').value) || 2,

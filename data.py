@@ -2469,6 +2469,7 @@ def ai_generate_publish_config(product: dict, pricing: dict = None, shop_name: s
     danmai_mult = float(pricing.get("danmai_mult", 1.5))
     ref_mult = float(pricing.get("ref_mult", 1.2))
     price_mode = str(pricing.get("price_mode", "promo") or "promo")
+    is_batch = bool(pricing.get("is_batch"))
     title = (product.get("title") or "").strip()
     body_text = (product.get("bodyText") or "")[:6000]
     images = product.get("images") or []
@@ -2538,7 +2539,7 @@ def ai_generate_publish_config(product: dict, pricing: dict = None, shop_name: s
     # 硬过滤平台词/违规词（抖音/快手/淘宝等），AI 不可靠，代码层兜底；清空则回退原始标题
     cfg["title"] = _clean_title(cfg["title"]) or _clean_title(title)[:60] or title[:60]
     # 标题确定性差异化：AI 随机性不可靠，代码层按 shop_id 附加修饰词，保证批量铺多店标题不完全相同
-    if shop_id and cfg["title"]:
+    if is_batch and shop_id and cfg["title"]:
         _base = (int(shop_id) - 1) % len(_TITLE_DIFF_TAGS)
         for _i in range(len(_TITLE_DIFF_TAGS)):
             _tag = _TITLE_DIFF_TAGS[(_base + _i) % len(_TITLE_DIFF_TAGS)]
@@ -2574,7 +2575,7 @@ def ai_generate_publish_config(product: dict, pricing: dict = None, shop_name: s
     # 主图差异化：不同店铺轮换图序（同一 1688 货源铺多店时避免各店首图完全一致）
     base_images = images[:10]
     n_img = len(base_images)
-    offset = (int(shop_id) % n_img) if (n_img > 1 and shop_id) else 0
+    offset = (int(shop_id) % n_img) if (is_batch and n_img > 1 and shop_id) else 0
     rotated_images = base_images[offset:] + base_images[:offset] if offset else base_images
     cfg["images"] = rotated_images
     # previewImages：AI 给的索引基于原始图序，轮换后索引同步偏移（新索引 = 旧索引 - offset，取模）
