@@ -2444,11 +2444,12 @@ def _clean_title(title: str) -> str:
     return t
 
 
-def ai_generate_publish_config(product: dict, pricing: dict = None) -> dict:
+def ai_generate_publish_config(product: dict, pricing: dict = None, shop_name: str = "") -> dict:
     """DeepSeek 把 1688 抓取的 product 自动生成 publish.js 的 config。
 
     product: {title, bodyText, images, offerId}
     pricing: {profit_rate, roi, danmai_mult, ref_mult} 固定定价参数（默认 0.2/2/1.5/1.2）
+    shop_name: 目标店铺名（批量铺多店时用于标题差异化，避免各店标题完全重复）
     返回: {config: {...}|None, warning: str, error: str|None}
 
     config 字段（见 pdd-goods-publish-cdp skill / config.example.json）：
@@ -2472,15 +2473,17 @@ def ai_generate_publish_config(product: dict, pricing: dict = None) -> dict:
     if not DEEPSEEK_API_KEY:
         return {"config": None, "warning": "", "error": "未配置 DeepSeek API key"}
 
+    shop_line = f"目标店铺：{shop_name}\n" if shop_name else ""
     prompt = (
         "你是拼多多商品上架配置专家。根据 1688 抓取的商品数据，生成拼多多发布页所需的 config.json。\n\n"
+        f"{shop_line}"
         f"商品标题：{title}\n"
         f"商品页面文本（含规格/价格/属性）：\n{body_text}\n\n"
         "请输出一个 JSON 对象，字段如下：\n"
         "{\n"
         '  "categoryKeyword": "类目搜索关键词（2-4字，取 categoryPath 第二级最具体品类词，如 手套/婚庆/仿真花/气球）",\n'
         '  "categoryPath": "完整类目路径，严格用 > 分隔三级（一级>二级>三级），每级是拼多多真实类目名，禁止一级用 / 混多个词。例：服饰配件/饰品 > 手套 > 分指手套",\n'
-        '  "title": "优化后标题，≤30个汉字、≤60字符，保留核心卖点+场景词，不要夸张违规词，严禁出现平台名（抖音/快手/淘宝/天猫/京东/拼多多/小红书/微信等）",\n'
+        '  "title": "优化后标题，≤30个汉字、≤60字符，保留核心卖点+场景词，不要夸张违规词，严禁出现平台名（抖音/快手/淘宝/天猫/京东/拼多多/小红书/微信等）。若提供了目标店铺，标题要针对该店差异化：换词序、换卖点侧重、换场景词，避免与其他店铺标题雷同",\n'
         '  "specs": [{"type":"规格类型名(颜色/款式/尺寸/型号)","values":["值1","值2"]}],\n'
         '  "priceBySpec2": {"规格2的值":{"cost":进价(元)}},\n'
         '  "stock": 库存数字(默认500),\n'

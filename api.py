@@ -2688,7 +2688,8 @@ def _autopublish_bg(task_id: int, pricing: dict = None):
         return _fail_timeout("ai")
     catalog.append_autopublish_log(task_id, "ai", "running", "DeepSeek 分析规格/定价/类目，生成上架配置…")
     catalog.update_autopublish_task(task_id, status="ai", stage="ai")
-    ai = data.ai_generate_publish_config(product, pricing)
+    shop_name = catalog.get_shop_name(shop_id)
+    ai = data.ai_generate_publish_config(product, pricing, shop_name=shop_name)
     if _overtime("ai"):
         return _fail_timeout("ai")
     if ai.get("error"):
