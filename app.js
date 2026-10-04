@@ -988,7 +988,7 @@ async function renderAutopublish() {
   // 全选可重上架 + 批量重新生成
   const checkAll = $('#ap-check-all');
   if (checkAll) checkAll.onchange = () => {
-    [...document.querySelectorAll('.ap-task-check:not(:disabled)')].forEach(c => { c.checked = checkAll.checked; });
+    [...document.querySelectorAll('.ap-task-check:not(:disabled)')].forEach(c => { c.checked = checkAll.checked; if (checkAll.checked) _apSelected.add(String(c.value)); else _apSelected.delete(String(c.value)); });
   };
   const batchBtn = $('#ap-batch-repub-btn');
   if (batchBtn) batchBtn.onclick = batchRepublish;
@@ -1152,6 +1152,13 @@ async function removeBannedWord(id) {
   } catch (e) { toast('删除失败：' + (e.message || e)); }
 }
 
+// 批量重新生成：勾选状态跨轮询刷新保留（loadApList 每 3s 重建 DOM，会把 checked 冲掉）
+let _apSelected = new Set();
+window.toggleApSelect = function(el) {
+  if (el.checked) _apSelected.add(String(el.value));
+  else _apSelected.delete(String(el.value));
+};
+
 async function loadApList() {
   const el = $('#ap-list');
   if (!el) return;
@@ -1167,7 +1174,7 @@ async function loadApList() {
     const canRepub = (t.status === 'failed' || t.status === 'draft');
     return `
     <div class="ap-task-item">
-      <input type="checkbox" class="ap-task-check" value="${t.id}" ${canRepub ? '' : 'disabled'} onclick="event.stopPropagation()">
+      <input type="checkbox" class="ap-task-check" value="${t.id}" ${canRepub ? '' : 'disabled'} ${canRepub && _apSelected.has(String(t.id)) ? 'checked' : ''} onclick="event.stopPropagation()" onchange="window.toggleApSelect(this)">
       <div class="ap-task-id">#${t.id}</div>
       <div class="ap-task-main" onclick="startApPolling(${t.id})">
         <div class="ap-task-title">${esc(t.raw_title || t.ai_title || t.source_url || '')}</div>
