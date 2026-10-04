@@ -1328,6 +1328,51 @@ def update_cost_params(params: dict) -> dict:
     return updated
 
 
+# 一键上架定价参数（存 fixed_cost_params 表，key 前缀 ap_），前端可分别修改保存入库
+AP_PRICING_FIELDS = {
+    "profit_rate":   {"key": "ap_profit_rate",   "default": 20.0},  # 利润率 %
+    "roi":           {"key": "ap_roi",           "default": 2.0},   # 投产比
+    "aftersale_rate":{"key": "ap_aftersale_rate","default": 5.0},   # 售后率 %
+    "freight":       {"key": "ap_freight",       "default": 3.0},   # 运费 元
+    "danmai_mult":   {"key": "ap_danmai_mult",   "default": 1.5},   # 单买倍数
+}
+
+
+def get_autopublish_pricing() -> dict:
+    """读取一键上架定价参数（未入库的字段回落到默认值）。"""
+    with closing(_conn()) as c:
+        keys = [m["key"] for m in AP_PRICING_FIELDS.values()]
+        rows = c.execute(
+            f"SELECT key, value FROM fixed_cost_params WHERE key IN ({','.join('?' for _ in keys)})",
+            keys,
+        ).fetchall()
+    got = {r["key"]: r["value"] for r in rows}
+    out = {}
+    for field, meta in AP_PRICING_FIELDS.items():
+        out[field] = got.get(meta["key"], meta["default"])
+    return out
+
+
+def update_autopublish_pricing(params: dict) -> dict:
+    """更新一键上架定价参数（白名单字段，写入 fixed_cost_params 表 ap_ 前缀）。"""
+    updated = {}
+    with closing(_conn()) as c:
+        for field, meta in AP_PRICING_FIELDS.items():
+            if field not in (params or {}):
+                continue
+            try:
+                val = float(params[field])
+            except (TypeError, ValueError):
+                continue
+            c.execute(
+                "INSERT OR REPLACE INTO fixed_cost_params(key, value, unit) VALUES(?,?,?)",
+                (meta["key"], val, ""),
+            )
+            updated[field] = val
+        c.commit()
+    return updated
+
+
 def _classify_category(name: str) -> str:
     """按商品名关键词归类品类（成交商品，优先级从高到低）。"""
     if not name:

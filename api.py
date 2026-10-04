@@ -1394,6 +1394,14 @@ class Handler(BaseHTTPRequestHandler):
                 return _json(self, {"error": "非法 id"}, 400)
 
         # ------------------------- 一键上架 pipeline -------------------------
+        if path == "/api/autopublish/pricing" and self.command == "GET":
+            return _json(self, catalog.get_autopublish_pricing())
+
+        if path == "/api/autopublish/pricing" and self.command == "POST":
+            item = self._read_body()
+            updated = catalog.update_autopublish_pricing(item)
+            return _json(self, {"ok": True, "updated": updated})
+
         if path == "/api/autopublish" and self.command == "POST":
             import threading
             item = self._read_body()

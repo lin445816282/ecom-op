@@ -93,7 +93,7 @@ const FLOW_STAGES = [
   ]},
 ];
 
-const state = { view:'dashboard', shop:'拼多多', products:[], knowledge:[], calendar:[], templates:[], tasks:[], keywords:[], promotionHistory:[], logs:[] };
+const state = { view:'autopublish', shop:'拼多多', products:[], knowledge:[], calendar:[], templates:[], tasks:[], keywords:[], promotionHistory:[], logs:[] };
 
 // 店铺过滤辅助（当前店铺视角）
 const shopProducts = () => state.products.filter(p => (p.shop||'拼多多') === state.shop);
@@ -755,6 +755,7 @@ async function renderAutopublish() {
           <label style="display:flex;align-items:center;gap:5px">运费 <input id="ap-freight" type="number" value="3" step="0.5" min="0" style="width:56px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px">元</label>
           <label style="display:flex;align-items:center;gap:5px">单买倍数 <input id="ap-danmai" type="number" value="1.5" step="0.1" min="1" style="width:56px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px"></label>
           <span id="ap-price-preview" style="color:#2563eb;font-size:12px;font-weight:600"></span>
+          <button class="btn" id="ap-pricing-save" style="padding:7px 14px;font-size:13px;background:#16a34a;color:#fff;border:none;border-radius:8px;cursor:pointer;white-space:nowrap">💾 保存定价参数</button>
         </div>
       </div>
 
@@ -879,9 +880,48 @@ async function renderAutopublish() {
     if (inp) inp.oninput = updatePricePreview;
   });
   document.querySelectorAll('input[name="ap-price-mode"]').forEach(r => {
-    r.onchange = updatePricePreview;
+    r.onchange = () => { localStorage.setItem('ap_price_mode', getPriceMode()); updatePricePreview(); };
   });
+  // 保存定价参数到后端（入库）
+  const saveBtn = $('#ap-pricing-save');
+  if (saveBtn) saveBtn.onclick = async () => {
+    const body = {
+      profit_rate: Number($('#ap-profit').value) || 20,
+      roi: Number($('#ap-roi').value) || 2,
+      aftersale_rate: Number($('#ap-aftersale').value) || 5,
+      freight: Number($('#ap-freight').value) || 3,
+      danmai_mult: Number($('#ap-danmai').value) || 1.5,
+    };
+    saveBtn.disabled = true;
+    saveBtn.textContent = '保存中…';
+    try {
+      const resp = await api('/api/autopublish/pricing', 'POST', body);
+      if (resp && resp.ok) toast('定价参数已保存入库');
+      else toast((resp && resp.error) || '保存失败');
+    } catch (e) { toast('保存失败: ' + e.message); }
+    saveBtn.disabled = false;
+    saveBtn.textContent = '💾 保存定价参数';
+  };
+  // 加载已入库的定价参数 + 恢复上次价格体系
+  const loadPricingParams = async () => {
+    try {
+      const resp = await api('/api/autopublish/pricing');
+      if (resp) {
+        if (resp.profit_rate != null) $('#ap-profit').value = resp.profit_rate;
+        if (resp.roi != null) $('#ap-roi').value = resp.roi;
+        if (resp.aftersale_rate != null) $('#ap-aftersale').value = resp.aftersale_rate;
+        if (resp.freight != null) $('#ap-freight').value = resp.freight;
+        if (resp.danmai_mult != null) $('#ap-danmai').value = resp.danmai_mult;
+      }
+    } catch (e) {}
+    const savedMode = localStorage.getItem('ap_price_mode') || 'promo';
+    document.querySelectorAll('input[name="ap-price-mode"]').forEach(r => {
+      r.checked = (r.value === savedMode);
+    });
+    updatePricePreview();
+  };
   updatePricePreview();
+  loadPricingParams();
 
   // ===== CDP 实例状态卡片 =====
   const renderCdpList = (instances) => {
@@ -6743,7 +6783,7 @@ async function init() {
   } catch (e) {}
   bindShopButtons();
   await loadAll();
-  setView('dashboard');
+  setView('autopublish');
 }
 
 /* ================= 标题优化 Tab（挑选无订单商品 + 优化标题 + 效果跟踪） ================= */
