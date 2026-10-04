@@ -844,6 +844,41 @@ def list_autopublish_tasks(limit: int = 50) -> list[dict]:
         return [dict(r) for r in rows]
 
 
+def list_autopublish_tasks_paged(page: int = 1, page_size: int = 20,
+                                 keyword: str = None, status: str = None,
+                                 shop_id: int = None) -> dict:
+    """历史任务分页查询 + 搜索筛选。返回 {items, total, page, page_size}。
+
+    keyword 模糊匹配 raw_title/ai_title/source_url；status 精确匹配；
+    shop_id 精确匹配店铺。均 None 时全量分页。
+    """
+    where = []
+    args = []
+    if keyword:
+        kw = f"%{keyword}%"
+        where.append("(t.raw_title LIKE ? OR t.ai_title LIKE ? OR t.source_url LIKE ?)")
+        args += [kw, kw, kw]
+    if status:
+        where.append("t.status = ?")
+        args.append(status)
+    if shop_id:
+        where.append("t.shop_id = ?")
+        args.append(int(shop_id))
+    where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+    with closing(_conn()) as c:
+        total = c.execute(
+            f"SELECT COUNT(*) FROM autopublish_tasks t{where_sql}", args
+        ).fetchone()[0]
+        rows = c.execute(
+            f"SELECT t.*, s.name AS shop_name FROM autopublish_tasks t "
+            f"LEFT JOIN shops s ON s.id = t.shop_id{where_sql} "
+            f"ORDER BY t.id DESC LIMIT ? OFFSET ?",
+            args + [page_size, (page - 1) * page_size],
+        ).fetchall()
+        items = [dict(r) for r in rows]
+    return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+
 def update_autopublish_task(task_id: int, **fields) -> dict:
     """按字段更新任务（status/stage/raw_title/ai_title/... 等），自动刷新 updated_at。"""
     if not fields:

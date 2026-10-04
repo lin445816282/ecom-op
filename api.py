@@ -1544,13 +1544,19 @@ class Handler(BaseHTTPRequestHandler):
             return _json(self, res, 200 if res.get("ok") else 400)
 
         if path == "/api/autopublish" and self.command == "GET":
-            limit = int(qs.get("limit", ["50"])[0] or 50)
-            items = catalog.list_autopublish_tasks(limit)
+            # 历史任务分页 + 搜索筛选（page/page_size/keyword/status/shop_id）
+            page = int(qs.get("page", ["1"])[0] or 1)
+            page_size = int(qs.get("page_size", ["20"])[0] or 20)
+            keyword = (qs.get("keyword", [""])[0] or "").strip() or None
+            status = (qs.get("status", [""])[0] or "").strip() or None
+            shop_id = (qs.get("shop_id", [""])[0] or "").strip() or None
+            result = catalog.list_autopublish_tasks_paged(page, page_size, keyword, status, shop_id)
+            items = result["items"]
             # 为 publishing 状态的任务附上实时细粒度进度，让批量列表直接显示每个任务当前步骤
             for it in items:
                 if it.get("status") == "publishing":
                     it["publish_progress"] = _read_publish_progress(it["id"])
-            return _json(self, {"items": items})
+            return _json(self, {"items": items, "total": result["total"], "page": page, "page_size": page_size})
 
         if path.startswith("/api/autopublish/") and self.command == "GET":
             try:

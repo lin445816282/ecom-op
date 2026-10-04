@@ -800,14 +800,37 @@ async function renderAutopublish() {
 
       <div id="ap-current" style="margin-bottom:16px"></div>
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:10px">
-        <div style="font-weight:700;font-size:14px;color:#334155">历史任务</div>
+        <div style="font-weight:700;font-size:14px;color:#334155">历史任务 <span id="ap-total" style="font-size:12px;color:#94a3b8;font-weight:400"></span></div>
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
           <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:#64748b;cursor:pointer"><input type="checkbox" id="ap-check-all" style="accent-color:#2563eb"> 全选可重上架</label>
           <button class="btn mini" id="ap-batch-repub-btn" style="padding:5px 12px;font-size:12px;background:#dc2626;color:#fff;border:none;border-radius:6px;cursor:pointer;white-space:nowrap">批量重新生成</button>
           <button class="btn mini" id="ap-user-mgr-btn" style="padding:5px 12px;font-size:12px;background:#475569;color:#fff;border:none;border-radius:6px;cursor:pointer;white-space:nowrap">👥 用户管理</button>
         </div>
       </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+        <input id="ap-filter-kw" placeholder="搜索标题/商品/链接" style="flex:1;min-width:160px;padding:7px 12px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;font-family:inherit">
+        <select id="ap-filter-status" style="padding:7px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;font-family:inherit;background:#fff">
+          <option value="">全部状态</option>
+          <option value="failed">失败</option>
+          <option value="published">已上架</option>
+          <option value="submitted">待审核</option>
+          <option value="draft">草稿</option>
+          <option value="publishing">上架中</option>
+          <option value="queued">排队</option>
+          <option value="crawling">抓取中</option>
+        </select>
+        <select id="ap-filter-shop" style="padding:7px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;font-family:inherit;background:#fff">
+          <option value="">全部店铺</option>
+          <option value="6">欧世艺</option>
+          <option value="5">嘉裕</option>
+          <option value="3">如若月下</option>
+          <option value="1">闲时来</option>
+        </select>
+        <button class="btn mini" id="ap-filter-btn" style="padding:7px 14px;font-size:13px;background:#2563eb;color:#fff;border:none;border-radius:8px;cursor:pointer;white-space:nowrap">搜索</button>
+        <button class="btn mini" id="ap-filter-reset" style="padding:7px 12px;font-size:13px;background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;border-radius:8px;cursor:pointer;white-space:nowrap">重置</button>
+      </div>
       <div id="ap-list"><div class="empty" style="color:#94a3b8">暂无任务，输入链接点「开始上架」。</div></div>
+      <div id="ap-pagination" style="display:flex;align-items:center;justify-content:center;gap:8px;margin-top:12px"></div>
     </div>
   `;
 
@@ -994,6 +1017,26 @@ async function renderAutopublish() {
   if (batchBtn) batchBtn.onclick = batchRepublish;
   const userMgrBtn = $('#ap-user-mgr-btn');
   if (userMgrBtn) userMgrBtn.onclick = () => setView('useradmin');
+  // 历史任务搜索筛选 + 分页
+  const applyFilter = () => {
+    _apKeyword = ($('#ap-filter-kw') && $('#ap-filter-kw').value || '').trim();
+    _apStatus = $('#ap-filter-status') ? $('#ap-filter-status').value : '';
+    _apShopId = $('#ap-filter-shop') ? $('#ap-filter-shop').value : '';
+    _apPage = 1;
+    loadApList();
+  };
+  const filterBtn = $('#ap-filter-btn');
+  if (filterBtn) filterBtn.onclick = applyFilter;
+  const kwInput = $('#ap-filter-kw');
+  if (kwInput) kwInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') applyFilter(); });
+  const resetBtn = $('#ap-filter-reset');
+  if (resetBtn) resetBtn.onclick = () => {
+    if ($('#ap-filter-kw')) $('#ap-filter-kw').value = '';
+    if ($('#ap-filter-status')) $('#ap-filter-status').value = '';
+    if ($('#ap-filter-shop')) $('#ap-filter-shop').value = '';
+    _apKeyword = ''; _apStatus = ''; _apShopId = ''; _apPage = 1;
+    loadApList();
+  };
 }
 
 const AP_STAGE = { scrape:'抓取1688', ai:'AI生成配置', publish:'CDP上架' };
@@ -1159,15 +1202,31 @@ window.toggleApSelect = function(el) {
   else _apSelected.delete(String(el.value));
 };
 
+// 历史任务分页 + 搜索筛选状态
+let _apPage = 1;
+let _apPageSize = 20;
+let _apKeyword = '';
+let _apStatus = '';
+let _apShopId = '';
+let _apTotal = 0;
+
 async function loadApList() {
   const el = $('#ap-list');
   if (!el) return;
-  let items = [];
+  let items = [], total = 0;
   try {
-    const resp = await api('/api/autopublish');
+    const params = new URLSearchParams({ page: String(_apPage), page_size: String(_apPageSize) });
+    if (_apKeyword) params.set('keyword', _apKeyword);
+    if (_apStatus) params.set('status', _apStatus);
+    if (_apShopId) params.set('shop_id', _apShopId);
+    const resp = await api('/api/autopublish?' + params.toString());
     items = (resp && resp.items) || [];
-  } catch (e) { items = []; }
-  if (!items.length) { el.innerHTML = '<div class="empty" style="color:#94a3b8">暂无任务。</div>'; return; }
+    total = (resp && resp.total) || 0;
+    _apTotal = total;
+  } catch (e) { items = []; total = 0; _apTotal = 0; }
+  const totalEl = $('#ap-total');
+  if (totalEl) totalEl.textContent = total ? `（共 ${total} 条）` : '';
+  if (!items.length) { el.innerHTML = '<div class="empty" style="color:#94a3b8">暂无任务。</div>'; renderApPagination(); return; }
   const statusTag = { queued:'排队', crawling:'抓取', ai:'AI配置', publishing:'上架中', published:'✅已上架', submitted:'⏳待审核', draft:'📄草稿', failed:'❌失败' };
   el.innerHTML = items.map(t => {
     const shopName = t.shop_name || (typeof PG_SHOP !== 'undefined' && PG_SHOP[t.shop_id]) || ('店铺' + (t.shop_id || '?'));
@@ -1187,7 +1246,25 @@ async function loadApList() {
       <div class="ap-task-time">${esc((t.created_at||'').slice(5,16))}</div>
     </div>
   `;}).join('');
+  renderApPagination();
 }
+
+function renderApPagination() {
+  const el = $('#ap-pagination');
+  if (!el) return;
+  const totalPages = Math.max(1, Math.ceil(_apTotal / _apPageSize));
+  el.innerHTML = `
+    <button class="btn mini" ${_apPage <= 1 ? 'disabled' : ''} onclick="gotoApPage(${_apPage - 1})" style="padding:5px 14px;font-size:12px;background:#fff;color:#2563eb;border:1px solid #cbd5e1;border-radius:6px;cursor:pointer">上一页</button>
+    <span style="font-size:12px;color:#64748b">第 ${_apPage} / ${totalPages} 页</span>
+    <button class="btn mini" ${_apPage >= totalPages ? 'disabled' : ''} onclick="gotoApPage(${_apPage + 1})" style="padding:5px 14px;font-size:12px;background:#fff;color:#2563eb;border:1px solid #cbd5e1;border-radius:6px;cursor:pointer">下一页</button>
+  `;
+}
+
+window.gotoApPage = function(p) {
+  if (p < 1) p = 1;
+  _apPage = p;
+  loadApList();
+};
 
 async function republishTask(taskId) {
   try {
