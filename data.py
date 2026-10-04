@@ -2329,18 +2329,28 @@ if __name__ == "__main__":
 
 def calc_pricing(cost: float, profit_rate: float = 0.2, roi: float = 2.0,
                  aftersale_rate: float = 0.05, freight: float = 3.0,
-                 danmai_mult: float = 1.5, ref_mult: float = 1.2) -> dict:
-    """固定定价公式：成本 = 进价 + 运费，售价 = 成本 ÷ (1 − 利润率 − 1/投产比 − 售后率)。
+                 danmai_mult: float = 1.5, ref_mult: float = 1.2,
+                 price_mode: str = "promo") -> dict:
+    """固定定价公式：成本 = 进价 + 运费。
+
+    两套价格体系（price_mode）：
+      - promo（推广价，默认）：售价 = 成本 ÷ (1 − 利润率 − 1/投产比 − 售后率)
+        含广告费（1/投产比），适合要投广告/开推广的商品。
+      - normal（平卖价）：售价 = 成本 ÷ (1 − 利润率 − 售后率)
+        不含广告费，适合平价自然流量卖、不投广告的商品。
 
     售价的构成（占售价比例）：
-      - 1/投产比 = 广告费占售价比例（投产比2 → 广告费占50%）
+      - 1/投产比 = 广告费占售价比例（投产比2 → 广告费占50%，仅推广价）
       - 利润率 = 目标毛利率
       - 售后率 = 售后损耗占售价比例（退款/退货/仅退款吃掉的比例）
       - 剩余 = 成本（进价+运费）占售价比例
     拼单价 = 成本 × 倍率；单买价 = 拼单价 × 单买倍数；参考价 = 单买价 × 参考倍数
     """
     total_cost = cost + freight  # 成本价 = 进价 + 每单运费
-    denom = 1.0 - profit_rate - 1.0 / roi - aftersale_rate
+    if price_mode == "normal":
+        denom = 1.0 - profit_rate - aftersale_rate
+    else:
+        denom = 1.0 - profit_rate - 1.0 / roi - aftersale_rate
     if denom <= 0.05:
         denom = 0.05  # 防除零/负倍率（利润率+广告费率+售后率过高的兜底）
     k = 1.0 / denom
@@ -2453,6 +2463,7 @@ def ai_generate_publish_config(product: dict, pricing: dict = None) -> dict:
     freight = float(pricing.get("freight", 3.0))
     danmai_mult = float(pricing.get("danmai_mult", 1.5))
     ref_mult = float(pricing.get("ref_mult", 1.2))
+    price_mode = str(pricing.get("price_mode", "promo") or "promo")
     title = (product.get("title") or "").strip()
     body_text = (product.get("bodyText") or "")[:6000]
     images = product.get("images") or []
@@ -2569,7 +2580,7 @@ def ai_generate_publish_config(product: dict, pricing: dict = None) -> dict:
             cost = float(c or 0)
         if cost <= 0:
             continue
-        p = calc_pricing(cost, profit_rate, roi, aftersale_rate, freight, danmai_mult, ref_mult)
+        p = calc_pricing(cost, profit_rate, roi, aftersale_rate, freight, danmai_mult, ref_mult, price_mode=price_mode)
         new_pb[str(spec2_val)] = {"cost": cost, "pdd": p["pdd"], "danmai": p["danmai"]}
         max_ref = max(max_ref, p["refPrice"])
     if not new_pb:
