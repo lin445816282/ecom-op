@@ -1393,6 +1393,49 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 return _json(self, {"error": "非法 id"}, 400)
 
+        # ------------------------- 价格体系管理 -------------------------
+        if path == "/api/pricing/schemes" and self.command == "GET":
+            return _json(self, {"items": catalog.list_pricing_schemes()})
+
+        if path == "/api/pricing/schemes" and self.command == "POST":
+            item = self._read_body()
+            scheme = catalog.create_pricing_scheme(
+                name=item.get("name") or "",
+                profit_rate=item.get("profit_rate", 20) or 20,
+                roi=item.get("roi") if item.get("roi") is not None else 2,
+                aftersale_rate=item.get("aftersale_rate", 5) or 5,
+                freight=item.get("freight", 3) or 3,
+                danmai_mult=item.get("danmai_mult", 1.5) or 1.5,
+                is_default=1 if item.get("is_default") else 0,
+            )
+            if not scheme:
+                return _json(self, {"error": "名字不能为空或已存在"}, 400)
+            return _json(self, {"ok": True, "scheme": scheme})
+
+        if path.startswith("/api/pricing/schemes/") and self.command == "PUT":
+            try:
+                sid = int(path.rsplit("/", 1)[-1])
+            except ValueError:
+                return _json(self, {"error": "非法 id"}, 400)
+            item = self._read_body()
+            fields = {}
+            for k in ("name", "profit_rate", "roi", "aftersale_rate", "freight", "danmai_mult", "is_default"):
+                if k in item and item[k] is not None:
+                    fields[k] = item[k]
+            scheme = catalog.update_pricing_scheme(sid, **fields)
+            if not scheme:
+                return _json(self, {"error": "价格体系不存在"}, 404)
+            return _json(self, {"ok": True, "scheme": scheme})
+
+        if path.startswith("/api/pricing/schemes/") and self.command == "DELETE":
+            try:
+                sid = int(path.rsplit("/", 1)[-1])
+            except ValueError:
+                return _json(self, {"error": "非法 id"}, 400)
+            if not catalog.delete_pricing_scheme(sid):
+                return _json(self, {"error": "默认体系不可删，请先设其它为默认"}, 400)
+            return _json(self, {"ok": True})
+
         # ------------------------- 一键上架 pipeline -------------------------
         if path == "/api/autopublish/pricing" and self.command == "GET":
             return _json(self, catalog.get_autopublish_pricing())

@@ -2347,10 +2347,10 @@ def calc_pricing(cost: float, profit_rate: float = 0.2, roi: float = 2.0,
     拼单价 = 成本 × 倍率；单买价 = 拼单价 × 单买倍数；参考价 = 单买价 × 参考倍数
     """
     total_cost = cost + freight  # 成本价 = 进价 + 每单运费
-    if price_mode == "normal":
-        denom = 1.0 - profit_rate - aftersale_rate
-    else:
+    if roi and roi > 0:
         denom = 1.0 - profit_rate - 1.0 / roi - aftersale_rate
+    else:
+        denom = 1.0 - profit_rate - aftersale_rate
     if denom <= 0.05:
         denom = 0.05  # 防除零/负倍率（利润率+广告费率+售后率过高的兜底）
     k = 1.0 / denom

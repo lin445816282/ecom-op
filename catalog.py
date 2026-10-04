@@ -653,6 +653,19 @@ CREATE TABLE IF NOT EXISTS sessions (
     user_id INTEGER NOT NULL,
     created_at TEXT DEFAULT (datetime('now','localtime'))
 );
+CREATE TABLE IF NOT EXISTS pricing_schemes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    profit_rate REAL DEFAULT 20,
+    roi REAL DEFAULT 0,
+    aftersale_rate REAL DEFAULT 5,
+    freight REAL DEFAULT 3,
+    danmai_mult REAL DEFAULT 1.5,
+    is_default INTEGER DEFAULT 0,
+    sort_order INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now','localtime')),
+    updated_at TEXT DEFAULT (datetime('now','localtime'))
+);
 """
 
 
@@ -1031,6 +1044,7 @@ def init_db() -> None:
         _seed_scatter_shops(c)
         _seed_pack_mapping(c)
         _seed_cost_params(c)
+        _seed_pricing_schemes(c)
         _seed_banned_words(c)
     seed_scheduled_tasks()  # 幂等 seed 定时任务清单
 
@@ -1078,6 +1092,102 @@ def _seed_cost_params(conn: sqlite3.Connection) -> None:
             (key, value, unit, note),
         )
     conn.commit()
+
+
+def _seed_pricing_schemes(conn: sqlite3.Connection) -> None:
+    """价格体系初始数据：推广价 + 平卖价（仅在表为空时 seed，用户后续增删改不再覆盖）。"""
+    n = conn.execute("SELECT COUNT(*) FROM pricing_schemes").fetchone()[0]
+    if n == 0:
+        rows = [
+            # name, profit_rate, roi, aftersale_rate, freight, danmai_mult, is_default, sort_order
+            ("推广价", 20.0, 2.0, 5.0, 3.0, 1.5, 1, 1),  # roi=2 推广型（含投产比），默认
+            ("平卖价", 30.0, 0.0, 5.0, 3.0, 1.5, 0, 2),  # roi=0 平卖型（不含投产比）
+        ]
+        for name, profit, roi, aftersale, freight, danmai, is_default, sort in rows:
+            conn.execute(
+                "INSERT OR IGNORE INTO pricing_schemes"
+                "(name, profit_rate, roi, aftersale_rate, freight, danmai_mult, is_default, sort_order)"
+                " VALUES(?,?,?,?,?,?,?,?)",
+                (name, profit, roi, aftersale, freight, danmai, is_default, sort),
+            )
+        conn.commit()
+
+
+def list_pricing_schemes() -> list[dict]:
+    """列出所有价格体系，按 sort_order 排序。"""
+    with closing(_conn()) as c:
+        return [dict(r) for r in c.execute(
+            "SELECT * FROM pricing_schemes ORDER BY sort_order ASC, id ASC"
+        ).fetchall()]
+
+
+def get_pricing_scheme(scheme_id: int) -> dict:
+    with closing(_conn()) as c:
+        row = c.execute("SELECT * FROM pricing_schemes WHERE id=?", (scheme_id,)).fetchone()
+        return dict(row) if row else {}
+
+
+def create_pricing_scheme(name: str, profit_rate: float, roi: float,
+                          aftersale_rate: float, freight: float, danmai_mult: float,
+                          is_default: int = 0) -> dict:
+    """新增价格体系。roi=0 表示平卖型（不含投产比），roi>0 表示推广型（含投产比）。"""
+    name = (name or "").strip()
+    if not name:
+        return {}
+    with closing(_conn()) as c:
+        if is_default:
+            c.execute("UPDATE pricing_schemes SET is_default=0")
+        cur = c.execute(
+            "INSERT INTO pricing_schemes(name, profit_rate, roi, aftersale_rate, freight, danmai_mult, is_default, sort_order) "
+            "VALUES(?,?,?,?,?,?,?, (SELECT COALESCE(MAX(sort_order),0)+1 FROM pricing_schemes))",
+            (name, float(profit_rate), float(roi), float(aftersale_rate), float(freight),
+             float(danmai_mult), 1 if is_default else 0),
+        )
+        c.commit()
+        return get_pricing_scheme(cur.lastrowid)
+
+
+def update_pricing_scheme(scheme_id: int, **fields) -> dict:
+    """修改价格体系（name/profit_rate/roi/aftersale_rate/freight/danmai_mult/is_default/sort_order）。"""
+    allowed = {"name", "profit_rate", "roi", "aftersale_rate", "freight", "danmai_mult", "is_default", "sort_order"}
+    sets, vals = [], []
+    for k, v in fields.items():
+        if k not in allowed:
+            continue
+        sets.append(f"{k}=?")
+        vals.append(v)
+    if not sets:
+        return get_pricing_scheme(scheme_id)
+    with closing(_conn()) as c:
+        if fields.get("is_default"):
+            c.execute("UPDATE pricing_schemes SET is_default=0 WHERE id!=?", (scheme_id,))
+        sets.append("updated_at=datetime('now','localtime')")
+        vals.append(scheme_id)
+        c.execute(f"UPDATE pricing_schemes SET {', '.join(sets)} WHERE id=?", vals)
+        c.commit()
+        return get_pricing_scheme(scheme_id)
+
+
+def delete_pricing_scheme(scheme_id: int) -> bool:
+    """删除价格体系（默认体系不可删，需先设其它为默认）。"""
+    with closing(_conn()) as c:
+        row = c.execute("SELECT is_default FROM pricing_schemes WHERE id=?", (scheme_id,)).fetchone()
+        if not row:
+            return False
+        if row["is_default"]:
+            return False
+        c.execute("DELETE FROM pricing_schemes WHERE id=?", (scheme_id,))
+        c.commit()
+        return True
+
+
+def get_default_pricing_scheme() -> dict:
+    """取默认价格体系（is_default=1），没有则取第一个。"""
+    with closing(_conn()) as c:
+        row = c.execute("SELECT * FROM pricing_schemes WHERE is_default=1 ORDER BY id ASC LIMIT 1").fetchone()
+        if not row:
+            row = c.execute("SELECT * FROM pricing_schemes ORDER BY sort_order ASC, id ASC LIMIT 1").fetchone()
+        return dict(row) if row else {}
 
 
 def _seed_banned_words(conn: sqlite3.Connection) -> None:

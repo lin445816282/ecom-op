@@ -746,8 +746,8 @@ async function renderAutopublish() {
         </div>
         <div style="display:flex;gap:14px;align-items:center;margin-top:12px;flex-wrap:wrap;font-size:13px;color:#475569">
           <span style="font-weight:600;color:#334155">价格体系：</span>
-          <label style="display:flex;align-items:center;gap:4px;cursor:pointer;white-space:nowrap"><input type="radio" name="ap-price-mode" value="promo" checked style="accent-color:#2563eb"> 推广价</label>
-          <label style="display:flex;align-items:center;gap:4px;cursor:pointer;white-space:nowrap"><input type="radio" name="ap-price-mode" value="normal" style="accent-color:#2563eb"> 平卖价</label>
+          <select id="ap-scheme-select" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;font-family:inherit;background:#fff;color:#334155;font-weight:600;max-width:180px"></select>
+          <button class="btn" id="ap-scheme-manage" style="padding:6px 12px;font-size:12px;background:#fff;color:#2563eb;border:1px solid #cbd5e1;border-radius:8px;cursor:pointer;white-space:nowrap">⚙️ 管理</button>
           <span id="ap-price-formula" style="font-weight:600;color:#334155">拼单价 = (进价+运费) ÷ (1 − 利润率 − 1÷投产比 − 售后率)</span>
           <label style="display:flex;align-items:center;gap:5px">利润率 <input id="ap-profit" type="number" value="20" step="1" min="1" max="90" style="width:56px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px">%</label>
           <label id="ap-roi-label" style="display:flex;align-items:center;gap:5px">投产比 <input id="ap-roi" type="number" value="2" step="0.1" min="1.1" style="width:56px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px"></label>
@@ -838,49 +838,60 @@ async function renderAutopublish() {
     </div>
   `;
 
-  // 两套价格体系各自独立的定价参数（promo 推广价 / normal 平卖价），默认值兜底
-  const pricingCache = {
-    promo:  { profit_rate: 20, roi: 2, aftersale_rate: 5, freight: 3, danmai_mult: 1.5 },
-    normal: { profit_rate: 30, aftersale_rate: 5, freight: 3, danmai_mult: 1.5 },
+  // 价格体系列表（动态，从后端加载）
+  let schemesCache = [];
+  let currentSchemeId = null;
+
+  const currentScheme = () => schemesCache.find(s => String(s.id) === String(currentSchemeId)) || schemesCache[0] || null;
+
+  // 当前体系名字（用于任务记录 price_mode）
+  const getPriceMode = () => {
+    const s = currentScheme();
+    return s ? s.name : '推广价';
   };
-  let currentMode = 'promo';  // 当前编辑的价格体系
-  const getPriceMode = () => currentMode;
-  // 从输入框读取当前体系参数（平卖价的 roi 后端会自动忽略）
-  const readPricingInputs = () => ({
-    profit_rate: Number($('#ap-profit').value) || 20,
-    roi: Number($('#ap-roi').value) || 2,
-    aftersale_rate: Number($('#ap-aftersale').value) || 5,
-    freight: Number($('#ap-freight').value) || 3,
-    danmai_mult: Number($('#ap-danmai').value) || 1.5,
-  });
-  // 把某套体系参数写入输入框
-  const writePricingInputs = (mode) => {
-    const p = pricingCache[mode] || pricingCache.promo;
-    $('#ap-profit').value = p.profit_rate;
-    $('#ap-roi').value = (p.roi != null) ? p.roi : 2;  // 平卖价无 roi，兜底 2（后端会忽略）
-    $('#ap-aftersale').value = p.aftersale_rate;
-    $('#ap-freight').value = p.freight;
-    $('#ap-danmai').value = p.danmai_mult;
+
+  // 从输入框读取当前参数
+  const readPricingInputs = () => {
+    const s = currentScheme();
+    return {
+      scheme_id: currentSchemeId,
+      scheme_name: (s || {}).name || '',
+      profit_rate: Number($('#ap-profit').value) || 20,
+      roi: Number($('#ap-roi').value) || 0,
+      aftersale_rate: Number($('#ap-aftersale').value) || 5,
+      freight: Number($('#ap-freight').value) || 3,
+      danmai_mult: Number($('#ap-danmai').value) || 1.5,
+    };
   };
-  // 实时预览定价倍率 + 切换价格体系时同步投产比显隐/公式提示
+
+  // 把某体系参数写入输入框
+  const applyScheme = (s) => {
+    if (!s) return;
+    currentSchemeId = s.id;
+    $('#ap-profit').value = s.profit_rate;
+    $('#ap-roi').value = (s.roi != null && s.roi > 0) ? s.roi : 0;
+    $('#ap-aftersale').value = s.aftersale_rate;
+    $('#ap-freight').value = s.freight;
+    $('#ap-danmai').value = s.danmai_mult;
+    updatePricePreview();
+  };
+
+  // 实时预览定价倍率：roi>0 推广型，roi=0 平卖型
   const updatePricePreview = () => {
-    const mode = getPriceMode();
     const profit = (Number($('#ap-profit').value) || 20) / 100;
-    const roi = Number($('#ap-roi').value) || 2;
+    const roi = Number($('#ap-roi').value) || 0;
     const aftersale = (Number($('#ap-aftersale').value) || 5) / 100;
     const freight = Number($('#ap-freight').value) || 3;
-    const danmaiMult = Number($('#ap-danmai').value) || 1.5;
-    const denom = mode === 'normal' ? (1 - profit - aftersale) : (1 - profit - 1 / roi - aftersale);
+    const isPromo = roi > 0;
+    const denom = isPromo ? (1 - profit - 1 / roi - aftersale) : (1 - profit - aftersale);
     const k = denom > 0.05 ? (1 / denom) : 0;
-    // 投产比仅推广价用；平卖价隐藏
     const roiLabel = $('#ap-roi-label');
-    if (roiLabel) roiLabel.style.display = (mode === 'normal') ? 'none' : '';
-    // 公式提示随体系切换
+    if (roiLabel) roiLabel.style.display = isPromo ? '' : 'none';
     const formulaEl = $('#ap-price-formula');
     if (formulaEl) {
-      formulaEl.textContent = mode === 'normal'
-        ? '拼单价 = (进价+运费) ÷ (1 − 利润率 − 售后率)'
-        : '拼单价 = (进价+运费) ÷ (1 − 利润率 − 1÷投产比 − 售后率)';
+      formulaEl.textContent = isPromo
+        ? '拼单价 = (进价+运费) ÷ (1 − 利润率 − 1÷投产比 − 售后率)'
+        : '拼单价 = (进价+运费) ÷ (1 − 利润率 − 售后率)';
     }
     const el = $('#ap-price-preview');
     if (el) {
@@ -888,56 +899,160 @@ async function renderAutopublish() {
         const sample = ((1 + freight) * k).toFixed(1);
         el.textContent = `→ 倍率 ${k.toFixed(2)}（进价1元+运费${freight}元 → 拼单价${sample}元）`;
       } else {
-        el.textContent = mode === 'normal'
-          ? '⚠️ 利润率+售后率 ≥ 1，无法定价'
-          : '⚠️ 利润率+1/投产比+售后率 ≥ 1，无法定价';
+        el.textContent = isPromo
+          ? '⚠️ 利润率+1/投产比+售后率 ≥ 1，无法定价'
+          : '⚠️ 利润率+售后率 ≥ 1，无法定价';
       }
     }
   };
+
   ['ap-profit', 'ap-roi', 'ap-aftersale', 'ap-freight', 'ap-danmai'].forEach(id => {
     const inp = $('#' + id);
     if (inp) inp.oninput = updatePricePreview;
   });
-  // 切换价格体系：先存回旧体系参数 → 切换 → 载入新体系参数（两套独立，互不影响）
-  document.querySelectorAll('input[name="ap-price-mode"]').forEach(r => {
-    r.onchange = () => {
-      pricingCache[currentMode] = readPricingInputs();  // 存回旧体系
-      currentMode = r.value;                            // 切到新体系
-      writePricingInputs(currentMode);                  // 载入新体系参数
-      updatePricePreview();
-    };
-  });
-  // 保存当前体系的定价参数到后端（分别入库）
+
+  // 加载价格体系列表 + 选中默认体系
+  const loadSchemes = async () => {
+    try {
+      const resp = await api('/api/pricing/schemes');
+      schemesCache = (resp && resp.items) || [];
+    } catch (e) { schemesCache = []; }
+    if (!schemesCache.length) {
+      schemesCache = [{ id: 1, name: '推广价', profit_rate: 20, roi: 2, aftersale_rate: 5, freight: 3, danmai_mult: 1.5, is_default: 1 }];
+    }
+    const sel = $('#ap-scheme-select');
+    if (sel) {
+      sel.innerHTML = schemesCache.map(s => `<option value="${s.id}">${esc(s.name)}${s.is_default ? '（默认）' : ''}</option>`).join('');
+      sel.onchange = () => {
+        const s = schemesCache.find(x => String(x.id) === sel.value);
+        if (s) applyScheme(s);
+      };
+    }
+    const def = schemesCache.find(s => s.is_default) || schemesCache[0];
+    if (def) {
+      applyScheme(def);
+      if (sel) sel.value = String(def.id);
+    }
+  };
+
+  // 保存当前体系参数（更新到 pricing_schemes）
   const saveBtn = $('#ap-pricing-save');
   if (saveBtn) saveBtn.onclick = async () => {
-    pricingCache[currentMode] = readPricingInputs();
-    const body = { mode: currentMode, ...pricingCache[currentMode] };
+    const cur = currentScheme();
+    if (!cur) { toast('请先选择价格体系'); return; }
+    const body = {
+      name: cur.name,
+      profit_rate: Number($('#ap-profit').value) || 20,
+      roi: Number($('#ap-roi').value) || 0,
+      aftersale_rate: Number($('#ap-aftersale').value) || 5,
+      freight: Number($('#ap-freight').value) || 3,
+      danmai_mult: Number($('#ap-danmai').value) || 1.5,
+    };
     saveBtn.disabled = true;
     saveBtn.textContent = '保存中…';
     try {
-      const resp = await api('/api/autopublish/pricing', 'POST', body);
-      if (resp && resp.ok) toast(`${currentMode === 'promo' ? '推广价' : '平卖价'}参数已保存入库`);
+      const resp = await api(`/api/pricing/schemes/${cur.id}`, 'PUT', body);
+      if (resp && resp.ok) { toast(`「${cur.name}」参数已保存`); await loadSchemes(); }
       else toast((resp && resp.error) || '保存失败');
     } catch (e) { toast('保存失败: ' + e.message); }
     saveBtn.disabled = false;
     saveBtn.textContent = '💾 保存定价参数';
   };
-  // 加载两套已入库参数 + 恢复上次价格体系
-  const loadPricingParams = async () => {
-    try {
-      const resp = await api('/api/autopublish/pricing');
-      if (resp && resp.promo) pricingCache.promo = { ...pricingCache.promo, ...resp.promo };
-      if (resp && resp.normal) pricingCache.normal = { ...pricingCache.normal, ...resp.normal };
-    } catch (e) {}
-    currentMode = 'promo';  // 默认始终推广价，不记住上次选择
-    document.querySelectorAll('input[name="ap-price-mode"]').forEach(r => {
-      r.checked = (r.value === currentMode);
-    });
-    writePricingInputs(currentMode);
-    updatePricePreview();
+
+  // ===== 价格体系管理弹窗 =====
+  const renderSchemeList = () => {
+    const list = $('#sm-list');
+    if (!list) return;
+    list.innerHTML = schemesCache.map(s => `
+      <div style="border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin-bottom:10px;background:${s.is_default ? '#f0f9ff' : '#fff'}">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+          <div style="min-width:0">
+            <span style="font-weight:700;font-size:14px;color:#17203a">${esc(s.name)}</span>
+            ${s.is_default ? '<span style="font-size:11px;color:#2563eb;font-weight:600;margin-left:6px">● 默认</span>' : ''}
+            <div style="font-size:12px;color:#66708a;margin-top:3px">利润率 ${s.profit_rate}% ${s.roi > 0 ? `· 投产比 ${s.roi}` : '· 平卖(无投产比)'} · 售后 ${s.aftersale_rate}% · 运费 ${s.freight}元 · 单买 ${s.danmai_mult}倍</div>
+          </div>
+          <div style="display:flex;gap:8px;flex-shrink:0">
+            <button data-sm-edit="${s.id}" style="padding:5px 12px;font-size:12px;background:#fff;color:#2563eb;border:1px solid #bfdbfe;border-radius:6px;cursor:pointer">编辑</button>
+            <button data-sm-del="${s.id}" style="padding:5px 12px;font-size:12px;background:#fff;color:#dc2626;border:1px solid #fca5a5;border-radius:6px;cursor:pointer">删除</button>
+          </div>
+        </div>
+      </div>
+    `).join('');
+    list.querySelectorAll('[data-sm-edit]').forEach(b => b.onclick = () => editScheme(schemesCache.find(s => String(s.id) === b.dataset.smEdit)));
+    list.querySelectorAll('[data-sm-del]').forEach(b => b.onclick = () => deleteScheme(schemesCache.find(s => String(s.id) === b.dataset.smDel)));
   };
+
+  const editScheme = async (s) => {
+    const isNew = !s;
+    const fields = [
+      { key: 'name', label: '体系名称', value: s ? s.name : '', placeholder: '如：清仓价 / 活动价' },
+      { key: 'profit_rate', label: '利润率（%）', value: s ? String(s.profit_rate) : '20' },
+      { key: 'roi', label: '投产比（0=平卖价，不含广告费）', value: s ? String(s.roi) : '2' },
+      { key: 'aftersale_rate', label: '售后率（%）', value: s ? String(s.aftersale_rate) : '5' },
+      { key: 'freight', label: '运费（元）', value: s ? String(s.freight) : '3' },
+      { key: 'danmai_mult', label: '单买倍数', value: s ? String(s.danmai_mult) : '1.5' },
+      { key: 'is_default', label: '设为默认', type: 'select', value: s && s.is_default ? '1' : '0', options: [{ value: '0', label: '否' }, { value: '1', label: '是' }] },
+    ];
+    const result = await promptDialog(fields, { title: isNew ? '新增价格体系' : `修改「${s.name}」` });
+    if (!result) return;
+    const body = {
+      name: result.name,
+      profit_rate: Number(result.profit_rate) || 20,
+      roi: Number(result.roi) || 0,
+      aftersale_rate: Number(result.aftersale_rate) || 5,
+      freight: Number(result.freight) || 3,
+      danmai_mult: Number(result.danmai_mult) || 1.5,
+      is_default: Number(result.is_default) || 0,
+    };
+    try {
+      const resp = isNew
+        ? await api('/api/pricing/schemes', 'POST', body)
+        : await api(`/api/pricing/schemes/${s.id}`, 'PUT', body);
+      if (resp && resp.ok) { toast(isNew ? '已新增' : '已保存'); await loadSchemes(); renderSchemeList(); }
+      else toast((resp && resp.error) || '操作失败');
+    } catch (e) { toast('操作失败: ' + e.message); }
+  };
+
+  const deleteScheme = async (s) => {
+    if (!s) return;
+    const ok = await confirmDialog(`确定删除「${s.name}」吗？`, { title: '删除价格体系', confirmText: '删除', danger: true });
+    if (!ok) return;
+    try {
+      const resp = await api(`/api/pricing/schemes/${s.id}`, 'DELETE', {});
+      if (resp && resp.ok) { toast('已删除'); await loadSchemes(); renderSchemeList(); }
+      else toast((resp && resp.error) || '删除失败');
+    } catch (e) { toast('删除失败: ' + e.message); }
+  };
+
+  const renderSchemeManager = () => {
+    const existing = document.getElementById('scheme-manager-modal');
+    if (existing) existing.remove();
+    const overlay = document.createElement('div');
+    overlay.id = 'scheme-manager-modal';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:999;display:flex;align-items:center;justify-content:center;padding:24px';
+    const box = document.createElement('div');
+    box.style.cssText = 'background:#fff;border-radius:16px;padding:22px;max-width:640px;width:100%;max-height:82vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.22)';
+    box.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <div style="font-size:16px;font-weight:700;color:#17203a">⚙️ 价格体系管理</div>
+        <button id="sm-close" style="border:none;background:none;font-size:22px;cursor:pointer;color:#94a3b8;line-height:1">✕</button>
+      </div>
+      <div id="sm-list"></div>
+      <button id="sm-add" style="width:100%;padding:10px;font-size:13px;background:#f8fafc;color:#2563eb;border:1px dashed #cbd5e1;border-radius:10px;cursor:pointer;margin-top:4px">＋ 新增价格体系</button>
+    `;
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    box.querySelector('#sm-close').onclick = () => overlay.remove();
+    overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+    box.querySelector('#sm-add').onclick = () => editScheme(null);
+    renderSchemeList();
+  };
+
+  const manageBtn = $('#ap-scheme-manage');
+  if (manageBtn) manageBtn.onclick = () => renderSchemeManager();
+
   updatePricePreview();
-  loadPricingParams();
+  loadSchemes();
 
   // ===== CDP 实例状态卡片 =====
   const renderCdpList = (instances) => {
@@ -1024,7 +1139,7 @@ async function renderAutopublish() {
     const pricing = {
       price_mode: getPriceMode(),
       profit_rate: (Number($('#ap-profit').value) || 20) / 100,
-      roi: Number($('#ap-roi').value) || 2,
+      roi: Number($('#ap-roi').value) || 0,
       aftersale_rate: (Number($('#ap-aftersale').value) || 5) / 100,
       freight: Number($('#ap-freight').value) || 3,
       danmai_mult: Number($('#ap-danmai').value) || 1.5,
@@ -1064,7 +1179,7 @@ async function renderAutopublish() {
       is_batch: true,
       price_mode: getPriceMode(),
       profit_rate: (Number($('#ap-profit').value) || 20) / 100,
-      roi: Number($('#ap-roi').value) || 2,
+      roi: Number($('#ap-roi').value) || 0,
       aftersale_rate: (Number($('#ap-aftersale').value) || 5) / 100,
       freight: Number($('#ap-freight').value) || 3,
       danmai_mult: Number($('#ap-danmai').value) || 1.5,
