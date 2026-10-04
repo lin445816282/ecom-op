@@ -903,7 +903,6 @@ async function renderAutopublish() {
     r.onchange = () => {
       pricingCache[currentMode] = readPricingInputs();  // 存回旧体系
       currentMode = r.value;                            // 切到新体系
-      localStorage.setItem('ap_price_mode', currentMode);
       writePricingInputs(currentMode);                  // 载入新体系参数
       updatePricePreview();
     };
@@ -930,7 +929,7 @@ async function renderAutopublish() {
       if (resp && resp.promo) pricingCache.promo = { ...pricingCache.promo, ...resp.promo };
       if (resp && resp.normal) pricingCache.normal = { ...pricingCache.normal, ...resp.normal };
     } catch (e) {}
-    currentMode = localStorage.getItem('ap_price_mode') || 'promo';
+    currentMode = 'promo';  // 默认始终推广价，不记住上次选择
     document.querySelectorAll('input[name="ap-price-mode"]').forEach(r => {
       r.checked = (r.value === currentMode);
     });
