@@ -857,7 +857,7 @@ async function renderAutopublish() {
   const writePricingInputs = (mode) => {
     const p = pricingCache[mode] || pricingCache.promo;
     $('#ap-profit').value = p.profit_rate;
-    $('#ap-roi').value = p.roi;
+    $('#ap-roi').value = (p.roi != null) ? p.roi : 2;  // 平卖价无 roi，兜底 2（后端会忽略）
     $('#ap-aftersale').value = p.aftersale_rate;
     $('#ap-freight').value = p.freight;
     $('#ap-danmai').value = p.danmai_mult;
