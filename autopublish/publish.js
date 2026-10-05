@@ -126,6 +126,23 @@ async function fillByType(c, selector, text){
     log('已连接干净 tab，从零开始');
   }
 
+  // ===== 确保窗口可见（窗口最小化/隐藏时 dispatchMouseEvent 事件被丢弃，运费模板/下一步等真实点击失效）=====
+  // task_467 教训：闲时来 Edge 即使 -WindowStyle Normal 启动仍可能 hidden，需主动 maximized 恢复。
+  try{
+    const _ver=await get(`http://127.0.0.1:${PORT}/json/version`);
+    const _bc=await conn(_ver.webSocketDebuggerUrl);
+    const _tgts=await _bc.send('Target.getTargets');
+    const _page=(_tgts.targetInfos||[]).find(t=>t.type==='page');
+    if(_page){
+      const _win=await _bc.send('Browser.getWindowForTarget',{targetId:_page.targetId});
+      if(_win && _win.windowId){
+        await _bc.send('Browser.setWindowBounds',{windowId:_win.windowId, bounds:{windowState:'maximized'}});
+      }
+    }
+    _bc.ws.close();
+    await sleep(1500);
+  }catch(e){ log('  窗口恢复异常:', e.message); }
+
   // ===== 导航发布页 + 检测店铺类型（旗舰店 vs 普通店）=====
   // 旗舰店(欧世艺等)：/goods/category 直接是「发布新商品」页，先填主图+标题 → 点「手动选择商品分类」弹窗选类目 → 选品牌 → 下一步
   // 普通店(闲时来等)：/goods/category 是类目选择页，先搜索选类目 → 点「确认发布该类商品」→ 跳转发布页再填主图标题
