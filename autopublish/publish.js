@@ -484,21 +484,23 @@ async function fillByType(c, selector, text){
   log('[7.6/8] 选运费模板（多仓开头）');
   const _freightPrefix = (cfg.freightPrefix || '多仓').toString();
   try{
-    // 1) 真实鼠标点击「其他模板」radio（task_441 教训：JS click 对 React radio 不触发选中，
-    //    导致 select 下拉不渲染；改用 Input.dispatchMouseEvent 模拟真实点击）
-    const _f1 = await ev(c, `(()=>{
-      const radios=[...document.querySelectorAll('[data-testid="beast-core-radio"]')];
-      const other=radios.find(r=>(r.textContent||'').trim()==='其他模板');
-      if(!other) return 'no_other';
-      other.scrollIntoView({block:'center'});
-      const rc=other.getBoundingClientRect();
-      return JSON.stringify({x:Math.round(rc.x+rc.width/2), y:Math.round(rc.y+rc.height/2), checked:other.getAttribute('data-checked')});
-    })()`);
-    log('  运费模板-其他模板:', _f1);
+    // 1) 滚动到「其他模板」radio 并轮询等渲染（服务与承诺区块在页面下方，React 懒加载，
+    //    scrollIntoView 后立即取坐标还是 0，需向下滚动+等待渲染），渲染后用真实鼠标点击
+    //    （task_441/443 教训：JS click 不触发 React radio 选中，且坐标 0 时点击无效）
     let _f1ok=false;
-    try{
-      const _pt=JSON.parse(_f1||'{}');
-      if(_pt.x&&_pt.y){
+    for(let _ri=0;_ri<12;_ri++){
+      const _f1 = await ev(c, `(()=>{
+        const radios=[...document.querySelectorAll('[data-testid="beast-core-radio"]')];
+        const other=radios.find(r=>(r.textContent||'').trim()==='其他模板');
+        if(!other) return JSON.stringify({err:'no_other'});
+        let rc=other.getBoundingClientRect();
+        if(rc.width>0&&rc.height>0){ other.scrollIntoView({block:'center'}); rc=other.getBoundingClientRect(); }
+        return JSON.stringify({x:Math.round(rc.x+rc.width/2), y:Math.round(rc.y+rc.height/2), w:Math.round(rc.width), h:Math.round(rc.height), checked:other.getAttribute('data-checked')});
+      })()`);
+      let _pt={};
+      try{ _pt=JSON.parse(_f1||'{}'); }catch(e){}
+      if(_pt.err==='no_other'){ break; }  // 确实没有「其他模板」选项
+      if(_pt.x&&_pt.y&&_pt.w>0&&_pt.h>0){
         if(_pt.checked==='true'){ _f1ok=true; }  // 已选中，直接走后续
         else{
           await c.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:_pt.x,y:_pt.y});
@@ -507,8 +509,12 @@ async function fillByType(c, selector, text){
           await c.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:_pt.x,y:_pt.y,button:'left',clickCount:1});
           _f1ok=true;
         }
+        break;
       }
-    }catch(e){}
+      // 坐标还是 0（未渲染）：向下滚动触发懒加载后重试
+      await ev(c, `window.scrollBy(0,300)`);
+      await sleep(1000);
+    }
     log('  运费模板-点击其他模板:', _f1ok?'done':'failed');
     if(_f1ok){
       await sleep(2000);  // 选中后等 2 秒渲染 select 下拉
