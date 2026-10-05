@@ -10,6 +10,7 @@ import json
 import os
 import sys
 import urllib.request
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import catalog
@@ -198,8 +199,25 @@ def gen_titles(products, api_key):
             p["golden_words"] = []
     for i in range(0, len(products), 15):
         chunk = products[i:i + 15]
-        titles.extend(_gen_titles_chunk(chunk, api_key))
+        titles.extend(_gen_titles_chunk_retry(chunk, api_key))
     return titles
+
+
+def _gen_titles_chunk_retry(chunk, api_key, max_retry=3):
+    """对单批生成标题，AI 返回数量不匹配或异常时重试（DeepSeek 偶发截断）。"""
+    last_err = None
+    for attempt in range(max_retry):
+        try:
+            arr = _gen_titles_chunk(chunk, api_key)
+        except Exception as e:
+            last_err = e
+        else:
+            if len(arr) == len(chunk):
+                return arr
+            last_err = RuntimeError(f"AI 返回 {len(arr)} != {len(chunk)}")
+        if attempt < max_retry - 1:
+            time.sleep(2)
+    raise last_err if last_err else RuntimeError("gen_titles chunk 失败")
 
 
 def _gen_titles_chunk(products, api_key):

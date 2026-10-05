@@ -831,7 +831,8 @@ async function renderAutopublish() {
           <option value="3">如若月下</option>
           <option value="1">闲时来</option>
         </select>
-        <input id="ap-filter-supplier" placeholder="货源店铺名(1688)" style="width:180px;padding:7px 12px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;font-family:inherit">
+        <input id="ap-filter-supplier" placeholder="货源店铺名(1688)" list="ap-supplier-list" style="width:180px;padding:7px 12px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;font-family:inherit">
+        <datalist id="ap-supplier-list"></datalist>
         <button class="btn mini" id="ap-filter-btn" style="padding:7px 14px;font-size:13px;background:#2563eb;color:#fff;border:none;border-radius:8px;cursor:pointer;white-space:nowrap">搜索</button>
         <button class="btn mini" id="ap-filter-reset" style="padding:7px 12px;font-size:13px;background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;border-radius:8px;cursor:pointer;white-space:nowrap">重置</button>
       </div>
@@ -1244,6 +1245,20 @@ async function renderAutopublish() {
     _apKeyword = ''; _apStatus = ''; _apShopId = ''; _apSupplierName = ''; _apPage = 1;
     loadApList();
   };
+
+  // 货源店铺名下拉候选：加载已有 1688 货源店铺名（suppliers 表），支持手动输入 + 下拉选择
+  const loadSupplierOptions = async () => {
+    try {
+      const resp = await api('/api/catalog/suppliers');
+      const sups = (resp && resp.items) || [];
+      const dl = $('#ap-supplier-list');
+      if (dl) {
+        const names = [...new Set(sups.map(s => (s.name || '').trim()).filter(Boolean))];
+        dl.innerHTML = names.map(n => `<option value="${esc(n)}"></option>`).join('');
+      }
+    } catch (e) {}
+  };
+  loadSupplierOptions();
 }
 
 const AP_STAGE = { scrape:'抓取1688', ai:'AI生成配置', publish:'CDP上架' };
