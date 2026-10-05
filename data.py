@@ -2657,7 +2657,9 @@ def ai_generate_publish_config(product: dict, pricing: dict = None, shop_name: s
         warning = (warning + "；" if warning else "") + f"SKU 共 {total_sku} 个（>30），拼多多表格可能无法自动化填完，建议人工精简规格"
 
     # 类目修正：按标题关键词命中映射表（AI 不知道拼多多真实类目树，常猜错类目导致发布时搜不到）
-    if _fix_category_by_map(cfg, title):
+    # 用「AI 优化标题 + 1688 原始标题」共同匹配——AI 标题更准确反映品类词（如"摆件"），原始标题兜底
+    _title_for_map = (cfg.get("title") or "") + " " + title
+    if _fix_category_by_map(cfg, _title_for_map):
         warning = (warning + "；" if warning else "") + "类目已按映射修正为「" + cfg.get("categoryPath", "") + "」"
 
     if _no_square_warn:
