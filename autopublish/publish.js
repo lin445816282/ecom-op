@@ -534,9 +534,12 @@ async function fillByType(c, selector, text){
       try{
         const _ep=JSON.parse(_e0||'{}');
         if(_ep.x&&_ep.y){
+          await c.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:_ep.x-40,y:_ep.y});
+          await sleep(150);
           await c.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:_ep.x,y:_ep.y});
+          await sleep(300);
           await c.send('Input.dispatchMouseEvent',{type:'mousePressed',x:_ep.x,y:_ep.y,button:'left',clickCount:1});
-          await sleep(60);
+          await sleep(80);
           await c.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:_ep.x,y:_ep.y,button:'left',clickCount:1});
         }
       }catch(e){}
@@ -556,13 +559,21 @@ async function fillByType(c, selector, text){
       })()`);
       let _pt={};
       try{ _pt=JSON.parse(_f1||'{}'); }catch(e){}
-      if(_pt.err==='no_other'){ break; }  // 确实没有「其他模板」选项
+      if(_pt.err==='no_other'){
+        // 「展开修改」后展开慢，继续向下滚动 + 等待重试（task_467 教训：不要立即 break，否则运费模板漏改）
+        await ev(c, `window.scrollBy(0,300)`);
+        await sleep(1000);
+        continue;
+      }
       if(_pt.x&&_pt.y&&_pt.w>0&&_pt.h>0){
         if(_pt.checked==='true'){ _f1ok=true; }  // 已选中，直接走后续
         else{
+          await c.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:_pt.x-40,y:_pt.y});
+          await sleep(150);
           await c.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:_pt.x,y:_pt.y});
+          await sleep(300);
           await c.send('Input.dispatchMouseEvent',{type:'mousePressed',x:_pt.x,y:_pt.y,button:'left',clickCount:1});
-          await sleep(60);
+          await sleep(80);
           await c.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:_pt.x,y:_pt.y,button:'left',clickCount:1});
           _f1ok=true;
         }

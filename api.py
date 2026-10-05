@@ -2737,6 +2737,41 @@ def _read_publish_progress(task_id: int) -> dict:
     }
 
 
+def _extract_logistics_weight(body_text: str):
+    """从 1688 bodyText「包装信息」表格提取物流重量（kg）。
+
+    解析「重量(g)」标记后的 tab 分隔行，取每行最后一列（重量g），
+    取最大值（含包装最重规格），转 kg 并向上取整到 0.1kg。
+    无重量数据返回 None。
+    """
+    import math
+    import re
+    if not body_text:
+        return None
+    m = re.search(r'重量\s*[（(]\s*g\s*[)）]', body_text)
+    if not m:
+        return None
+    tail = body_text[m.end():m.end() + 800]
+    weights = []
+    for line in tail.split('\n'):
+        line = line.strip()
+        if not line:
+            continue
+        cells = line.split('\t')
+        if len(cells) < 6:
+            continue
+        try:
+            w = float(cells[-1].strip())
+        except ValueError:
+            continue
+        if 1.0 <= w <= 50000.0:  # 1g ~ 50kg 合理范围
+            weights.append(w)
+    if not weights:
+        return None
+    kg = max(weights) / 1000.0
+    return round(math.ceil(kg * 10) / 10.0, 1)
+
+
 def _autopublish_bg(task_id: int, pricing: dict = None):
     """一键上架编排：scrape(1688抓取) → ai(data.ai_generate_publish_config) → publish(CDP上架)。
 
@@ -2849,8 +2884,12 @@ def _autopublish_bg(task_id: int, pricing: dict = None):
     if not cfg:
         return _fail("ai", "AI 未生成配置")
     catalog.update_autopublish_task(task_id, ai_title=cfg.get("title", ""))
-    # 物流重量（多仓按重运费模板需要填）：从 pricing 透传到 config，供 publish.js 填「物流重量」字段
-    if pricing and pricing.get("logistics_weight"):
+    # 物流重量（多仓按重运费模板需要填）：优先从 1688 bodyText 提取真实重量(g)，
+    # 兜底 pricing 透传。供 publish.js 填「物流重量」字段。
+    _w = _extract_logistics_weight(product.get("bodyText", ""))
+    if _w:
+        cfg["logisticsWeight"] = _w
+    elif pricing and pricing.get("logistics_weight"):
         cfg["logisticsWeight"] = pricing["logistics_weight"]
     # 写 config.json 供 publish.js 读
     try:
