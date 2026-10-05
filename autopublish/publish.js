@@ -496,17 +496,42 @@ async function fillByType(c, selector, text){
     log('  运费模板-选其他模板:', _f1);
     if(_f1==='ok'){
       await sleep(2000);
-      // 2) 点 select 下拉展开模板列表
-      const _f2 = await ev(c, `(()=>{
-        const sel=document.querySelector('[id="service.cost_template_id"] [data-testid="beast-core-select"]');
-        if(!sel) return 'no_select';
-        const head=sel.querySelector('[data-testid="beast-core-select-header"]')||sel;
-        head.scrollIntoView({block:'center'}); head.click(); return 'ok';
-      })()`);
-      log('  运费模板-打开下拉:', _f2);
-      if(_f2==='ok'){
+      // 2) 滚动到运费模板字段 + 轮询等 select 渲染（React 懒加载，需滚动到才渲染）
+      let _selReady=false;
+      for(let _i=0;_i<12;_i++){
+        const _h=await ev(c, `(()=>{
+          const lbl=[...document.querySelectorAll('*')].find(e=>e.children.length===0&&(e.textContent||'').trim()==='运费模板'&&e.tagName==='LABEL');
+          if(lbl) lbl.scrollIntoView({block:'center'});
+          const sel=document.querySelector('[id="service.cost_template_id"] [data-testid="beast-core-select"]');
+          if(!sel) return -1;
+          return Math.round(sel.getBoundingClientRect().height);
+        })()`);
+        if(_h>0){ _selReady=true; break; }
+        await ev(c, `window.scrollBy(0,300)`);
+        await sleep(1000);
+      }
+      log('  运费模板-select 渲染:', _selReady?'ok':'超时未渲染');
+      if(!_selReady){
+        log('  ⚠️ 运费模板下拉未渲染（可能该店铺无其他模板），保持默认');
+      } else {
+        // 3) 真实鼠标点击 select 展开下拉（比 JS click 更可靠，React select 需真实事件）
+        const _coord=await ev(c, `(()=>{
+          const sel=document.querySelector('[id="service.cost_template_id"] [data-testid="beast-core-select"]');
+          const head=sel.querySelector('[data-testid="beast-core-select-header"]')||sel;
+          head.scrollIntoView({block:'center'});
+          const rc=head.getBoundingClientRect();
+          return JSON.stringify({x:Math.round(rc.x+rc.width/2),y:Math.round(rc.y+rc.height/2)});
+        })()`);
+        try{
+          const _pt=JSON.parse(_coord||'{}');
+          if(_pt.x&&_pt.y){
+            await c.send('Input.dispatchMouseEvent',{type:'mousePressed',x:_pt.x,y:_pt.y,button:'left',clickCount:1});
+            await sleep(80);
+            await c.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:_pt.x,y:_pt.y,button:'left',clickCount:1});
+          }
+        }catch(e){}
         await sleep(2500);
-        // 3) 找「多仓」开头的模板项并点击（选项是可见叶子文本节点，取最后一个命中，避开页面其他干扰）
+        // 4) 找「多仓」开头的模板项并点击（可见叶子文本节点，取最后一个命中，避开页面其他干扰）
         const _f3 = await ev(c, `(()=>{
           const prefix=${JSON.stringify(_freightPrefix)};
           const items=[...document.querySelectorAll('*')].filter(e=>{
