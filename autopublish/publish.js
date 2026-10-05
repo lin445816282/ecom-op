@@ -594,11 +594,11 @@ async function fillByType(c, selector, text){
           // 5) 填物流重量（多仓按重模板需要）
           if(cfg.logisticsWeight){
             const _wr = await ev(c, `(()=>{
-              const lbl=[...document.querySelectorAll('*')].find(e=>e.children.length===0&&/^(物流重量|商品重量|重量)$/.test((e.textContent||'').trim())&&e.getBoundingClientRect().width>0);
+              const lbl=[...document.querySelectorAll('label')].find(e=>/物流重量|商品重量/.test((e.textContent||'').trim())&&e.getBoundingClientRect().width>0);
               if(!lbl) return 'no_label';
               lbl.scrollIntoView({block:'center'});
               let item=lbl;
-              for(let i=0;i<8&&item;i++){ if(/(^| )Form_item|form-item/.test(item.className||'')&&item.querySelector('input')) break; item=item.parentElement; }
+              for(let i=0;i<10&&item;i++){ const _ins=[...item.querySelectorAll('input')].filter(i=>i.type!=='radio'&&i.type!=='checkbox'&&i.type!=='hidden'&&i.getBoundingClientRect().width>0); if(_ins.length) break; item=item.parentElement; }
               const inps=item?[...item.querySelectorAll('input')].filter(i=>i.type!=='radio'&&i.type!=='checkbox'&&i.type!=='hidden'&&i.getBoundingClientRect().width>0):[];
               if(!inps.length) return 'no_input';
               const inp=inps[0];
