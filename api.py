@@ -2849,6 +2849,9 @@ def _autopublish_bg(task_id: int, pricing: dict = None):
     if not cfg:
         return _fail("ai", "AI 未生成配置")
     catalog.update_autopublish_task(task_id, ai_title=cfg.get("title", ""))
+    # 物流重量（多仓按重运费模板需要填）：从 pricing 透传到 config，供 publish.js 填「物流重量」字段
+    if pricing and pricing.get("logistics_weight"):
+        cfg["logisticsWeight"] = pricing["logistics_weight"]
     # 写 config.json 供 publish.js 读
     try:
         with open(config_wsl, "w", encoding="utf-8") as f:

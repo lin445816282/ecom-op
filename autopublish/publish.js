@@ -564,6 +564,29 @@ async function fillByType(c, selector, text){
           log('  ⚠️ 运费模板：未找到「'+_freightPrefix+'」开头的模板，保持默认（请检查该店铺是否已配置多仓模板）');
         } else {
           log('  运费模板-已选中:', _f3);
+          // 5) 填物流重量（多仓按重模板需要）
+          if(cfg.logisticsWeight){
+            const _wr = await ev(c, `(()=>{
+              const lbl=[...document.querySelectorAll('*')].find(e=>e.children.length===0&&/^(物流重量|商品重量|重量)$/.test((e.textContent||'').trim())&&e.getBoundingClientRect().width>0);
+              if(!lbl) return 'no_label';
+              lbl.scrollIntoView({block:'center'});
+              let item=lbl;
+              for(let i=0;i<8&&item;i++){ if(/(^| )Form_item|form-item/.test(item.className||'')&&item.querySelector('input')) break; item=item.parentElement; }
+              const inps=item?[...item.querySelectorAll('input')].filter(i=>i.type!=='radio'&&i.type!=='checkbox'&&i.type!=='hidden'&&i.getBoundingClientRect().width>0):[];
+              if(!inps.length) return 'no_input';
+              const inp=inps[0];
+              inp.scrollIntoView({block:'center'}); inp.click(); inp.focus();
+              return 'ok';
+            })()`);
+            if(_wr==='ok'){
+              await sleep(300);
+              await c.send('Input.insertText',{text:String(cfg.logisticsWeight)});
+              await sleep(200);
+              log('  物流重量-已填:', cfg.logisticsWeight, 'kg');
+            } else {
+              log('  物流重量-未找到输入框('+_wr+')，跳过（需人工补填）');
+            }
+          }
         }
       }
     }

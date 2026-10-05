@@ -754,6 +754,7 @@ async function renderAutopublish() {
           <label style="display:flex;align-items:center;gap:5px">售后率 <input id="ap-aftersale" type="number" value="5" step="1" min="0" max="50" style="width:56px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px">%</label>
           <label style="display:flex;align-items:center;gap:5px">运费 <input id="ap-freight" type="number" value="3" step="0.5" min="0" style="width:56px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px">元</label>
           <label style="display:flex;align-items:center;gap:5px">单买倍数 <input id="ap-danmai" type="number" value="1.5" step="0.1" min="1" style="width:56px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px"></label>
+          <label style="display:flex;align-items:center;gap:5px" title="多仓按重运费模板需填物流重量">物流重量 <input id="ap-logistics-weight" type="number" value="1" step="0.1" min="0.01" style="width:56px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px">kg</label>
           <span id="ap-price-preview" style="color:#2563eb;font-size:12px;font-weight:600"></span>
           <button class="btn" id="ap-pricing-save" style="padding:7px 14px;font-size:13px;background:#16a34a;color:#fff;border:none;border-radius:8px;cursor:pointer;white-space:nowrap">💾 保存定价参数</button>
         </div>
@@ -862,6 +863,7 @@ async function renderAutopublish() {
       aftersale_rate: Number($('#ap-aftersale').value) || 5,
       freight: Number($('#ap-freight').value) || 3,
       danmai_mult: Number($('#ap-danmai').value) || 1.5,
+      logistics_weight: Number($('#ap-logistics-weight').value) || 1,
     };
   };
 
@@ -1144,6 +1146,7 @@ async function renderAutopublish() {
       aftersale_rate: (Number($('#ap-aftersale').value) || 5) / 100,
       freight: Number($('#ap-freight').value) || 3,
       danmai_mult: Number($('#ap-danmai').value) || 1.5,
+      logistics_weight: Number($('#ap-logistics-weight').value) || 1,
     };
     $('#ap-start-btn').disabled = true;
     $('#ap-start-btn').textContent = '提交中…';
@@ -1184,6 +1187,7 @@ async function renderAutopublish() {
       aftersale_rate: (Number($('#ap-aftersale').value) || 5) / 100,
       freight: Number($('#ap-freight').value) || 3,
       danmai_mult: Number($('#ap-danmai').value) || 1.5,
+      logistics_weight: Number($('#ap-logistics-weight').value) || 1,
     };
     $('#ap-batch-btn').disabled = true;
     $('#ap-batch-btn').textContent = '创建中…';
