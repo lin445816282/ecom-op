@@ -593,25 +593,43 @@ async function fillByType(c, selector, text){
           log('  运费模板-已选中:', _f3);
           // 5) 填物流重量（多仓按重模板需要）
           if(cfg.logisticsWeight){
-            const _wr = await ev(c, `(()=>{
-              const lbl=[...document.querySelectorAll('label')].find(e=>/物流重量|商品重量/.test((e.textContent||'').trim())&&e.getBoundingClientRect().width>0);
-              if(!lbl) return 'no_label';
-              lbl.scrollIntoView({block:'center'});
-              let item=lbl;
-              for(let i=0;i<10&&item;i++){ const _ins=[...item.querySelectorAll('input')].filter(i=>i.type!=='radio'&&i.type!=='checkbox'&&i.type!=='hidden'&&i.getBoundingClientRect().width>0); if(_ins.length) break; item=item.parentElement; }
-              const inps=item?[...item.querySelectorAll('input')].filter(i=>i.type!=='radio'&&i.type!=='checkbox'&&i.type!=='hidden'&&i.getBoundingClientRect().width>0):[];
-              if(!inps.length) return 'no_input';
-              const inp=inps[0];
-              inp.scrollIntoView({block:'center'}); inp.click(); inp.focus();
-              return 'ok';
-            })()`);
-            if(_wr==='ok'){
-              await sleep(300);
-              await c.send('Input.insertText',{text:String(cfg.logisticsWeight)});
-              await sleep(200);
-              log('  物流重量-已填:', cfg.logisticsWeight, 'kg');
+            // task_445 教训：选完「按重量」模板后物流重量字段才出现（React 条件渲染），
+            // 且在页面更下方（y~4237，运费模板 y~3864）是懒加载。选完立即找 label → no_label（width=0 未渲染）。
+            // 需先滚动到字段位置 + 轮询等 label 渲染出来。
+            let _lblReady=false;
+            for(let _i=0;_i<16;_i++){
+              const _chk = await ev(c, `(()=>{
+                const lbl=[...document.querySelectorAll('label')].find(e=>/物流重量|商品重量/.test((e.textContent||'').trim())&&e.getBoundingClientRect().width>0);
+                if(lbl){ lbl.scrollIntoView({block:'center'}); return 'ok'; }
+                return 'no';
+              })()`);
+              if(_chk==='ok'){ _lblReady=true; break; }
+              await ev(c, `window.scrollBy(0,300)`);
+              await sleep(800);
+            }
+            if(!_lblReady){
+              log('  物流重量-未找到输入框(label未渲染)，跳过（需人工补填）');
             } else {
-              log('  物流重量-未找到输入框('+_wr+')，跳过（需人工补填）');
+              const _wr = await ev(c, `(()=>{
+                const lbl=[...document.querySelectorAll('label')].find(e=>/物流重量|商品重量/.test((e.textContent||'').trim())&&e.getBoundingClientRect().width>0);
+                if(!lbl) return 'no_label';
+                lbl.scrollIntoView({block:'center'});
+                let item=lbl;
+                for(let i=0;i<10&&item;i++){ const _ins=[...item.querySelectorAll('input')].filter(i=>i.type!=='radio'&&i.type!=='checkbox'&&i.type!=='hidden'&&i.getBoundingClientRect().width>0); if(_ins.length) break; item=item.parentElement; }
+                const inps=item?[...item.querySelectorAll('input')].filter(i=>i.type!=='radio'&&i.type!=='checkbox'&&i.type!=='hidden'&&i.getBoundingClientRect().width>0):[];
+                if(!inps.length) return 'no_input';
+                const inp=inps[0];
+                inp.scrollIntoView({block:'center'}); inp.click(); inp.focus();
+                return 'ok';
+              })()`);
+              if(_wr==='ok'){
+                await sleep(300);
+                await c.send('Input.insertText',{text:String(cfg.logisticsWeight)});
+                await sleep(200);
+                log('  物流重量-已填:', cfg.logisticsWeight, 'kg');
+              } else {
+                log('  物流重量-未找到输入框('+_wr+')，跳过（需人工补填）');
+              }
             }
           }
         }
