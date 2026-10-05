@@ -477,6 +477,57 @@ async function fillByType(c, selector, text){
     }
   }catch(e){ log('  品牌处理异常:', e.message); }
 
+  // ===== Step 7.6: 运费模板（选「多仓」开头的模板） =====
+  // 运费模板字段在「服务与承诺」区块：radio group「推荐默认模板」/「其他模板」。
+  // 选「其他模板」→ 展开 .template-box-select（内含 select 下拉 service.cost_template_id）→
+  // 点下拉 → 弹模板列表 → 选「多仓」开头的那个（如「多仓按重…海南新西港澳台不配送…」）。
+  log('[7.6/8] 选运费模板（多仓开头）');
+  const _freightPrefix = (cfg.freightPrefix || '多仓').toString();
+  try{
+    // 1) 点「其他模板」radio（默认是「新疆西藏收费默认模板」推荐项）
+    const _f1 = await ev(c, `(()=>{
+      const radios=[...document.querySelectorAll('[data-testid="beast-core-radio"]')];
+      const other=radios.find(r=>(r.textContent||'').trim()==='其他模板');
+      if(!other) return 'no_other';
+      other.scrollIntoView({block:'center'});
+      if(other.getAttribute('data-checked')!=='true'){ other.click(); }
+      return 'ok';
+    })()`);
+    log('  运费模板-选其他模板:', _f1);
+    if(_f1==='ok'){
+      await sleep(2000);
+      // 2) 点 select 下拉展开模板列表
+      const _f2 = await ev(c, `(()=>{
+        const sel=document.querySelector('[id="service.cost_template_id"] [data-testid="beast-core-select"]');
+        if(!sel) return 'no_select';
+        const head=sel.querySelector('[data-testid="beast-core-select-header"]')||sel;
+        head.scrollIntoView({block:'center'}); head.click(); return 'ok';
+      })()`);
+      log('  运费模板-打开下拉:', _f2);
+      if(_f2==='ok'){
+        await sleep(2500);
+        // 3) 找「多仓」开头的模板项并点击（选项是可见叶子文本节点，取最后一个命中，避开页面其他干扰）
+        const _f3 = await ev(c, `(()=>{
+          const prefix=${JSON.stringify(_freightPrefix)};
+          const items=[...document.querySelectorAll('*')].filter(e=>{
+            const t=(e.textContent||'').trim();
+            const rc=e.getBoundingClientRect();
+            return e.children.length===0 && t.startsWith(prefix) && t.length<80 && rc.width>0 && rc.height>0;
+          });
+          if(!items.length) return 'no_match:'+prefix;
+          const target=items[items.length-1];
+          target.click();
+          return (target.textContent||'').trim();
+        })()`);
+        if(_f3 && _f3.startsWith('no_match')){
+          log('  ⚠️ 运费模板：未找到「'+_freightPrefix+'」开头的模板，保持默认（请检查该店铺是否已配置多仓模板）');
+        } else {
+          log('  运费模板-已选中:', _f3);
+        }
+      }
+    }
+  }catch(e){ log('  运费模板选择异常:', e.message); }
+
   // ===== Step 8: 提交 =====
   log('[8/8] 提交前检查');
   const err=await ev(c,`(()=>{const m=document.body.innerText.match(/错误（(\d+)）/);return m?m[0]:'错误（0）'})()`);
