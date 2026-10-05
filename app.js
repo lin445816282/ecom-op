@@ -830,6 +830,7 @@ async function renderAutopublish() {
           <option value="3">如若月下</option>
           <option value="1">闲时来</option>
         </select>
+        <input id="ap-filter-supplier" placeholder="货源店铺名(1688)" style="width:180px;padding:7px 12px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;font-family:inherit">
         <button class="btn mini" id="ap-filter-btn" style="padding:7px 14px;font-size:13px;background:#2563eb;color:#fff;border:none;border-radius:8px;cursor:pointer;white-space:nowrap">搜索</button>
         <button class="btn mini" id="ap-filter-reset" style="padding:7px 12px;font-size:13px;background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;border-radius:8px;cursor:pointer;white-space:nowrap">重置</button>
       </div>
@@ -1220,6 +1221,7 @@ async function renderAutopublish() {
     _apKeyword = ($('#ap-filter-kw') && $('#ap-filter-kw').value || '').trim();
     _apStatus = $('#ap-filter-status') ? $('#ap-filter-status').value : '';
     _apShopId = $('#ap-filter-shop') ? $('#ap-filter-shop').value : '';
+    _apSupplierName = ($('#ap-filter-supplier') && $('#ap-filter-supplier').value || '').trim();
     _apPage = 1;
     loadApList();
   };
@@ -1227,12 +1229,15 @@ async function renderAutopublish() {
   if (filterBtn) filterBtn.onclick = applyFilter;
   const kwInput = $('#ap-filter-kw');
   if (kwInput) kwInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') applyFilter(); });
+  const supplierInput = $('#ap-filter-supplier');
+  if (supplierInput) supplierInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') applyFilter(); });
   const resetBtn = $('#ap-filter-reset');
   if (resetBtn) resetBtn.onclick = () => {
     if ($('#ap-filter-kw')) $('#ap-filter-kw').value = '';
     if ($('#ap-filter-status')) $('#ap-filter-status').value = '';
     if ($('#ap-filter-shop')) $('#ap-filter-shop').value = '';
-    _apKeyword = ''; _apStatus = ''; _apShopId = ''; _apPage = 1;
+    if ($('#ap-filter-supplier')) $('#ap-filter-supplier').value = '';
+    _apKeyword = ''; _apStatus = ''; _apShopId = ''; _apSupplierName = ''; _apPage = 1;
     loadApList();
   };
 }
@@ -1406,6 +1411,7 @@ let _apPageSize = 20;
 let _apKeyword = '';
 let _apStatus = '';
 let _apShopId = '';
+let _apSupplierName = '';
 let _apTotal = 0;
 
 async function loadApList() {
@@ -1417,6 +1423,7 @@ async function loadApList() {
     if (_apKeyword) params.set('keyword', _apKeyword);
     if (_apStatus) params.set('status', _apStatus);
     if (_apShopId) params.set('shop_id', _apShopId);
+    if (_apSupplierName) params.set('supplier_name', _apSupplierName);
     const resp = await api('/api/autopublish?' + params.toString());
     items = (resp && resp.items) || [];
     total = (resp && resp.total) || 0;
@@ -1438,13 +1445,16 @@ async function loadApList() {
     const priceModeTag = isNormal
       ? metaTag('🏷️', '平卖价', 'background:#fef3c7;color:#92400e;border:1px solid #fcd34d')
       : metaTag('🏷️', (_pm === 'promo' ? '推广价' : (_pm || '推广价')), 'background:#dbeafe;color:#1e40af;border:1px solid #93c5fd');
+    const supplierTag = t.supplier_name
+      ? metaTag('🏭', t.supplier_name, 'background:#faf5ff;color:#7c3aed;border:1px solid #ddd6fe')
+      : '';
     return `
     <div class="ap-task-item">
       <input type="checkbox" class="ap-task-check" value="${t.id}" ${canRepub ? '' : 'disabled'} ${canRepub && _apSelected.has(String(t.id)) ? 'checked' : ''} onclick="event.stopPropagation()" onchange="window.toggleApSelect(this)">
       <div class="ap-task-id">#${t.id}</div>
       <div class="ap-task-main" onclick="startApPolling(${t.id})">
         <div class="ap-task-title">${esc(t.raw_title || t.ai_title || t.source_url || '')}</div>
-        <div class="ap-task-sub">${shopTag}${operatorTag}${priceModeTag}</div>
+        <div class="ap-task-sub">${shopTag}${operatorTag}${priceModeTag}${supplierTag}</div>
       </div>
       <span class="ap-task-status">${statusTag[t.status] || t.status}</span>
       ${canRepub ? `<button class="ap-task-repub" onclick="event.stopPropagation();republishTask(${t.id})">重新上架</button>` : ''}
@@ -3208,9 +3218,26 @@ async function renderSuppliersView() {
           <span class="sup-name">🏭 ${esc(s.name)}</span>
           <span class="sup-count">${s.product_count} 条</span>
           ${s.source ? `<span class="sup-src">${esc(s.source)}</span>` : ''}
+          ${s.prefix ? `<button class="btn sm" data-sup-new="${s.id}" style="margin-left:8px;padding:3px 10px;font-size:12px;background:#7c3aed;color:#fff;border:none;border-radius:6px;cursor:pointer">🆕 采集新品</button>` : ''}
         </div>
         <div class="sup-body" id="sup-body-${s.id}" hidden></div>
       </div>`).join('');
+    // 采集新品按钮
+    listEl.querySelectorAll('[data-sup-new]').forEach(btn => {
+      btn.onclick = async (e) => {
+        e.stopPropagation();
+        const sid = Number(btn.dataset.supNew);
+        btn.disabled = true; btn.textContent = '采集中…';
+        try {
+          const resp = await api('/api/supplier/fetchNew', 'POST', { supplier_id: sid });
+          showSupplierNewModal(resp, sups.find(s => s.id === sid));
+        } catch (err) {
+          toast('采集失败：' + (err.message || err));
+        } finally {
+          btn.disabled = false; btn.textContent = '🆕 采集新品';
+        }
+      };
+    });
     listEl.querySelectorAll('[data-sup-id]').forEach(h => {
       h.onclick = async () => {
         const body = $('#sup-body-' + h.dataset.supId);
@@ -3281,6 +3308,32 @@ async function renderSuppliersView() {
   supEl.querySelector('[data-sup-export]').onclick = () => {
     window.open(BASE + '/api/catalog/export?type=supplier', '_blank');
   };
+}
+
+function showSupplierNewModal(resp, sup) {
+  const items = (resp && resp.items) || [];
+  const name = (sup && sup.name) || ((resp && resp.supplier && resp.supplier.name) || '');
+  const mask = document.createElement('div');
+  mask.setAttribute('data-sup-new-mask', '1');
+  mask.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px';
+  const rows = items.map(it => `
+    <div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid #f1f5f9">
+      <span style="font-size:11px;color:#94a3b8;white-space:nowrap;font-family:'Roboto Mono',monospace">${esc(it.date)}</span>
+      <span style="flex:1;font-size:13px;color:#334155;line-height:1.4">${esc(it.title)}</span>
+      <span style="font-size:13px;color:#dc2626;font-weight:700;white-space:nowrap">${it.price ? '¥' + esc(it.price) : '—'}</span>
+    </div>`).join('');
+  mask.innerHTML = `
+    <div style="background:#fff;border-radius:12px;width:100%;max-width:560px;max-height:80vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,0.3)">
+      <div style="padding:16px 20px;border-bottom:1px solid #e2e8f0;display:flex;justify-content:space-between;align-items:center">
+        <div style="font-weight:700;font-size:15px;color:#334155">🆕 ${esc(name)} · 新品专区 <span style="font-size:12px;color:#94a3b8;font-weight:400">共 ${items.length} 件</span></div>
+        <button onclick="this.closest('[data-sup-new-mask]').remove()" style="border:none;background:none;font-size:22px;line-height:1;cursor:pointer;color:#94a3b8">×</button>
+      </div>
+      <div style="padding:8px 20px;overflow-y:auto">
+        ${rows || '<div style="color:#94a3b8;text-align:center;padding:32px">暂无新品</div>'}
+      </div>
+    </div>`;
+  mask.addEventListener('click', (e) => { if (e.target === mask) mask.remove(); });
+  document.body.appendChild(mask);
 }
 
 async function loadFreight(month, shop) {

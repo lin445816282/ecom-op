@@ -860,11 +860,11 @@ def list_autopublish_tasks(limit: int = 50) -> list[dict]:
 
 def list_autopublish_tasks_paged(page: int = 1, page_size: int = 20,
                                  keyword: str = None, status: str = None,
-                                 shop_id: int = None) -> dict:
+                                 shop_id: int = None, supplier_name: str = None) -> dict:
     """历史任务分页查询 + 搜索筛选。返回 {items, total, page, page_size}。
 
     keyword 模糊匹配 raw_title/ai_title/source_url；status 精确匹配；
-    shop_id 精确匹配店铺。均 None 时全量分页。
+    shop_id 精确匹配店铺；supplier_name 模糊匹配 1688 货源店铺名。均 None 时全量分页。
     """
     where = []
     args = []
@@ -878,14 +878,21 @@ def list_autopublish_tasks_paged(page: int = 1, page_size: int = 20,
     if shop_id:
         where.append("t.shop_id = ?")
         args.append(int(shop_id))
+    if supplier_name:
+        sn = f"%{supplier_name}%"
+        where.append("sup.name LIKE ?")
+        args.append(sn)
     where_sql = (" WHERE " + " AND ".join(where)) if where else ""
     with closing(_conn()) as c:
         total = c.execute(
-            f"SELECT COUNT(*) FROM autopublish_tasks t{where_sql}", args
+            f"SELECT COUNT(*) FROM autopublish_tasks t "
+            f"LEFT JOIN suppliers sup ON sup.id = t.supplier_id{where_sql}", args
         ).fetchone()[0]
         rows = c.execute(
-            f"SELECT t.*, s.name AS shop_name FROM autopublish_tasks t "
-            f"LEFT JOIN shops s ON s.id = t.shop_id{where_sql} "
+            f"SELECT t.*, s.name AS shop_name, sup.name AS supplier_name, sup.prefix AS supplier_prefix "
+            f"FROM autopublish_tasks t "
+            f"LEFT JOIN shops s ON s.id = t.shop_id "
+            f"LEFT JOIN suppliers sup ON sup.id = t.supplier_id{where_sql} "
             f"ORDER BY t.id DESC LIMIT ? OFFSET ?",
             args + [page_size, (page - 1) * page_size],
         ).fetchall()
@@ -899,7 +906,7 @@ def update_autopublish_task(task_id: int, **fields) -> dict:
         return get_autopublish_task(task_id)
     allowed = {
         "status", "stage", "raw_title", "ai_title", "ai_desc", "price",
-        "skus", "images", "pdd_goods_id", "error", "log",
+        "skus", "images", "pdd_goods_id", "error", "log", "supplier_id",
     }
     sets, vals = [], []
     for k, v in fields.items():
@@ -1772,6 +1779,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
     _apmcols = {r[1] for r in conn.execute("PRAGMA table_info(autopublish_tasks)").fetchall()}
     if "price_mode" not in _apmcols:
         conn.execute("ALTER TABLE autopublish_tasks ADD COLUMN price_mode TEXT DEFAULT 'promo'")
+    # autopublish_tasks 表 supplier_id 列（关联 1688 货源店铺，suppliers.id）
+    if "supplier_id" not in _apmcols:
+        conn.execute("ALTER TABLE autopublish_tasks ADD COLUMN supplier_id INTEGER DEFAULT 0")
+    # suppliers 表 prefix 列（1688 店铺前缀，用于定位新品专区 newofferlist.htm）
+    supcols = {r[1] for r in conn.execute("PRAGMA table_info(suppliers)").fetchall()}
+    if "prefix" not in supcols:
+        conn.execute("ALTER TABLE suppliers ADD COLUMN prefix TEXT DEFAULT ''")
     # users 表 permissions 列（模块访问权限，JSON 数组，["*"]=全权限）
     ucols = {r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
     if "permissions" not in ucols:
@@ -4638,6 +4652,34 @@ def _num(v):
         return float(m.group(0))
     except ValueError:
         return None
+
+
+def get_or_create_supplier(name, prefix=''):
+    """按店铺名去重：已存在则更新前缀并返回 id，不存在则创建。返回 supplier_id（失败返回 0）。
+
+    用于一键上架时把 1688 货源店铺（名+前缀）自动入库，重复店铺名只绑定不重复建。
+    """
+    name = (name or '').strip()
+    if not name:
+        return 0
+    with closing(_conn()) as c:
+        row = c.execute("SELECT id FROM suppliers WHERE name=?", (name,)).fetchone()
+        if row:
+            if prefix:
+                c.execute("UPDATE suppliers SET prefix=? WHERE id=?", (prefix or '', row['id']))
+                c.commit()
+            return row['id']
+        cur = c.execute("INSERT INTO suppliers (name, prefix, source) VALUES (?,?,?)",
+                        (name, prefix or '', '1688'))
+        c.commit()
+        return cur.lastrowid
+
+
+def get_supplier(supplier_id):
+    """按 id 查 1688 货源店铺，找不到返回 None。"""
+    with closing(_conn()) as c:
+        row = c.execute("SELECT * FROM suppliers WHERE id=?", (supplier_id,)).fetchone()
+        return dict(row) if row else None
 
 
 def upsert_supplier(name, contact='', phone='', address='', source='', remark=''):

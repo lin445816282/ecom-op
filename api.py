@@ -1595,6 +1595,30 @@ class Handler(BaseHTTPRequestHandler):
             res = _cdp_restart(port)
             return _json(self, res, 200 if res.get("ok") else 400)
 
+        if path == "/api/supplier/fetchNew" and self.command == "POST":
+            # 按供应商前缀采集 1688 新品专区（newofferlist.htm）最新上架商品
+            item = self._read_body()
+            try:
+                supplier_id = int(item.get("supplier_id") or 0)
+            except (TypeError, ValueError):
+                supplier_id = 0
+            if not supplier_id:
+                return _json(self, {"error": "缺少 supplier_id"}, 400)
+            sup = catalog.get_supplier(supplier_id)
+            if not sup:
+                return _json(self, {"error": "供应商不存在"}, 404)
+            prefix = (sup.get("prefix") or "").strip()
+            if not prefix:
+                return _json(self, {"error": "该供应商未记录店铺前缀，无法定位新品专区"}, 400)
+            outdir_win = "C:\\tmp\\pdd-publish\\newoffer"
+            outdir_wsl = "/mnt/c/tmp/pdd-publish/newoffer"
+            os.makedirs(outdir_wsl, exist_ok=True)
+            res = _run_node_script("fetch_newoffer.js", [prefix, outdir_win, str(CLIENT_1688_PORT)], timeout=120)
+            if not res.get("data"):
+                return _json(self, {"error": res.get("error") or res.get("stderr") or "采集失败"}, 500)
+            items = _parse_newoffer_text(res["data"].get("text") or "")
+            return _json(self, {"ok": True, "supplier": sup, "items": items, "count": len(items)})
+
         if path == "/api/autopublish" and self.command == "GET":
             # 历史任务分页 + 搜索筛选（page/page_size/keyword/status/shop_id）
             page = int(qs.get("page", ["1"])[0] or 1)
@@ -1602,7 +1626,8 @@ class Handler(BaseHTTPRequestHandler):
             keyword = (qs.get("keyword", [""])[0] or "").strip() or None
             status = (qs.get("status", [""])[0] or "").strip() or None
             shop_id = (qs.get("shop_id", [""])[0] or "").strip() or None
-            result = catalog.list_autopublish_tasks_paged(page, page_size, keyword, status, shop_id)
+            supplier_name = (qs.get("supplier_name", [""])[0] or "").strip() or None
+            result = catalog.list_autopublish_tasks_paged(page, page_size, keyword, status, shop_id, supplier_name)
             items = result["items"]
             # 为 publishing 状态的任务附上实时细粒度进度，让批量列表直接显示每个任务当前步骤
             for it in items:
@@ -2391,6 +2416,79 @@ def _normalize_publish_images(outdir_wsl: str) -> int:
     return n
 
 
+def _parse_newoffer_text(text: str) -> list:
+    """解析 1688 店铺新品专区 bodyText → [{title, price, date, month}]。
+
+    bodyText 结构：左侧日期导航(26年X月上新 + X月X日) + 右侧商品列表
+    (X月X日 → 标题 → [XX上新修饰词] → ¥ → 价格数字)。
+    month 从商品日期的月份数字推断（如 10月1日 → 10月）。
+    """
+    import re
+    lines = [l.strip() for l in (text or "").split("\n")]
+    noise = ("关注", "粉丝", "入驻", "服务分", "主营", "回头率", "客服", "手机逛",
+             "店铺推荐", "全部商品", "新品专区", "店铺动态", "工厂档案", "联系方式",
+             "技术支持", "地址", "旺铺", "免责", "客服中心", "阿里巴巴", "版权所有",
+             "国际站", "速卖通", "淘宝网")
+    items = []
+    i, n = 0, len(lines)
+    while i < n:
+        line = lines[i]
+        dm = re.match(r"^(\d{1,2})月(\d{1,2})日$", line)
+        if not dm:
+            i += 1
+            continue
+        date = f"{dm.group(1)}月{dm.group(2)}日"
+        month = f"{dm.group(1)}月"
+        # 向后找商品标题（长文本，非噪音/价格/日期/月份分组）
+        title = None
+        j = i + 1
+        while j < n:
+            cand = lines[j]
+            if not cand:
+                j += 1
+                continue
+            if ("¥" in cand or re.match(r"^[\d.]+$", cand)
+                    or re.match(r"^\d{1,2}月\d{1,2}日$", cand)
+                    or re.match(r"^\d{2}年\d{1,2}月上新$", cand)
+                    or any(w in cand for w in noise)):
+                break
+            if len(cand) >= 6:
+                title = cand
+                break
+            j += 1
+        if not title:
+            i += 1
+            continue
+        # 找价格：标题后（跳过修饰词行）找 ¥ 数字（¥ 可能独占一行，数字在下一行）
+        price = ""
+        k = j + 1
+        while k < n and k < j + 12:
+            pk = lines[k]
+            if re.match(r"^\d{1,2}月\d{1,2}日$", pk) or re.match(r"^\d{2}年\d{1,2}月上新$", pk):
+                break
+            pm = re.search(r"¥\s*([\d.]+)", pk)
+            if pm:
+                price = pm.group(1)
+                break
+            if pk == "¥" or pk.startswith("¥"):
+                for k2 in range(k + 1, min(k + 5, n)):
+                    if re.match(r"^[\d.]+$", lines[k2].strip()):
+                        price = lines[k2].strip()
+                        break
+                break
+            k += 1
+        items.append({"title": title, "price": price, "date": date, "month": month})
+        i = j + 1
+    # 按标题去重（保序）
+    seen = set()
+    uniq = []
+    for it in items:
+        if it["title"] not in seen:
+            seen.add(it["title"])
+            uniq.append(it)
+    return uniq
+
+
 def _extract_1688_url(text: str) -> str:
     """从 1688 分享口令/整段文本里提取纯 URL，失败返回空串。"""
     import re
@@ -2721,6 +2819,16 @@ def _autopublish_bg(task_id: int, pricing: dict = None):
         raw_title=product.get("title", ""),
         images=product.get("images", []),
     )
+    # 1688 货源店铺：抓到的店铺名+前缀 → 按名去重入库（重复店铺名只绑定不重复建）→ 关联任务
+    _supplier_name = (product.get("supplierName") or "").strip() or (d.get("supplierName") or "").strip()
+    _supplier_prefix = (product.get("supplierPrefix") or "").strip() or (d.get("supplierPrefix") or "").strip()
+    if _supplier_name:
+        _sid = catalog.get_or_create_supplier(_supplier_name, _supplier_prefix)
+        catalog.update_autopublish_task(task_id, supplier_id=_sid)
+        catalog.append_autopublish_log(
+            task_id, "scrape", "done",
+            f"货源店铺：{_supplier_name}" + (f"（前缀 {_supplier_prefix}）" if _supplier_prefix else ""),
+        )
     catalog.append_autopublish_log(
         task_id, "scrape", "done",
         f"抓取成功：{product.get('title','')[:30]} ｜ 图 {len(product.get('images',[]))} 张",
