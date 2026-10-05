@@ -63,6 +63,22 @@ function download(url, savePath){
   // 3. 抓标题
   const title=await ev(c,'document.title.split("-")[0].trim()');
 
+  // 3.5 抓 1688 货源店铺名 + 店铺前缀（上架列表按店铺搜索 + 新品专区定位用）
+  const supplierName = await ev(c, `(()=>{
+    const el=document.querySelector('.company-name')||document.querySelector('[class*="company"]');
+    return el?(el.textContent||'').trim().replace(/\\s+/g,' '):'';
+  })()`) || '';
+  const supplierPrefix = await ev(c, `(()=>{
+    const a=[...document.querySelectorAll('a[href]')].find(x=>{
+      const h=(x.href||'');
+      return /^https?:\\/\\/[a-z0-9-]+\\.1688\\.com\\//i.test(h) && !/detail\\.1688\\.com/i.test(h) && !/login\\.1688\\.com/i.test(h);
+    });
+    if(!a)return '';
+    const m=(a.href||'').match(/^https?:\\/\\/([^.]+)\\.1688\\.com\\//i);
+    return m?m[1]:'';
+  })()`) || '';
+  console.log('[scrape] 店铺:', supplierName || '(未识别)', '| 前缀:', supplierPrefix || '(无)');
+
   // 4. 抓 body 文本（价格+规格）
   const text=await ev(c,'document.body.innerText');
 
@@ -100,11 +116,13 @@ function download(url, savePath){
     title,
     bodyText:text.slice(0,12000),
     images:imgPaths,
+    supplierName:supplierName||'',
+    supplierPrefix:supplierPrefix||'',
   };
   fs.writeFileSync(path.join(OUTDIR,'product.json'),JSON.stringify(product,null,2),'utf8');
 
   // 8. stdout 打印 JSON 摘要（后端解析用）
-  const summary={offerId, title, images:imgPaths, bodyTextLength:text.length};
+  const summary={offerId, title, images:imgPaths, bodyTextLength:text.length, supplierName:supplierName||'', supplierPrefix:supplierPrefix||''};
   console.log(JSON.stringify(summary));
 
   c.ws.close();
