@@ -484,18 +484,34 @@ async function fillByType(c, selector, text){
   log('[7.6/8] 选运费模板（多仓开头）');
   const _freightPrefix = (cfg.freightPrefix || '多仓').toString();
   try{
-    // 1) 点「其他模板」radio（默认是「新疆西藏收费默认模板」推荐项）
+    // 1) 真实鼠标点击「其他模板」radio（task_441 教训：JS click 对 React radio 不触发选中，
+    //    导致 select 下拉不渲染；改用 Input.dispatchMouseEvent 模拟真实点击）
     const _f1 = await ev(c, `(()=>{
       const radios=[...document.querySelectorAll('[data-testid="beast-core-radio"]')];
       const other=radios.find(r=>(r.textContent||'').trim()==='其他模板');
       if(!other) return 'no_other';
       other.scrollIntoView({block:'center'});
-      if(other.getAttribute('data-checked')!=='true'){ other.click(); }
-      return 'ok';
+      const rc=other.getBoundingClientRect();
+      return JSON.stringify({x:Math.round(rc.x+rc.width/2), y:Math.round(rc.y+rc.height/2), checked:other.getAttribute('data-checked')});
     })()`);
-    log('  运费模板-选其他模板:', _f1);
-    if(_f1==='ok'){
-      await sleep(2000);
+    log('  运费模板-其他模板:', _f1);
+    let _f1ok=false;
+    try{
+      const _pt=JSON.parse(_f1||'{}');
+      if(_pt.x&&_pt.y){
+        if(_pt.checked==='true'){ _f1ok=true; }  // 已选中，直接走后续
+        else{
+          await c.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:_pt.x,y:_pt.y});
+          await c.send('Input.dispatchMouseEvent',{type:'mousePressed',x:_pt.x,y:_pt.y,button:'left',clickCount:1});
+          await sleep(60);
+          await c.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:_pt.x,y:_pt.y,button:'left',clickCount:1});
+          _f1ok=true;
+        }
+      }
+    }catch(e){}
+    log('  运费模板-点击其他模板:', _f1ok?'done':'failed');
+    if(_f1ok){
+      await sleep(2000);  // 选中后等 2 秒渲染 select 下拉
       // 2) 滚动到运费模板字段 + 轮询等 select 渲染（React 懒加载，需滚动到才渲染）
       let _selReady=false;
       for(let _i=0;_i<12;_i++){
