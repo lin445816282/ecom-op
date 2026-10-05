@@ -35,6 +35,26 @@ async function conn(wsUrl){
 }
 async function ev(c,expr){const r=await c.send('Runtime.evaluate',{expression:expr,returnByValue:true});return r&&r.result?r.result.value:undefined;}
 
+// 真实鼠标点击（isTrusted:true + 移动轨迹）：某些按钮（如「下一步」）检测鼠标轨迹，
+// 直接瞬移到按钮中心点击会被识别为自动化。必须模拟「移到按钮外→移到按钮上(hover)→点击」的轨迹。
+// 窗口需可见（非最小化），否则事件被丢弃。
+async function cdpClickByText(c, text){
+  const pre=await ev(c,`(()=>{const b=[...document.querySelectorAll('button')].find(x=>(x.textContent||'').trim().replace(/\\s+/g,' ').includes(${JSON.stringify(text)}));if(!b)return 'no btn';b.scrollIntoView({block:'center'});return 'ok'})()`);
+  if(pre!=='ok')return pre;
+  await sleep(500);
+  const pos=await ev(c,`(()=>{const b=[...document.querySelectorAll('button')].find(x=>(x.textContent||'').trim().replace(/\\s+/g,' ').includes(${JSON.stringify(text)}));if(!b)return null;const r=b.getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}})()`);
+  if(!pos||!pos.x||!pos.y)return 'no pos';
+  // 模拟真实轨迹：先移到按钮外，再移到按钮上（触发 hover），停留后点击
+  await c.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:pos.x-60,y:pos.y});
+  await sleep(200);
+  await c.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:pos.x,y:pos.y});
+  await sleep(400);
+  await c.send('Input.dispatchMouseEvent',{type:'mousePressed',x:pos.x,y:pos.y,button:'left',clickCount:1});
+  await sleep(150);
+  await c.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:pos.x,y:pos.y,button:'left',clickCount:1});
+  return 'clicked';
+}
+
 async function getPage(pattern){
   const tabs=await get(`http://127.0.0.1:${PORT}/json`);
   const pages = tabs.filter(t=>t.type==='page');
@@ -185,8 +205,16 @@ async function fillByType(c, selector, text){
     const qimgF=await c.send('DOM.querySelector',{nodeId:docF.root.nodeId,selector:'input[type="file"]'});
     if(qimgF && qimgF.nodeId){
       await c.send('DOM.setFileInputFiles',{nodeId:qimgF.nodeId,files:cfg.images.slice(0,10)});
-      await sleep(8000);
-      log('  上传完成');
+      // 轮询等待图片真正上传完成（task_462 教训：9 张图上传+处理 > 8s，
+      // 固定 sleep 8s 后点「下一步」会因图片未就绪被静默拦截，无任何报错）
+      const _targetN = Math.min(cfg.images.length, 10);
+      let _upDone = false;
+      for(let _ui=0; _ui<30; _ui++){
+        await sleep(2000);
+        const _n = await ev(c, `(()=>{const m=(document.body.innerText||'').match(/上传图片\\s*\\((\\d+)\\s*\\//);return m?parseInt(m[1]):-1})()`);
+        if(_n >= _targetN){ _upDone = true; break; }
+      }
+      log('  上传完成' + (_upDone?'':'(未完全上传，继续)'));
     } else {
       log('  ⚠️ 未找到主图 file input');
     }
@@ -198,14 +226,22 @@ async function fillByType(c, selector, text){
     // 类目在点「下一步」后由系统 predictCate 按标题自动预测填入（详情页可「修改分类」），
     // 品牌也由旗舰店资质自动带出（详情页显示 OSHIYI/欧世艺），故跳过旧弹窗选类目/选品牌两步。
 
-    // ===== 旗舰店：下一步 =====
+    // ===== 旗舰店：下一步（点击 + 轮询重试，图片上传完成前点击会被静默拦截）=====
     log('  点「下一步」进入详情页');
-    const nextClick=await ev(c,`(()=>{const b=[...document.querySelectorAll('button')].find(x=>(x.textContent||'').trim().replace(/\\s+/g,' ').includes('下一步'));if(!b)return 'no btn';b.click();return 'ok'})()`);
-    log('  下一步:', nextClick);
-    await sleep(6000);
+    let _jumped=false;
+    for(let _ni=0; _ni<5 && !_jumped; _ni++){
+      const nextClick=await cdpClickByText(c,'下一步');
+      log('  下一步:', nextClick);
+      for(let _wi=0; _wi<3; _wi++){
+        await sleep(3000);
+        const _h=await ev(c,'location.href');
+        if(/goods_add\/index/.test(_h||'')){ _jumped=true; break; }
+      }
+      if(!_jumped && _ni<4) log('  未跳转，重试点击…');
+    }
     const hrefF=await ev(c,'location.href');
     log('  详情页:', hrefF ? hrefF.slice(0,100) : '(空)');
-    if(!hrefF || !/goods_add\/index/.test(hrefF)){ log('❌ 未跳转发布页，终止'); c.ws.close(); process.exit(1); }
+    if(!_jumped || !hrefF || !/goods_add\/index/.test(hrefF)){ log('❌ 未跳转发布页，终止'); c.ws.close(); process.exit(1); }
     // 验证详情页自动预测的类目是否匹配目标类目；不匹配则点「修改分类」重选
     const catCheck = await ev(c, `(()=>{
       const leaves=[...document.querySelectorAll('*')].filter(x=>x.children.length===0&&(x.textContent||'').trim()&&x.getBoundingClientRect().width>0);
