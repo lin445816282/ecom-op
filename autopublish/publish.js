@@ -484,18 +484,39 @@ async function fillByType(c, selector, text){
   log('[7.6/8] 选运费模板（多仓开头）');
   const _freightPrefix = (cfg.freightPrefix || '多仓').toString();
   try{
-    // 1) 滚动到「其他模板」radio 并轮询等渲染（服务与承诺区块在页面下方，React 懒加载，
-    //    scrollIntoView 后立即取坐标还是 0，需向下滚动+等待渲染），渲染后用真实鼠标点击
+    // 0) 点「展开修改」展开运费模板字段（默认折叠 .template-box display:none，
+    //    不展开 radio 一直 rect 0，task_443 教训）
+    const _e0 = await ev(c, `(()=>{
+      const el=[...document.querySelectorAll('*')].find(e=>e.children.length===0&&(e.textContent||'').trim()==='展开修改');
+      if(!el) return 'no_expand';
+      el.scrollIntoView({block:'center'});
+      const rc=el.getBoundingClientRect();
+      return JSON.stringify({x:Math.round(rc.x+rc.width/2), y:Math.round(rc.y+rc.height/2)});
+    })()`);
+    log('  运费模板-展开修改:', _e0);
+    if(_e0!=='no_expand'){
+      try{
+        const _ep=JSON.parse(_e0||'{}');
+        if(_ep.x&&_ep.y){
+          await c.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:_ep.x,y:_ep.y});
+          await c.send('Input.dispatchMouseEvent',{type:'mousePressed',x:_ep.x,y:_ep.y,button:'left',clickCount:1});
+          await sleep(60);
+          await c.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:_ep.x,y:_ep.y,button:'left',clickCount:1});
+        }
+      }catch(e){}
+      await sleep(2000);  // 等 .template-box 展开
+    }
+    // 1) 滚动到「其他模板」radio 并轮询等渲染（展开后 radio 才可见），渲染后用真实鼠标点击
     //    （task_441/443 教训：JS click 不触发 React radio 选中，且坐标 0 时点击无效）
     let _f1ok=false;
     for(let _ri=0;_ri<12;_ri++){
       const _f1 = await ev(c, `(()=>{
-        const radios=[...document.querySelectorAll('[data-testid="beast-core-radio"]')];
-        const other=radios.find(r=>(r.textContent||'').trim()==='其他模板');
-        if(!other) return JSON.stringify({err:'no_other'});
-        let rc=other.getBoundingClientRect();
-        if(rc.width>0&&rc.height>0){ other.scrollIntoView({block:'center'}); rc=other.getBoundingClientRect(); }
-        return JSON.stringify({x:Math.round(rc.x+rc.width/2), y:Math.round(rc.y+rc.height/2), w:Math.round(rc.width), h:Math.round(rc.height), checked:other.getAttribute('data-checked')});
+        const el=[...document.querySelectorAll('*')].find(e=>e.children.length===0&&(e.textContent||'').trim()==='其他模板'&&e.getBoundingClientRect().width>0);
+        if(!el) return JSON.stringify({err:'no_other'});
+        let rc=el.getBoundingClientRect();
+        if(rc.width>0&&rc.height>0){ el.scrollIntoView({block:'center'}); rc=el.getBoundingClientRect(); }
+        const _rb=el.closest('[data-testid="beast-core-radio"]');
+        return JSON.stringify({x:Math.round(rc.x+rc.width/2), y:Math.round(rc.y+rc.height/2), w:Math.round(rc.width), h:Math.round(rc.height), checked:_rb?_rb.getAttribute('data-checked'):'false'});
       })()`);
       let _pt={};
       try{ _pt=JSON.parse(_f1||'{}'); }catch(e){}
