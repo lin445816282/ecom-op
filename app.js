@@ -785,7 +785,22 @@ async function renderNewoffer() {
     const btn = $('#newoffer-publish');
     btn.disabled = true; btn.textContent = '创建任务中…';
     try {
-      const resp = await api('/api/newoffer/publish', 'POST', { ids, shop_ids });
+      let resp = await api('/api/newoffer/publish', 'POST', { ids, shop_ids });
+      // 重复提醒：同店同链接已上传过，弹框确认后才带 force 重提
+      if (resp && resp.duplicate) {
+        const dups = resp.duplicates || [];
+        const lines = dups.slice(0, 10).map(d => `• ${esc(d.title || '')}（任务#${d.id}，商品ID ${d.pdd_goods_id || '—'}）`).join('<br>');
+        const more = dups.length > 10 ? `<br>…还有 ${dups.length - 10} 条` : '';
+        const ok = await confirmDialog(
+          `以下 ${dups.length} 件商品已在本店上传过：<br>${lines}${more}<br><br>是否仍要全部重复上架？`,
+          { title: '⚠️ 重复上架提醒', confirmText: '全部继续', cancelText: '取消', danger: false }
+        );
+        if (!ok) {
+          btn.disabled = false; btn.textContent = '一键上架选中';
+          return;
+        }
+        resp = await api('/api/newoffer/publish', 'POST', { ids, shop_ids, force: true });
+      }
       toast(`已创建 ${resp.count} 个上架任务（${resp.skipped_published || 0} 个已上架跳过）`);
       await loadList();
     } catch(e) { toast('上架失败：' + e.message); }
@@ -1317,7 +1332,24 @@ async function renderAutopublish() {
     $('#ap-start-btn').disabled = true;
     $('#ap-start-btn').textContent = '提交中…';
     try {
-      const resp = await api('/api/autopublish', 'POST', { url, shop_id, pricing });
+      let resp = await api('/api/autopublish', 'POST', { url, shop_id, pricing });
+      // 重复提醒：同店同链接已上传过，弹框确认后才带 force 重提
+      if (resp && resp.duplicate) {
+        const dups = resp.duplicates || [];
+        const d = dups[0] || {};
+        const t = esc(d.ai_title || d.raw_title || '');
+        const cnt = dups.length > 1 ? `（历史已上传 ${dups.length} 次）` : '';
+        const ok = await confirmDialog(
+          `该商品已在本店上传过${cnt}：<br><b>${t}</b><br>最近一次任务 #${d.id}，商品ID ${d.pdd_goods_id || '—'}<br><br>是否仍要重复上架？`,
+          { title: '⚠️ 重复上架提醒', confirmText: '仍要上架', cancelText: '取消', danger: false }
+        );
+        if (!ok) {
+          $('#ap-start-btn').disabled = false;
+          $('#ap-start-btn').textContent = '开始上架';
+          return;
+        }
+        resp = await api('/api/autopublish', 'POST', { url, shop_id, pricing, force: true });
+      }
       if (resp && resp.task && resp.task.id) {
         $('#ap-url').value = '';
         startApPolling(resp.task.id);
@@ -1358,7 +1390,24 @@ async function renderAutopublish() {
     $('#ap-batch-btn').disabled = true;
     $('#ap-batch-btn').textContent = '创建中…';
     try {
-      const resp = await api('/api/autopublish/batch', 'POST', { text, shop_ids, pricing });
+      let resp = await api('/api/autopublish/batch', 'POST', { text, shop_ids, pricing });
+      // 重复提醒：同店同链接已上传过，弹框确认后才带 force 重提
+      if (resp && resp.duplicate) {
+        const dups = resp.duplicates || [];
+        const lines = dups.slice(0, 10).map(d => {
+          const t = esc(d.ai_title || d.raw_title || d.url || '');
+          return `• ${t}（任务#${d.id}，商品ID ${d.pdd_goods_id || '—'}）`;
+        }).join('<br>');
+        const more = dups.length > 10 ? `<br>…还有 ${dups.length - 10} 条` : '';
+        const ok = await confirmDialog(
+          `以下 ${dups.length} 条商品已在本店上传过：<br>${lines}${more}<br><br>是否仍要全部重复上架？`,
+          { title: '⚠️ 重复上架提醒', confirmText: '全部继续', cancelText: '取消', danger: false }
+        );
+        if (!ok) {
+          return;  // 取消，按钮由 finally 恢复
+        }
+        resp = await api('/api/autopublish/batch', 'POST', { text, shop_ids, pricing, force: true });
+      }
       if (resp && resp.ok) {
         $('#ap-batch-urls').value = '';
         toast(`已创建 ${resp.count} 个任务（${resp.urls} 链接 × ${resp.shops} 店铺），自动上架中…`);

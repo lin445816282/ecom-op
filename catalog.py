@@ -845,6 +845,23 @@ def remove_banned_word(word_id: int) -> bool:
         return True
 
 
+def find_duplicate_publishes(source_url: str, shop_id: int) -> list:
+    """查同一 1688 链接在同一店铺是否已上传过（status in published/submitted）。
+
+    用于一键上架/批量上架/新品专区上架前的重复提醒。仅同链接同店铺算重复，跨店不算。
+    返回命中的历史任务列表（可能多条：重复上传过多次）。
+    """
+    with closing(_conn()) as c:
+        rows = c.execute(
+            "SELECT id, status, pdd_goods_id, ai_title, raw_title, created_at "
+            "FROM autopublish_tasks "
+            "WHERE source_url=? AND shop_id=? AND status IN ('published','submitted') "
+            "ORDER BY id DESC",
+            (str(source_url or "").strip(), int(shop_id)),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def create_autopublish_task(source_url: str, shop_id: int = 5, operator_name: str = '',
                             price_mode: str = 'promo') -> dict:
     """新建一键上架任务，初始状态 queued。price_mode: promo 推广价 / normal 平卖价。"""

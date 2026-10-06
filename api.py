@@ -1454,6 +1454,13 @@ class Handler(BaseHTTPRequestHandler):
             pricing = item.get("pricing") or {}
             if not url:
                 return _json(self, {"error": "请填写 1688 商品链接"}, 400)
+            force = bool(item.get("force"))
+            # 重复提醒：同链接同店铺已上传过（published/submitted），非 force 先返回让前端弹框确认
+            if not force:
+                dups = catalog.find_duplicate_publishes(url, shop_id)
+                if dups:
+                    return _json(self, {"ok": True, "duplicate": True, "duplicates": dups,
+                                        "message": "该商品已在本店上传过"})
             operator = (self._current_user(qs) or {}).get("name") or ""
             task = catalog.create_autopublish_task(url, shop_id, operator, pricing.get("price_mode", "promo"))
             _enqueue_autopublish(task["id"], task["shop_id"], pricing)
@@ -1484,6 +1491,17 @@ class Handler(BaseHTTPRequestHandler):
                     urls.append(u)
             if not urls:
                 return _json(self, {"error": "未识别到有效的 1688 链接"}, 400)
+            force = bool(item.get("force"))
+            # 重复提醒：查所有 url×shop 组合，同链接同店铺已上传过则拦截提示（跨店不算重复）
+            if not force:
+                dups = []
+                for u in urls:
+                    for sid in shop_ids:
+                        for x in catalog.find_duplicate_publishes(u, sid):
+                            dups.append({"url": u, "shop_id": sid, **x})
+                if dups:
+                    return _json(self, {"ok": True, "duplicate": True, "duplicates": dups,
+                                        "dup_count": len(dups), "message": "部分商品已在本店上传过"})
             # 生成 url × shop 任务清单并逐个启动（并发控制靠 scrape/publish 锁，见 _SCRAPE_LOCK/_shop_lock）
             operator = (self._current_user(qs) or {}).get("name") or ""
             tasks = []
@@ -1654,12 +1672,29 @@ class Handler(BaseHTTPRequestHandler):
                 shop_ids = [5]
             if not ids:
                 return _json(self, {"error": "缺少 ids"}, 400)
+            force = bool(item.get("force"))
+            # 先收集有效商品（offer_url 即 source_url，供查重 + 后续建任务复用）
+            items_map = {}
+            for nid in ids:
+                it = catalog.get_newoffer_item(nid)
+                if it and it.get("offer_url"):
+                    items_map[nid] = it
+            # 重复提醒：同链接同店铺已上传过则拦截提示（跨店不算重复）
+            if not force:
+                dups = []
+                for nid, it in items_map.items():
+                    for sid in shop_ids:
+                        for x in catalog.find_duplicate_publishes(it["offer_url"], sid):
+                            dups.append({"item_id": nid, "title": it.get("title") or "", "shop_id": sid, **x})
+                if dups:
+                    return _json(self, {"ok": True, "duplicate": True, "duplicates": dups,
+                                        "dup_count": len(dups), "message": "部分商品已在本店上传过"})
             operator = (self._current_user(qs) or {}).get("name") or ""
             created = []
             skipped_published = 0
             for nid in ids:
-                it = catalog.get_newoffer_item(nid)
-                if not it or not it.get("offer_url"):
+                it = items_map.get(nid)
+                if not it:
                     continue
                 if it.get("status") == "published":
                     skipped_published += 1
