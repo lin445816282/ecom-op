@@ -483,6 +483,7 @@ CREATE TABLE IF NOT EXISTS error_knowledge (
 CREATE TABLE IF NOT EXISTS autopublish_tasks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source_url TEXT NOT NULL,
+    offer_id TEXT DEFAULT '',
     shop_id INTEGER DEFAULT 5,
     status TEXT DEFAULT 'queued',
     stage TEXT DEFAULT '',
@@ -847,19 +848,21 @@ def remove_banned_word(word_id: int) -> bool:
         return True
 
 
-def find_duplicate_publishes(source_url: str, shop_id: int) -> list:
-    """查同一 1688 链接在同一店铺是否已上传过（status in published/submitted）。
+def find_duplicate_publishes(source_url: str, shop_id: int, offer_id: str = '') -> list:
+    """查同一商品在同一店铺是否已上传过（status in published/submitted）。
 
-    用于一键上架/批量上架/新品专区上架前的重复提醒。仅同链接同店铺算重复，跨店不算。
-    返回命中的历史任务列表（可能多条：重复上传过多次）。
+    匹配键：source_url 精确匹配 OR offer_id 匹配（解决同商品不同短链/长链的漏判）。
+    仅同链接同店铺算重复，跨店不算。返回命中的历史任务列表（可能多条：重复上传过多次）。
     """
     with closing(_conn()) as c:
+        oid = str(offer_id or "").strip()
         rows = c.execute(
-            "SELECT id, status, pdd_goods_id, ai_title, raw_title, created_at "
+            "SELECT id, status, pdd_goods_id, ai_title, raw_title, created_at, offer_id "
             "FROM autopublish_tasks "
-            "WHERE source_url=? AND shop_id=? AND status IN ('published','submitted') "
+            "WHERE shop_id=? AND status IN ('published','submitted') "
+            "AND (source_url=? OR (? != '' AND offer_id=?)) "
             "ORDER BY id DESC",
-            (str(source_url or "").strip(), int(shop_id)),
+            (int(shop_id), str(source_url or "").strip(), oid, oid),
         ).fetchall()
         return [dict(r) for r in rows]
 
@@ -946,6 +949,7 @@ def update_autopublish_task(task_id: int, **fields) -> dict:
     allowed = {
         "status", "stage", "raw_title", "ai_title", "ai_desc", "price",
         "skus", "images", "pdd_goods_id", "error", "log", "supplier_id",
+        "offer_id",
     }
     sets, vals = [], []
     for k, v in fields.items():
@@ -1821,6 +1825,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # autopublish_tasks 表 supplier_id 列（关联 1688 货源店铺，suppliers.id）
     if "supplier_id" not in _apmcols:
         conn.execute("ALTER TABLE autopublish_tasks ADD COLUMN supplier_id INTEGER DEFAULT 0")
+    # autopublish_tasks 表 offer_id 列（1688 商品 ID，短链/长链归一化后查重用，解决同商品不同链接漏判）
+    if "offer_id" not in _apmcols:
+        conn.execute("ALTER TABLE autopublish_tasks ADD COLUMN offer_id TEXT DEFAULT ''")
     # suppliers 表 prefix 列（1688 店铺前缀，用于定位新品专区 newofferlist.htm）
     supcols = {r[1] for r in conn.execute("PRAGMA table_info(suppliers)").fetchall()}
     if "prefix" not in supcols:

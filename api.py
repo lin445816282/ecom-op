@@ -1457,7 +1457,8 @@ class Handler(BaseHTTPRequestHandler):
             force = bool(item.get("force"))
             # 重复提醒：同链接同店铺已上传过（published/submitted），非 force 先返回让前端弹框确认
             if not force:
-                dups = catalog.find_duplicate_publishes(url, shop_id)
+                oid = _resolve_1688_offer_id(url)
+                dups = catalog.find_duplicate_publishes(url, shop_id, oid)
                 if dups:
                     return _json(self, {"ok": True, "duplicate": True, "duplicates": dups,
                                         "message": "该商品已在本店上传过"})
@@ -1496,8 +1497,9 @@ class Handler(BaseHTTPRequestHandler):
             if not force:
                 dups = []
                 for u in urls:
+                    oid = _resolve_1688_offer_id(u)
                     for sid in shop_ids:
-                        for x in catalog.find_duplicate_publishes(u, sid):
+                        for x in catalog.find_duplicate_publishes(u, sid, oid):
                             dups.append({"url": u, "shop_id": sid, **x})
                 if dups:
                     return _json(self, {"ok": True, "duplicate": True, "duplicates": dups,
@@ -1683,8 +1685,9 @@ class Handler(BaseHTTPRequestHandler):
             if not force:
                 dups = []
                 for nid, it in items_map.items():
+                    oid = str(it.get("offer_id") or "").strip()
                     for sid in shop_ids:
-                        for x in catalog.find_duplicate_publishes(it["offer_url"], sid):
+                        for x in catalog.find_duplicate_publishes(it["offer_url"], sid, oid):
                             dups.append({"item_id": nid, "title": it.get("title") or "", "shop_id": sid, **x})
                 if dups:
                     return _json(self, {"ok": True, "duplicate": True, "duplicates": dups,
@@ -2597,6 +2600,38 @@ def _extract_1688_url(text: str) -> str:
     return ""
 
 
+def _resolve_1688_offer_id(url: str) -> str:
+    """从 1688 链接解析 offer_id（商品ID），解决同商品不同短链/长链的漏判。
+
+    长链 detail.1688.com/offer/xxx.html 直接正则提取；
+    短链 qr.1688.com/s/xxx 发 HTTP 请求，从响应体（含 offerId=xxx / offer/xxx.html）提取。
+    解析失败返回空串。
+    """
+    import re
+    import urllib.request
+    u = str(url or "").strip()
+    if not u:
+        return ""
+    # 长链直接提取
+    m = re.search(r'offer/(\d{10,})', u)
+    if m:
+        return m.group(1)
+    # 短链 HTTP 解析（响应体是 text/plain，含 m.1688.com/offer/xxx 或 offerId=xxx）
+    if 'qr.1688.com' in u:
+        try:
+            req = urllib.request.Request(u, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+            body = urllib.request.urlopen(req, timeout=8).read().decode('utf-8', errors='replace')
+            m = re.search(r'offerId(?:%3D|=)(\d{10,})', body)
+            if m:
+                return m.group(1)
+            m = re.search(r'offer(?:%2F|/)(\d{10,})', body)
+            if m:
+                return m.group(1)
+        except Exception:
+            pass
+    return ""
+
+
 # 批量上架并发控制：scrape 全局串行（1688 抓取实例端口 9238 共享），publish 按店铺串行（店铺 CDP 端口独立）
 _SCRAPE_LOCK = threading.Lock()
 _SHOP_LOCKS = {}
@@ -2944,6 +2979,7 @@ def _autopublish_bg(task_id: int, pricing: dict = None):
         task_id,
         raw_title=product.get("title", ""),
         images=product.get("images", []),
+        offer_id=(d.get("offerId") or "").strip(),
     )
     # 1688 货源店铺：抓到的店铺名+前缀 → 按名去重入库（重复店铺名只绑定不重复建）→ 关联任务
     _supplier_name = (product.get("supplierName") or "").strip() or (d.get("supplierName") or "").strip()
