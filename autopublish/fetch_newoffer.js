@@ -59,9 +59,21 @@ async function ev(c,expr){const r=await c.send('Runtime.evaluate',{expression:ex
       const m = gc.match(/^(\\d{4})-(\\d{1,2})-(\\d{1,2})/);
       const date = m ? (parseInt(m[2],10)+'月'+parseInt(m[3],10)+'日') : '';
       const month = m ? (parseInt(m[2],10)+'月') : '';
+      function normImg(u){ if(!u) return ''; u=String(u).trim(); if(u.indexOf('//')===0) u='https:'+u; return u; }
+      function pickImg(o){
+        var sk=['image','imgUrl','picUrl','mainImage','imageUrl','thumbnail','thumb','img'];
+        for(var i=0;i<sk.length;i++){ var v=o[sk[i]]; if(typeof v==='string'&&v) return normImg(v); }
+        var ak=['images','imageList','picList','imgList','thumbnails','pics'];
+        for(var j=0;j<ak.length;j++){ var a=o[ak[j]]; if(Array.isArray(a)&&a.length){ var f=a[0];
+          if(typeof f==='string') return normImg(f);
+          if(f&&typeof f==='object'){ var kk=['url','image','imgUrl','picUrl','src']; for(var k=0;k<kk.length;k++){ if(typeof f[kk]==='string'&&f[kk]) return normImg(f[kk]); } }
+        } }
+        return '';
+      }
       return {
         offer_id: String(o.id),
         title: o.subject || '',
+        image: pickImg(o),
         price: o.offerPrice || '',
         offer_url: 'https://detail.1688.com/offer/' + o.id + '.html',
         date: date,

@@ -712,32 +712,40 @@ async function renderNewoffer() {
     const stMap = { new: ['待上架', '#2563eb', '#eef2ff'], publishing: ['上架中', '#d97706', '#fef3c7'], published: ['已上架', '#16a34a', '#dcfce7'] };
     const totalPages = Math.max(1, Math.ceil(total / newofferPageSize));
     box.innerHTML = `
-      <table style="width:100%;border-collapse:collapse;font-size:13px">
-        <thead><tr style="text-align:left;color:#94a3b8;border-bottom:1px solid #eef1f6">
-          <th style="padding:8px;width:36px"><input type="checkbox" id="newoffer-checkall"></th>
-          <th style="padding:8px">商品</th>
-          <th style="padding:8px;width:90px">价格</th>
-          <th style="padding:8px;width:90px">上新日期</th>
-          <th style="padding:8px;width:80px">状态</th>
-        </tr></thead>
-        <tbody>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;gap:8px;flex-wrap:wrap">
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;color:#475569">
+          <input type="checkbox" id="newoffer-checkall"> 全选
+        </label>
+        <span style="font-size:12px;color:#94a3b8">共 ${total} 件</span>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px">
         ${items.map(it => {
           const st = stMap[it.status] || ['—', '#64748b', '#f1f5f9'];
-          return `<tr style="border-bottom:1px solid #f4f6fa">
-            <td style="padding:8px"><input type="checkbox" class="newoffer-check" value="${it.id}" ${it.status !== 'new' ? 'disabled' : ''}></td>
-            <td style="padding:8px">
-              <div style="font-weight:500">${esc(it.title)}</div>
-              <div style="color:#94a3b8;font-size:12px;margin-top:2px">${esc(it.supplier_name || '')} · ${esc(it.offer_id || '')}</div>
-            </td>
-            <td style="padding:8px;color:#dc2626;font-weight:600">¥${esc(it.price || '—')}</td>
-            <td style="padding:8px;color:#64748b">${esc(it.date || '—')}</td>
-            <td style="padding:8px"><span style="background:${st[2]};color:${st[1]};border-radius:6px;padding:2px 8px;font-size:12px">${st[0]}</span></td>
-          </tr>`;
+          const img = it.image || '';
+          const imgHtml = img
+            ? `<img src="${esc(img)}" loading="lazy" referrerpolicy="no-referrer" style="width:100%;height:100%;object-fit:cover" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><div style="display:none;width:100%;height:100%;align-items:center;justify-content:center;color:#cbd5e1;font-size:12px">无图</div>`
+            : `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:#cbd5e1;font-size:12px">无图</div>`;
+          return `
+          <div style="border:1px solid #eef1f6;border-radius:12px;overflow:hidden;background:#fff;display:flex;flex-direction:column">
+            <div class="newoffer-thumb" data-img="${esc(img)}" data-title="${esc(it.title)}" style="height:170px;background:#f8fafc;position:relative;overflow:hidden;${img ? 'cursor:zoom-in' : ''}">
+              ${imgHtml}
+              <span style="position:absolute;top:8px;left:8px;background:${st[2]};color:${st[1]};border-radius:6px;padding:2px 8px;font-size:11px;font-weight:600">${st[0]}</span>
+            </div>
+            <div style="padding:10px;display:flex;flex-direction:column;gap:6px;flex:1">
+              <div style="font-size:13px;font-weight:500;line-height:1.5;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:38px">${esc(it.title)}</div>
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-top:auto">
+                <span style="color:#dc2626;font-weight:700;font-size:14px">¥${esc(it.price || '—')}</span>
+                <label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer;color:#475569">
+                  <input type="checkbox" class="newoffer-check" value="${it.id}" ${it.status !== 'new' ? 'disabled' : ''}>选
+                </label>
+              </div>
+              <div style="color:#94a3b8;font-size:11px">${esc(it.supplier_name || '')} · ${esc(it.date || '—')}</div>
+            </div>
+          </div>`;
         }).join('')}
-        </tbody>
-      </table>
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;font-size:13px;color:#64748b">
-        <span>共 ${total} 件 · 第 ${newofferPage}/${totalPages} 页</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px;font-size:13px;color:#64748b;flex-wrap:wrap;gap:8px">
+        <span>第 ${newofferPage}/${totalPages} 页</span>
         <div style="display:flex;gap:8px">
           <button class="btn sm" id="newoffer-prev" ${newofferPage <= 1 ? 'disabled' : ''} style="${newofferPage <= 1 ? 'opacity:.5;cursor:not-allowed' : ''}">‹ 上一页</button>
           <button class="btn sm" id="newoffer-next" ${newofferPage >= totalPages ? 'disabled' : ''} style="${newofferPage >= totalPages ? 'opacity:.5;cursor:not-allowed' : ''}">下一页 ›</button>
@@ -746,6 +754,22 @@ async function renderNewoffer() {
     // 全选
     $('#newoffer-checkall').addEventListener('change', e => {
       $$('.newoffer-check:not([disabled])').forEach(c => c.checked = e.target.checked);
+    });
+    // 缩略图点击放大（lightbox）
+    $$('.newoffer-thumb').forEach(th => {
+      th.addEventListener('click', () => {
+        const src = th.getAttribute('data-img');
+        if (!src) return;
+        const title = th.getAttribute('data-title') || '';
+        const overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.82);z-index:1000;display:flex;align-items:center;justify-content:center;padding:24px;cursor:zoom-out';
+        overlay.innerHTML = `<div style="max-width:92vw;max-height:92vh;display:flex;flex-direction:column;align-items:center;gap:12px">
+          <img src="${esc(src)}" referrerpolicy="no-referrer" style="max-width:92vw;max-height:76vh;object-fit:contain;border-radius:8px;background:#fff">
+          ${title ? `<div style="color:#fff;font-size:13px;max-width:88vw;text-align:center;line-height:1.5">${esc(title)}</div>` : ''}
+        </div>`;
+        overlay.addEventListener('click', () => overlay.remove());
+        document.body.appendChild(overlay);
+      });
     });
     // 分页
     const prev = $('#newoffer-prev'), next = $('#newoffer-next');

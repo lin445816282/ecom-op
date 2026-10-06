@@ -509,6 +509,7 @@ CREATE TABLE IF NOT EXISTS newoffer_items (
     offer_id TEXT NOT NULL,
     offer_url TEXT DEFAULT '',
     title TEXT DEFAULT '',
+    image TEXT DEFAULT '',
     price TEXT DEFAULT '',
     date TEXT DEFAULT '',
     month TEXT DEFAULT '',
@@ -1827,6 +1828,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
     nocols = {r[1] for r in conn.execute("PRAGMA table_info(newoffer_items)").fetchall()}
     if "gmt_create" not in nocols:
         conn.execute("ALTER TABLE newoffer_items ADD COLUMN gmt_create TEXT DEFAULT ''")
+    # newoffer_items 表 image 列（商品主图 URL，列表缩略图 + 点击放大）
+    if "image" not in nocols:
+        conn.execute("ALTER TABLE newoffer_items ADD COLUMN image TEXT DEFAULT ''")
     # users 表 permissions 列（模块访问权限，JSON 数组，["*"]=全权限）
     ucols = {r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
     if "permissions" not in ucols:
@@ -4878,23 +4882,26 @@ def insert_newoffer_items(supplier_id, supplier_name, prefix, items) -> dict:
             if not offer_id:
                 continue
             title = it.get('title') or ''
+            image = it.get('image') or ''
             price = it.get('price') or ''
             date = it.get('date') or ''
             month = it.get('month') or ''
             gmt_create = it.get('gmtCreate') or ''
             offer_url = it.get('offer_url') or (f"https://detail.1688.com/offer/{offer_id}.html" if offer_id else '')
-            exist = c.execute("SELECT id, gmt_create FROM newoffer_items WHERE prefix=? AND offer_id=?", (prefix, offer_id)).fetchone()
+            exist = c.execute("SELECT id, gmt_create, image FROM newoffer_items WHERE prefix=? AND offer_id=?", (prefix, offer_id)).fetchone()
             if exist:
-                # 已存在：旧记录 gmt_create 为空时用新数据回填（供「最新在上」精确排序）
+                # 已存在：旧记录 gmt_create/image 为空时用新数据回填（供「最新在上」精确排序 + 主图缩略图）
                 if not (exist[1] or '') and gmt_create:
                     c.execute("UPDATE newoffer_items SET gmt_create=? WHERE id=?", (gmt_create, exist[0]))
+                if not (exist[2] or '') and image:
+                    c.execute("UPDATE newoffer_items SET image=? WHERE id=?", (image, exist[0]))
                 skipped += 1
                 continue
             c.execute(
                 """INSERT INTO newoffer_items
-                (supplier_id, supplier_name, prefix, offer_id, offer_url, title, price, date, month, gmt_create, status)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-                (supplier_id, supplier_name, prefix, offer_id, offer_url, title, price, date, month, gmt_create, 'new'))
+                (supplier_id, supplier_name, prefix, offer_id, offer_url, title, image, price, date, month, gmt_create, status)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (supplier_id, supplier_name, prefix, offer_id, offer_url, title, image, price, date, month, gmt_create, 'new'))
             inserted += 1
         c.commit()
     return {"inserted": inserted, "skipped": skipped}
