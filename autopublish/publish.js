@@ -228,17 +228,29 @@ async function fillByType(c, selector, text){
   if(isFlagship){
     // ===== 旗舰店：先填主图+标题 =====
     log('[2/8] 上传主图', cfg.images.length, '张');
-    const docF=await c.send('DOM.getDocument',{depth:3});
-    const qimgF=await c.send('DOM.querySelector',{nodeId:docF.root.nodeId,selector:'input[type="file"]'});
-    if(qimgF && qimgF.nodeId){
-      await c.send('DOM.setFileInputFiles',{nodeId:qimgF.nodeId,files:cfg.images.slice(0,10)});
-      // 固定等待图片上传（task_471 教训：不同店铺图片状态文字格式不同，
-      // 正则轮询「上传图片 (N/10)」只匹配部分店铺会 60s 空等；改固定等待 + 下一步重试兜底）
-      await sleep(12000);
-      log('  上传完成');
-    } else {
-      log('  ⚠️ 未找到主图 file input');
+    // task_484 教训：导航后页面 React 上传组件未就绪时 setFileInputFiles 会静默失败（imageBox 仍为 0），
+    // 导致 predictCate 无图片不触发推荐分类 → 点「下一步」被拦截。改为每轮重新获取 file input + 验证 imageBox 数量 + 重试。
+    let _imgUp=false;
+    for(let _ui=0; _ui<4 && !_imgUp; _ui++){
+      try{
+        const docF=await c.send('DOM.getDocument',{depth:3});
+        const qimgF=await c.send('DOM.querySelector',{nodeId:docF.root.nodeId,selector:'input[type="file"]'});
+        if(qimgF && qimgF.nodeId){
+          await c.send('DOM.setFileInputFiles',{nodeId:qimgF.nodeId,files:cfg.images.slice(0,10)});
+          await sleep(8000);
+          const _imgCnt=await ev(c, `(()=>{
+            return [...document.querySelectorAll('[class*="imageBox"]')].filter(e=>(e.getAttribute('style')||'').includes('background-image')).length;
+          })()`);
+          if(_imgCnt && _imgCnt>0){ _imgUp=true; log('  上传完成', _imgCnt, '张'); }
+          else if(_ui<3){ log('  ⚠️ 图片未生效(0张)，重试上传…'); }
+          else { log('  ❌ 图片上传失败(仍0张)'); }
+        } else {
+          log('  ⚠️ 未找到主图 file input，重试…');
+          await sleep(3000);
+        }
+      }catch(e){ log('  上传异常:', e.message); await sleep(3000); }
     }
+    if(!_imgUp){ log('  ⚠️ 图片上传未成功，继续尝试填标题（predictCate 可能受限）'); }
     log('[3/8] 填标题');
     await fillByType(c, 'input[placeholder*="商品标题组成"]', cfg.title);
     log('  已填标题:', cfg.title.slice(0,20));
