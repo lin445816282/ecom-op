@@ -325,45 +325,29 @@ async function fillByType(c, selector, text){
     })()`);
     if(_brandNeed){
       log('  品牌未选，点「查看可用品牌」');
-      const _b = await ev(c, `(()=>{
+      // JS click（实测真实鼠标点 SPAN 不弹窗，JS click 可靠弹出「店铺品牌资质明细」弹窗）
+      const _v = await ev(c, `(()=>{
         const e=[...document.querySelectorAll('*')].find(e=>e.children.length===0&&(e.textContent||'').trim()==='查看可用品牌');
-        if(!e) return null;
+        if(!e) return 'no btn';
         e.scrollIntoView({block:'center'});
-        const r=e.getBoundingClientRect();
-        return {x:Math.round(r.x+r.width/2), y:Math.round(r.y+r.height/2)};
+        e.click();
+        return 'clicked';
       })()`);
-      if(_b){
-        await c.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:_b.x-40,y:_b.y});
-        await sleep(150);
-        await c.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:_b.x,y:_b.y});
-        await sleep(300);
-        await c.send('Input.dispatchMouseEvent',{type:'mousePressed',x:_b.x,y:_b.y,button:'left',clickCount:1});
-        await sleep(80);
-        await c.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:_b.x,y:_b.y,button:'left',clickCount:1});
-        await sleep(2500);
-        // 弹「店铺品牌资质明细」弹窗，表格里点「品牌可用」选中品牌
-        const _pick = await ev(c, `(()=>{
-          const e=[...document.querySelectorAll('*')].find(e=>e.children.length===0&&(e.textContent||'').trim()==='品牌可用');
-          if(!e) return null;
-          e.scrollIntoView({block:'center'});
-          const r=e.getBoundingClientRect();
-          return {x:Math.round(r.x+r.width/2), y:Math.round(r.y+r.height/2)};
-        })()`);
-        if(_pick){
-          await c.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:_pick.x-40,y:_pick.y});
-          await sleep(150);
-          await c.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:_pick.x,y:_pick.y});
-          await sleep(300);
-          await c.send('Input.dispatchMouseEvent',{type:'mousePressed',x:_pick.x,y:_pick.y,button:'left',clickCount:1});
-          await sleep(80);
-          await c.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:_pick.x,y:_pick.y,button:'left',clickCount:1});
-          await sleep(2000);
-          log('  品牌已选');
-        } else {
-          log('  ⚠️ 未找到「品牌可用」（品牌弹窗未弹出或结构变化）');
-        }
+      log('  查看可用品牌:', _v);
+      await sleep(3000);
+      // 弹窗表格里点「品牌可用」叶子节点选中品牌（品牌状态列）
+      const _pick = await ev(c, `(()=>{
+        const e=[...document.querySelectorAll('*')].find(e=>e.children.length===0&&(e.textContent||'').trim()==='品牌可用');
+        if(!e) return 'no 品牌可用';
+        e.scrollIntoView({block:'center'});
+        e.click();
+        return 'clicked';
+      })()`);
+      if(_pick==='clicked'){
+        await sleep(2000);
+        log('  品牌已选');
       } else {
-        log('  ⚠️ 未找到「查看可用品牌」按钮');
+        log('  ⚠️ 品牌选择失败:', _pick);
       }
     }
 
