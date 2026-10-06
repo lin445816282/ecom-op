@@ -2924,6 +2924,11 @@ def _autopublish_bg(task_id: int, pricing: dict = None):
             _lpath = (_learned.get("category_path") or "").strip()
             if _lkw and _lpath:
                 catalog.add_category_map(_lkw, _lpath, _lkw, source="learned")
+                # 同时把搜索词 matched_kw 作为别名 keyword 固化（task_471 教训：只记最后一级类目名
+                # 「酒具套装」，下次标题里的「酒杯」搜不到。需同时记搜索词别名，让「酒杯」也能命中）
+                _mkw = (_learned.get("matched_kw") or "").strip()
+                if _mkw and _mkw != _lkw:
+                    catalog.add_category_map(_mkw, _lpath, _mkw, source="learned")
                 catalog.append_autopublish_log(task_id, "publish", "done",
                                                f"🧠 类目已自动学习固化：{_lkw} → {_lpath}")
     except Exception as _e:

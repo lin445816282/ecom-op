@@ -237,6 +237,39 @@ async function fillByType(c, selector, text){
     // 类目在点「下一步」后由系统 predictCate 按标题自动预测填入（详情页可「修改分类」），
     // 品牌也由旗舰店资质自动带出（详情页显示 OSHIYI/欧世艺），故跳过旧弹窗选类目/选品牌两步。
 
+    // ===== 旗舰店：检测商品分类是否为空（predictCate 未预测出类目）=====
+    // task_471 教训：predictCate 按标题预测，标题无类目词（如「酒杯/酒盅」）时预测不出，
+    // 「商品分类」为空 → 「下一步」被前置校验拦截。需点「选择分类」手动选。
+    const _catEmpty = await ev(c, `(()=>{
+      const t=(document.body.innerText||'').replace(/\\s+/g,' ');
+      return t.includes('暂无推荐的分类') || t.includes('点击手动选择分类');
+    })()`);
+    if(_catEmpty){
+      log('  商品分类未预测，手动选择');
+      const _selBtn = await ev(c, `(()=>{
+        const b=[...document.querySelectorAll('*')].find(e=>e.children.length===0&&(e.textContent||'').trim()==='选择分类');
+        if(!b) return null;
+        b.scrollIntoView({block:'center'});
+        const r=b.getBoundingClientRect();
+        return {x:Math.round(r.x+r.width/2), y:Math.round(r.y+r.height/2)};
+      })()`);
+      if(_selBtn){
+        await c.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:_selBtn.x-40,y:_selBtn.y});
+        await sleep(150);
+        await c.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:_selBtn.x,y:_selBtn.y});
+        await sleep(300);
+        await c.send('Input.dispatchMouseEvent',{type:'mousePressed',x:_selBtn.x,y:_selBtn.y,button:'left',clickCount:1});
+        await sleep(100);
+        await c.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:_selBtn.x,y:_selBtn.y,button:'left',clickCount:1});
+        await sleep(2500);
+        const _sel = await searchAndSelectCategory();
+        log('  手动选类目:', _sel);
+        await sleep(1500);
+      } else {
+        log('  ⚠️ 未找到「选择分类」按钮');
+      }
+    }
+
     // ===== 旗舰店：下一步（点击 + 轮询重试，图片上传完成前点击会被静默拦截）=====
     log('  点「下一步」进入详情页');
     let _jumped=false;
