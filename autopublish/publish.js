@@ -670,10 +670,49 @@ async function fillByType(c, selector, text){
       }catch(e){}
       await sleep(2000);  // 等 .template-box 展开
     }
-    // 1) 直接找运费模板 beast-core select（实测闲时来/嘉裕 2026-09：字段是 select「请选择运费模板」，
-    //    无「推荐默认模板/其他模板」radio。旧逻辑找 radio 永远 failed → 漏选模板、漏填物流重量）
-    {
-      await sleep(2000);  // 展开修改后等字段渲染出 select
+    // 1) 滚动到「其他模板」radio 并轮询等渲染（展开后 radio 才可见），渲染后用真实鼠标点击
+    //    （task_441/443 教训：JS click 不触发 React radio 选中，且坐标 0 时点击无效）
+    //    注：新建页(type=add)展开后有「推荐默认/其他模板」radio；编辑页(type=edit)是 select。
+    //    之前误判编辑页无 radio 删掉了此逻辑，导致新建时漏选「其他模板」→ select 不渲染 → 多仓/重量全失效。
+    let _f1ok=false;
+    for(let _ri=0;_ri<12;_ri++){
+      const _f1 = await ev(c, `(()=>{
+        const el=[...document.querySelectorAll('*')].find(e=>e.children.length===0&&(e.textContent||'').trim()==='其他模板'&&e.getBoundingClientRect().width>0);
+        if(!el) return JSON.stringify({err:'no_other'});
+        let rc=el.getBoundingClientRect();
+        if(rc.width>0&&rc.height>0){ el.scrollIntoView({block:'center'}); rc=el.getBoundingClientRect(); }
+        const _rb=el.closest('[data-testid="beast-core-radio"]');
+        return JSON.stringify({x:Math.round(rc.x+rc.width/2), y:Math.round(rc.y+rc.height/2), w:Math.round(rc.width), h:Math.round(rc.height), checked:_rb?_rb.getAttribute('data-checked'):'false'});
+      })()`);
+      let _pt={};
+      try{ _pt=JSON.parse(_f1||'{}'); }catch(e){}
+      if(_pt.err==='no_other'){
+        // 「展开修改」后展开慢，继续向下滚动 + 等待重试（task_467 教训：不要立即 break，否则运费模板漏改）
+        await ev(c, `window.scrollBy(0,300)`);
+        await sleep(1000);
+        continue;
+      }
+      if(_pt.x&&_pt.y&&_pt.w>0&&_pt.h>0){
+        if(_pt.checked==='true'){ _f1ok=true; }  // 已选中，直接走后续
+        else{
+          await c.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:_pt.x-40,y:_pt.y});
+          await sleep(150);
+          await c.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:_pt.x,y:_pt.y});
+          await sleep(300);
+          await c.send('Input.dispatchMouseEvent',{type:'mousePressed',x:_pt.x,y:_pt.y,button:'left',clickCount:1});
+          await sleep(80);
+          await c.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:_pt.x,y:_pt.y,button:'left',clickCount:1});
+          _f1ok=true;
+        }
+        break;
+      }
+      // 坐标还是 0（未渲染）：向下滚动触发懒加载后重试
+      await ev(c, `window.scrollBy(0,300)`);
+      await sleep(1000);
+    }
+    log('  运费模板-点击其他模板:', _f1ok?'done':'failed');
+    if(_f1ok){
+      await sleep(2000);  // 选中后等 2 秒渲染 select 下拉
       // 2) 滚动到运费模板字段 + 轮询等 select 渲染（React 懒加载，需滚动到才渲染）
       let _selReady=false;
       for(let _i=0;_i<12;_i++){
@@ -692,18 +731,22 @@ async function fillByType(c, selector, text){
       if(!_selReady){
         log('  ⚠️ 运费模板 select 未渲染，保持默认（店铺默认运费模板）');
       } else {
-        // 3) 展开 select 下拉（实测 2026-09：beast-core select 用 JS click 能展开，
-        //    真实鼠标点 header 反而无反应——headData 保持 normal）
-        const _expanded = await ev(c, `(()=>{
+        // 3) 真实鼠标点击 select 展开下拉（比 JS click 更可靠，React select 需真实事件）
+        const _coord=await ev(c, `(()=>{
           const sel=document.querySelector('[id="service.cost_template_id"] [data-testid="beast-core-select"]');
-          if(!sel) return 'no_sel';
           const head=sel.querySelector('[data-testid="beast-core-select-header"]')||sel;
           head.scrollIntoView({block:'center'});
-          head.focus();
-          head.click();
-          return 'clicked';
+          const rc=head.getBoundingClientRect();
+          return JSON.stringify({x:Math.round(rc.x+rc.width/2),y:Math.round(rc.y+rc.height/2)});
         })()`);
-        log('  运费模板-select 展开:', _expanded);
+        try{
+          const _pt=JSON.parse(_coord||'{}');
+          if(_pt.x&&_pt.y){
+            await c.send('Input.dispatchMouseEvent',{type:'mousePressed',x:_pt.x,y:_pt.y,button:'left',clickCount:1});
+            await sleep(80);
+            await c.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:_pt.x,y:_pt.y,button:'left',clickCount:1});
+          }
+        }catch(e){}
         await sleep(2500);
         // 3.5) 检测下拉内容（「无结果」= options 空，店铺无模板或数据未加载）
         const _dd = await ev(c, `(()=>{
