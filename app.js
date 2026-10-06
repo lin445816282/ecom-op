@@ -14,6 +14,7 @@ const VIEWS = {
   catalog: {title:'商品库', sub:'平台 + 电商层级真实商品数据（平台 → 店铺 → 商品 → SKU）。'},
   titleopt: {title:'标题优化', sub:'挑选无订单商品优化标题，跟踪近7天访问效果。'},
   suppliers: {title:'供应商', sub:'采购侧报价 · 供货价 / 零售价 / 商品图片，支持搜索与导入导出。'},
+  newoffer: {title:'新品专区', sub:'1688 供应商新品专区定时采集 · 按 offer 去重 · 一键上架。'},
   knowledge: {title:'运营知识库', sub:'只保留合规、可持续的起店与推广方法论。'},
   calendar: {title:'选品日历', sub:'按月提前布局应季商品，建议提前 2-4 周预热。'},
   keywords: {title:'关键词库', sub:'储备核心词、属性词、场景词、规格词，用于标题优化与选品拓词。'},
@@ -45,6 +46,7 @@ const PERM_MODULES = [
   { key:'competitors', name:'竞品监控', icon:'🔍' },
   { key:'titleopt', name:'标题优化', icon:'✏️' },
   { key:'suppliers', name:'供应商', icon:'🏭' },
+  { key:'newoffer', name:'新品专区', icon:'🆕' },
   { key:'keywords', name:'关键词库', icon:'⌘' },
   { key:'tasks', name:'SOP任务', icon:'✔' },
   { key:'scheduler', name:'任务调度', icon:'⏰' },
@@ -609,6 +611,7 @@ function setView(view) {
   if (view === 'catalog') renderCatalog();
   if (view === 'titleopt') renderTitleOptView();
   if (view === 'suppliers') renderSuppliersView();
+  if (view === 'newoffer') renderNewoffer();
   if (view === 'knowledge') renderKnowledge();
   if (view === 'calendar') renderCalendar();
   if (view === 'keywords') renderKeywords();
@@ -628,6 +631,135 @@ function setView(view) {
   if (view === 'publishedgoods') renderPublishedGoods();
   if (view === 'aiboss') renderAiBoss();
   if (view === 'useradmin') renderUserAdmin();
+}
+
+// 新品专区：供应商新品定时采集 + 按 offer 去重 + 一键上架
+async function renderNewoffer() {
+  const el = $('#view-newoffer');
+  el.innerHTML = '<div style="padding:24px;color:#666">加载中…</div>';
+  let suppliers = [];
+  let shops = [];
+  try { suppliers = (await api('/api/catalog/suppliers')).items || []; } catch(e) { suppliers = []; }
+  try { shops = (await api('/api/catalog/shops')).items || []; } catch(e) { shops = []; }
+  const withPrefix = suppliers.filter(s => (s.prefix || '').trim());
+
+  const selStyle = 'padding:8px 10px;border:1px solid #dbe2ec;border-radius:8px;font-size:13px;background:#fff;min-width:180px';
+
+  el.innerHTML = `
+    <div class="panel" style="margin-bottom:16px">
+      <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end">
+        <div>
+          <div style="font-size:12px;color:#64748b;margin-bottom:6px">供应商（含 1688 店铺前缀）</div>
+          <select id="newoffer-supplier" style="${selStyle}">
+            <option value="">请选择供应商</option>
+            ${withPrefix.map(s => `<option value="${s.id}">${esc(s.name)}（${esc(s.prefix)}）</option>`).join('')}
+          </select>
+        </div>
+        <button class="btn btn-primary" id="newoffer-collect" style="padding:9px 18px">🔄 采集新品</button>
+        <div style="flex:1"></div>
+        <div style="font-size:12px;color:#94a3b8;max-width:360px">采集结果按 offer 去重入库，新商品标记「待上架」，可勾选一键上架到拼多多。</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px">
+        <div style="display:flex;gap:8px;align-items:center">
+          <strong style="font-size:15px">新品商品</strong>
+          <select id="newoffer-status" style="padding:6px 10px;border:1px solid #dbe2ec;border-radius:8px;font-size:13px">
+            <option value="">全部状态</option>
+            <option value="new">待上架</option>
+            <option value="publishing">上架中</option>
+            <option value="published">已上架</option>
+          </select>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <span style="font-size:12px;color:#64748b">上架到店铺：</span>
+          <div id="newoffer-shops" style="display:flex;gap:8px;flex-wrap:wrap"></div>
+          <button class="btn btn-primary" id="newoffer-publish" style="padding:8px 16px">一键上架选中</button>
+        </div>
+      </div>
+      <div id="newoffer-list" style="color:#94a3b8">加载中…</div>
+    </div>
+  `;
+
+  // 店铺多选 checkbox
+  const shopBox = $('#newoffer-shops');
+  shopBox.innerHTML = shops.map(s => `<label style="display:flex;align-items:center;gap:4px;font-size:13px;cursor:pointer"><input type="checkbox" class="newoffer-shop" value="${s.id}">${esc(s.name)}</label>`).join('');
+
+  // 列表渲染
+  async function loadList() {
+    const status = $('#newoffer-status').value;
+    const box = $('#newoffer-list');
+    box.innerHTML = '加载中…';
+    let items = [];
+    try { items = (await api('/api/newoffer/list' + (status ? `?status=${status}` : ''))).items || []; } catch(e) { items = []; }
+    if (!items.length) { box.innerHTML = '<div style="padding:24px;text-align:center;color:#94a3b8">暂无商品，先选择供应商采集</div>'; return; }
+    const stMap = { new: ['待上架', '#2563eb', '#eef2ff'], publishing: ['上架中', '#d97706', '#fef3c7'], published: ['已上架', '#16a34a', '#dcfce7'] };
+    box.innerHTML = `
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead><tr style="text-align:left;color:#94a3b8;border-bottom:1px solid #eef1f6">
+          <th style="padding:8px;width:36px"><input type="checkbox" id="newoffer-checkall"></th>
+          <th style="padding:8px">商品</th>
+          <th style="padding:8px;width:90px">价格</th>
+          <th style="padding:8px;width:90px">上新日期</th>
+          <th style="padding:8px;width:80px">状态</th>
+        </tr></thead>
+        <tbody>
+        ${items.map(it => {
+          const st = stMap[it.status] || ['—', '#64748b', '#f1f5f9'];
+          return `<tr style="border-bottom:1px solid #f4f6fa">
+            <td style="padding:8px"><input type="checkbox" class="newoffer-check" value="${it.id}" ${it.status !== 'new' ? 'disabled' : ''}></td>
+            <td style="padding:8px">
+              <div style="font-weight:500">${esc(it.title)}</div>
+              <div style="color:#94a3b8;font-size:12px;margin-top:2px">${esc(it.supplier_name || '')} · ${esc(it.offer_id || '')}</div>
+            </td>
+            <td style="padding:8px;color:#dc2626;font-weight:600">¥${esc(it.price || '—')}</td>
+            <td style="padding:8px;color:#64748b">${esc(it.date || '—')}</td>
+            <td style="padding:8px"><span style="background:${st[2]};color:${st[1]};border-radius:6px;padding:2px 8px;font-size:12px">${st[0]}</span></td>
+          </tr>`;
+        }).join('')}
+        </tbody>
+      </table>`;
+    // 全选
+    $('#newoffer-checkall').addEventListener('change', e => {
+      $$('.newoffer-check:not([disabled])').forEach(c => c.checked = e.target.checked);
+    });
+  }
+
+  // 采集
+  $('#newoffer-collect').addEventListener('click', async () => {
+    const sid = $('#newoffer-supplier').value;
+    if (!sid) { toast('请先选择供应商'); return; }
+    const btn = $('#newoffer-collect');
+    btn.disabled = true; btn.textContent = '采集中…';
+    try {
+      const resp = await api('/api/supplier/fetchNew', 'POST', { supplier_id: parseInt(sid) });
+      toast(`采集完成：新增 ${resp.inserted} 条，跳过重复 ${resp.skipped} 条`);
+      await loadList();
+    } catch(e) { toast('采集失败：' + e.message); }
+    btn.disabled = false; btn.textContent = '🔄 采集新品';
+  });
+
+  // 状态筛选
+  $('#newoffer-status').addEventListener('change', loadList);
+
+  // 一键上架
+  $('#newoffer-publish').addEventListener('click', async () => {
+    const ids = $$('.newoffer-check:checked').map(c => parseInt(c.value));
+    const shop_ids = $$('.newoffer-shop:checked').map(c => parseInt(c.value));
+    if (!ids.length) { toast('请先勾选要上架的商品'); return; }
+    if (!shop_ids.length) { toast('请至少选择一个店铺'); return; }
+    const btn = $('#newoffer-publish');
+    btn.disabled = true; btn.textContent = '创建任务中…';
+    try {
+      const resp = await api('/api/newoffer/publish', 'POST', { ids, shop_ids });
+      toast(`已创建 ${resp.count} 个上架任务（${resp.skipped_published || 0} 个已上架跳过）`);
+      await loadList();
+    } catch(e) { toast('上架失败：' + e.message); }
+    btn.disabled = false; btn.textContent = '一键上架选中';
+  });
+
+  await loadList();
 }
 
 // 错误处理：错误知识库（错误类型 → 处理技能 + 出现次数，遇到一次点一次）

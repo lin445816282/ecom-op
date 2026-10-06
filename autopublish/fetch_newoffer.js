@@ -1,6 +1,6 @@
-// 1688 店铺新品专区采集：抓 newofferlist.htm 的 bodyText（商品标题+价格+日期）
-// 用法：node fetch_newoffer.js <prefix> <输出目录> [CDP端口]
-// stdout 最后一行打印 JSON：{prefix, title, url, text}
+// 1688 店铺新品专区采集：从 pageData 提取商品 offer 数据（id+标题+价格+日期+详情URL）
+// 用法：node fetch_newoffer.js <prefix> [输出目录] [CDP端口]
+// stdout 最后一行打印 JSON：{prefix, title, url, items:[{offer_id,title,price,offer_url,date,month,gmtCreate}]}
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -32,15 +32,52 @@ async function ev(c,expr){const r=await c.send('Runtime.evaluate',{expression:ex
   await c.send('Page.navigate',{url:URL});
   let final='';
   for(let i=0;i<20;i++){await sleep(1000);final=await ev(c,'location.href');if(/newofferlist/.test(final||''))break;}
-  await sleep(2000);
+  await sleep(2500);
   // 滚动触发懒加载
   for(let i=0;i<4;i++){ await ev(c,'window.scrollTo(0,document.body.scrollHeight)'); await sleep(1500); }
   await sleep(1500);
   const title = await ev(c,'document.title');
-  const text = await ev(c,'document.body.innerText');
-  const result = {prefix:PREFIX, title:title||'', url:final||URL, text:(text||'').slice(0,20000)};
+  // 从 pageData 提取商品列表（offer 对象含 id(13位)+subject 字段）
+  const itemsRaw = await ev(c, `(()=>{
+    const pd = window.pageData;
+    const found = [];
+    function walk(o, depth){
+      if(!o || depth>8 || found.length>=200) return;
+      if(typeof o==='object'){
+        if(o.id && /^\\d{12,}$/.test(String(o.id)) && o.subject){
+          found.push(o);
+        }
+        for(const k in o){ try{ walk(o[k], depth+1); }catch(e){} }
+      }
+    }
+    walk(pd, 0);
+    // 按 id 去重（保序）
+    const seen=new Set(); const uniq=[];
+    for(const o of found){ if(!seen.has(o.id)){ seen.add(o.id); uniq.push(o); } }
+    return JSON.stringify(uniq.map(o=>{
+      const gc = String(o.gmtCreate || '');
+      const m = gc.match(/^(\\d{4})-(\\d{1,2})-(\\d{1,2})/);
+      const date = m ? (parseInt(m[2],10)+'月'+parseInt(m[3],10)+'日') : '';
+      const month = m ? (parseInt(m[2],10)+'月') : '';
+      return {
+        offer_id: String(o.id),
+        title: o.subject || '',
+        price: o.offerPrice || '',
+        offer_url: 'https://detail.1688.com/offer/' + o.id + '.html',
+        date: date,
+        month: month,
+        gmtCreate: gc
+      };
+    }));
+  })()`);
+  let items = [];
+  try{ items = JSON.parse(itemsRaw || '[]'); }catch(e){ items = []; }
+  const result = {prefix:PREFIX, title:title||'', url:final||URL, items:items};
   // 写文件供人工查看
-  try{ fs.writeFileSync(path.join(OUTDIR,`newoffer_${PREFIX}.txt`), result.text, 'utf8'); }catch(e){}
+  try{
+    const txt = items.map(it=>`${it.date||''}\t${it.title}\t¥${it.price}\t${it.offer_url}`).join('\n');
+    fs.writeFileSync(path.join(OUTDIR,`newoffer_${PREFIX}.txt`), txt, 'utf8');
+  }catch(e){}
   console.log(JSON.stringify(result));
   c.ws.close();
   process.exit(0);

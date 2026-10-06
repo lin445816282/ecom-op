@@ -1616,8 +1616,52 @@ class Handler(BaseHTTPRequestHandler):
             res = _run_node_script("fetch_newoffer.js", [prefix, outdir_win, str(CLIENT_1688_PORT)], timeout=120)
             if not res.get("data"):
                 return _json(self, {"error": res.get("error") or res.get("stderr") or "采集失败"}, 500)
-            items = _parse_newoffer_text(res["data"].get("text") or "")
-            return _json(self, {"ok": True, "supplier": sup, "items": items, "count": len(items)})
+            items = res["data"].get("items") or []
+            # 存表去重（按 prefix+offer_id）
+            save = catalog.insert_newoffer_items(supplier_id, sup.get("name") or "", prefix, items)
+            return _json(self, {"ok": True, "supplier": sup, "items": items, "count": len(items),
+                                "inserted": save.get("inserted", 0), "skipped": save.get("skipped", 0)})
+
+        if path == "/api/newoffer/list" and self.command == "GET":
+            supplier_id = int(qs.get("supplier_id", ["0"])[0] or 0)
+            status = (qs.get("status", [""])[0] or "").strip() or None
+            items = catalog.list_newoffer_items(supplier_id or None, status)
+            return _json(self, {"items": items, "count": len(items)})
+
+        if path == "/api/newoffer/publish" and self.command == "POST":
+            # 选中新品商品 → 一键上架（创建 autopublish 任务）
+            item = self._read_body()
+            ids = item.get("ids") or []
+            if isinstance(ids, (int, str)):
+                ids = [int(ids)]
+            else:
+                ids = [int(x) for x in ids if str(x).isdigit()]
+            shop_ids = item.get("shop_ids") or []
+            if isinstance(shop_ids, (int, str)):
+                shop_ids = [int(shop_ids)]
+            else:
+                shop_ids = [int(s) for s in shop_ids if str(s).isdigit()]
+            if not shop_ids:
+                shop_ids = [5]
+            if not ids:
+                return _json(self, {"error": "缺少 ids"}, 400)
+            operator = (self._current_user(qs) or {}).get("name") or ""
+            created = []
+            skipped_published = 0
+            for nid in ids:
+                it = catalog.get_newoffer_item(nid)
+                if not it or not it.get("offer_url"):
+                    continue
+                if it.get("status") == "published":
+                    skipped_published += 1
+                    continue
+                for sid in shop_ids:
+                    t = catalog.create_autopublish_task(it["offer_url"], sid, operator, "promo")
+                    _enqueue_autopublish(t["id"], t["shop_id"], None)
+                    created.append(t["id"])
+                catalog.set_newoffer_status(it["id"], "publishing")
+            return _json(self, {"ok": True, "tasks": created, "count": len(created),
+                                "skipped_published": skipped_published})
 
         if path == "/api/autopublish" and self.command == "GET":
             # 历史任务分页 + 搜索筛选（page/page_size/keyword/status/shop_id）

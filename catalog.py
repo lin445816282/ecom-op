@@ -501,6 +501,25 @@ CREATE TABLE IF NOT EXISTS autopublish_tasks (
 );
 CREATE INDEX IF NOT EXISTS idx_autopublish_status ON autopublish_tasks(status);
 
+CREATE TABLE IF NOT EXISTS newoffer_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    supplier_id INTEGER NOT NULL,
+    supplier_name TEXT DEFAULT '',
+    prefix TEXT DEFAULT '',
+    offer_id TEXT NOT NULL,
+    offer_url TEXT DEFAULT '',
+    title TEXT DEFAULT '',
+    price TEXT DEFAULT '',
+    date TEXT DEFAULT '',
+    month TEXT DEFAULT '',
+    status TEXT DEFAULT 'new',
+    publish_task_id INTEGER,
+    first_seen_at TEXT DEFAULT (datetime('now','localtime')),
+    published_at TEXT DEFAULT '',
+    UNIQUE(prefix, offer_id)
+);
+CREATE INDEX IF NOT EXISTS idx_newoffer_status ON newoffer_items(status);
+
 CREATE TABLE IF NOT EXISTS published_goods (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id INTEGER,
@@ -4825,6 +4844,71 @@ def list_supplier_products(supplier_id=None, q='', limit=5000):
         args.append(limit)
         rows = c.execute(sql, args).fetchall()
         return [dict(r) for r in rows]
+
+
+def insert_newoffer_items(supplier_id, supplier_name, prefix, items) -> dict:
+    """批量插入新品专区采集结果（按 prefix+offer_id 去重）。返回 {inserted, skipped}。"""
+    inserted = 0
+    skipped = 0
+    with closing(_conn()) as c:
+        for it in items:
+            offer_id = str(it.get('offer_id') or '').strip()
+            if not offer_id:
+                continue
+            title = it.get('title') or ''
+            price = it.get('price') or ''
+            date = it.get('date') or ''
+            month = it.get('month') or ''
+            offer_url = it.get('offer_url') or (f"https://detail.1688.com/offer/{offer_id}.html" if offer_id else '')
+            exist = c.execute("SELECT id FROM newoffer_items WHERE prefix=? AND offer_id=?", (prefix, offer_id)).fetchone()
+            if exist:
+                skipped += 1
+                continue
+            c.execute(
+                """INSERT INTO newoffer_items
+                (supplier_id, supplier_name, prefix, offer_id, offer_url, title, price, date, month, status)
+                VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (supplier_id, supplier_name, prefix, offer_id, offer_url, title, price, date, month, 'new'))
+            inserted += 1
+        c.commit()
+    return {"inserted": inserted, "skipped": skipped}
+
+
+def list_newoffer_items(supplier_id=None, status=None, limit=500) -> list:
+    """新品专区商品列表。"""
+    with closing(_conn()) as c:
+        sql = "SELECT * FROM newoffer_items"
+        where = []
+        args = []
+        if supplier_id:
+            where.append("supplier_id=?")
+            args.append(supplier_id)
+        if status:
+            where.append("status=?")
+            args.append(status)
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY first_seen_at DESC, id DESC LIMIT ?"
+        args.append(limit)
+        rows = c.execute(sql, args).fetchall()
+        return [dict(r) for r in rows]
+
+
+def set_newoffer_status(item_id, status, publish_task_id=None) -> None:
+    """更新新品商品状态。"""
+    with closing(_conn()) as c:
+        if publish_task_id is not None:
+            c.execute("UPDATE newoffer_items SET status=?, publish_task_id=?, published_at=datetime('now','localtime') WHERE id=?", (status, publish_task_id, item_id))
+        else:
+            c.execute("UPDATE newoffer_items SET status=? WHERE id=?", (status, item_id))
+        c.commit()
+
+
+def get_newoffer_item(item_id) -> dict:
+    """按 id 查新品商品，找不到返回 None。"""
+    with closing(_conn()) as c:
+        row = c.execute("SELECT * FROM newoffer_items WHERE id=?", (item_id,)).fetchone()
+        return dict(row) if row else None
 
 
 # ----------------------------- 任务调度中心 -----------------------------
