@@ -4980,6 +4980,7 @@ _SEED_TASKS = [
     ("title_opt_shop6", "标题优化批量·欧世艺", "商品", 6, "20 9 * * *", "每天 09:20", "fa056bcee006", "pdd_title_batch.py --shop 6", 1),
     ("title_opt_shop3", "标题优化批量·如若月下", "商品", 3, "30 9 * * *", "每天 09:30", "3d797b863695", "pdd_title_batch.py --shop 3", 1),
     ("title_review", "标题优化复盘", "商品", None, "0 8 * * 1", "每周一 08:00", "4d6d161d6fe3", "pdd_title_review.py --apply", 1),
+    ("newoffer_collect", "新品专区定时采集", "商品", None, "0 8 * * *", "每天 08:00", "", "newoffer 定时采集（后端调度器）", 0),
     # AI老板
     ("aiboss_daily", "AI老板每日工作流·中午班", "AI老板", 5, "0 12 * * *", "每天 12:00", "1efd70d41ac5", "ai_boss_daily.py", 1),
     ("aiboss_daily_eve", "AI老板每日工作流·晚班", "AI老板", 5, "30 19 * * *", "每天 19:30", "83f2cdcb6532", "ai_boss_daily.py", 1),
@@ -4997,10 +4998,17 @@ def seed_scheduled_tasks() -> int:
             task_key, name, cat, shop_id, cron, desc, job_id, script, enabled = t
             cur = c.execute("SELECT id FROM scheduled_tasks WHERE task_key=?", (task_key,)).fetchone()
             if cur:
-                c.execute(
-                    "UPDATE scheduled_tasks SET name=?, category=?, shop_id=?, cron_expr=?, schedule_desc=?, cron_job_id=?, script=?, enabled=? WHERE task_key=?",
-                    (name, cat, shop_id, cron, desc, job_id, script, enabled, task_key),
-                )
+                if task_key == "newoffer_collect":
+                    # 新品专区采集时间前端可设置，seed 不覆盖 cron/schedule_desc/enabled，保留用户配置
+                    c.execute(
+                        "UPDATE scheduled_tasks SET name=?, category=?, shop_id=?, script=? WHERE task_key=?",
+                        (name, cat, shop_id, script, task_key),
+                    )
+                else:
+                    c.execute(
+                        "UPDATE scheduled_tasks SET name=?, category=?, shop_id=?, cron_expr=?, schedule_desc=?, cron_job_id=?, script=?, enabled=? WHERE task_key=?",
+                        (name, cat, shop_id, cron, desc, job_id, script, enabled, task_key),
+                    )
             else:
                 c.execute(
                     "INSERT INTO scheduled_tasks(task_key, name, category, shop_id, cron_expr, schedule_desc, cron_job_id, script, enabled, note) "
@@ -5031,6 +5039,34 @@ def toggle_scheduled_task(task_key: str, enabled: int) -> bool:
     """切换任务启用状态。"""
     with closing(_conn()) as c:
         c.execute("UPDATE scheduled_tasks SET enabled=? WHERE task_key=?", (1 if enabled else 0, task_key))
+        c.commit()
+        return c.execute("SELECT changes()").fetchone()[0] > 0
+
+
+def get_scheduled_task(task_key: str) -> dict:
+    """按 task_key 查单个定时任务，找不到返回空 dict。"""
+    with closing(_conn()) as c:
+        row = c.execute("SELECT * FROM scheduled_tasks WHERE task_key=?", (task_key,)).fetchone()
+        return dict(row) if row else {}
+
+
+def update_scheduled_task_schedule(task_key: str, cron_expr: str, schedule_desc: str, enabled: int = None) -> bool:
+    """更新定时任务的 cron 时间 + 描述 + 启用状态（前端可设置采集时间）。"""
+    sets, vals = [], []
+    if cron_expr is not None:
+        sets.append("cron_expr=?")
+        vals.append(cron_expr)
+    if schedule_desc is not None:
+        sets.append("schedule_desc=?")
+        vals.append(schedule_desc)
+    if enabled is not None:
+        sets.append("enabled=?")
+        vals.append(1 if enabled else 0)
+    if not sets:
+        return False
+    vals.append(task_key)
+    with closing(_conn()) as c:
+        c.execute(f"UPDATE scheduled_tasks SET {', '.join(sets)} WHERE task_key=?", vals)
         c.commit()
         return c.execute("SELECT changes()").fetchone()[0] > 0
 

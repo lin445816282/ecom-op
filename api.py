@@ -1657,6 +1657,38 @@ class Handler(BaseHTTPRequestHandler):
             res = catalog.list_newoffer_items(supplier_id or None, status, q, page, page_size)
             return _json(self, res)
 
+        if path == "/api/newoffer/schedule" and self.command == "GET":
+            # 读新品专区定时采集配置（cron_expr "M H * * *" / schedule_desc / enabled）
+            task = catalog.get_scheduled_task("newoffer_collect")
+            return _json(self, {
+                "cron_expr": task.get("cron_expr", ""),
+                "schedule_desc": task.get("schedule_desc", ""),
+                "enabled": task.get("enabled", 0),
+            })
+
+        if path == "/api/newoffer/schedule" and self.command == "POST":
+            # 设置新品专区定时采集时间（前端 HH:MM → cron "M H * * *"）
+            item = self._read_body()
+            time_str = str(item.get("time") or "").strip()  # "HH:MM"
+            enabled = item.get("enabled")
+            if enabled is None:
+                enabled = 1
+            cron_expr = ""
+            schedule_desc = "未设置"
+            if time_str:
+                try:
+                    hh, mm = time_str.split(":")
+                    h = int(hh)
+                    m = int(mm)
+                    if 0 <= h <= 23 and 0 <= m <= 59:
+                        cron_expr = f"{m} {h} * * *"
+                        schedule_desc = f"每天 {hh.zfill(2)}:{mm.zfill(2)}"
+                except Exception:
+                    pass
+            ok = catalog.update_scheduled_task_schedule("newoffer_collect", cron_expr, schedule_desc, enabled)
+            return _json(self, {"ok": ok, "cron_expr": cron_expr,
+                                "schedule_desc": schedule_desc, "enabled": enabled})
+
         if path == "/api/newoffer/publish" and self.command == "POST":
             # 选中新品商品 → 一键上架（创建 autopublish 任务）
             item = self._read_body()
@@ -3134,8 +3166,68 @@ def _autopublish_bg(task_id: int, pricing: dict = None):
         return _fail("publish", f"未确认上架成功（{tail}）")
 
 
+def _newoffer_collect_all() -> dict:
+    """采集所有有 1688 前缀的供应商新品（供定时调度调用），返回 {inserted, skipped, results}。"""
+    sups = [s for s in catalog.list_suppliers() if (s.get("prefix") or "").strip()]
+    outdir_win = "C:\\tmp\\pdd-publish\\newoffer"
+    outdir_wsl = "/mnt/c/tmp/pdd-publish/newoffer"
+    os.makedirs(outdir_wsl, exist_ok=True)
+    total_ins = 0
+    total_skip = 0
+    results = []
+    for sup in sups:
+        prefix = (sup.get("prefix") or "").strip()
+        try:
+            res = _run_node_script("fetch_newoffer.js", [prefix, outdir_win, str(CLIENT_1688_PORT)], timeout=120)
+            if not res.get("data"):
+                results.append({"supplier": sup.get("name"), "error": res.get("error") or "采集失败"})
+                continue
+            items = res["data"].get("items") or []
+            save = catalog.insert_newoffer_items(sup.get("id"), sup.get("name") or "", prefix, items)
+            total_ins += save.get("inserted", 0)
+            total_skip += save.get("skipped", 0)
+            results.append({"supplier": sup.get("name"), "count": len(items),
+                            "inserted": save.get("inserted", 0), "skipped": save.get("skipped", 0)})
+        except Exception as e:
+            results.append({"supplier": sup.get("name"), "error": str(e)})
+    return {"inserted": total_ins, "skipped": total_skip, "results": results}
+
+
+def _newoffer_scheduler_loop():
+    """后台调度：每 30 秒检查新品专区定时采集，到点（HH:MM 匹配且当日未采）则采集全部供应商。"""
+    import time as _time
+    from datetime import datetime
+    last_date = ""
+    while True:
+        try:
+            task = catalog.get_scheduled_task("newoffer_collect")
+            if task.get("enabled"):
+                cron = (task.get("cron_expr") or "").strip()
+                parts = cron.split()
+                if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
+                    h = int(parts[1])
+                    m = int(parts[0])
+                    now = datetime.now()
+                    today = now.strftime("%Y-%m-%d")
+                    if now.hour == h and now.minute == m and last_date != today:
+                        last_date = today
+                        catalog.log_task_run("newoffer_collect", "running", f"定时采集触发 {now.strftime('%H:%M:%S')}")
+                        try:
+                            r = _newoffer_collect_all()
+                            catalog.log_task_run("newoffer_collect", "success",
+                                                 f"新增 {r['inserted']} 条，跳过 {r['skipped']} 条")
+                        except Exception as e:
+                            catalog.log_task_run("newoffer_collect", "error", str(e))
+        except Exception:
+            pass
+        _time.sleep(30)
+
+
 def main():
     catalog.init_db()  # 每次启动执行幂等迁移（补缺失列）
+    # 启动新品专区定时采集调度线程（前端可设置采集时间）
+    import threading
+    threading.Thread(target=_newoffer_scheduler_loop, daemon=True).start()
     server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     print(f"运营工作台已启动：http://127.0.0.1:{PORT}")
     print("按 Ctrl+C 停止。")

@@ -661,6 +661,16 @@ async function renderNewoffer() {
         <div style="flex:1"></div>
         <div style="font-size:12px;color:#94a3b8;max-width:360px">采集结果按 offer 去重入库，新商品标记「待上架」，可勾选一键上架到拼多多。</div>
       </div>
+      <div style="margin-top:12px;padding-top:12px;border-top:1px dashed #eef1f6;display:flex;flex-wrap:wrap;gap:12px;align-items:center">
+        <span style="font-size:13px;color:#475569;font-weight:600">⏰ 定时采集</span>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
+          <input type="checkbox" id="newoffer-schedule-enabled"> 启用
+        </label>
+        <span style="font-size:13px;color:#475569">每天</span>
+        <input type="time" id="newoffer-schedule-time" value="08:00" style="padding:6px 10px;border:1px solid #dbe2ec;border-radius:8px;font-size:13px">
+        <button class="btn sm" id="newoffer-schedule-save" style="padding:6px 14px">保存</button>
+        <span id="newoffer-schedule-status" style="font-size:12px;color:#94a3b8"></span>
+      </div>
     </div>
 
     <div class="panel">
@@ -809,6 +819,47 @@ async function renderNewoffer() {
       await loadList();
     } catch(e) { toast('采集失败：' + e.message); }
     btn.disabled = false; btn.textContent = '🔄 采集新品';
+  });
+
+  // 定时采集：加载当前配置
+  async function loadSchedule() {
+    try {
+      const s = await api('/api/newoffer/schedule');
+      const enabled = $('#newoffer-schedule-enabled');
+      const timeInput = $('#newoffer-schedule-time');
+      const status = $('#newoffer-schedule-status');
+      enabled.checked = !!s.enabled;
+      let hh = '08', mm = '00';
+      if (s.cron_expr) {
+        const parts = s.cron_expr.split(' ');
+        if (parts.length >= 2 && parts[0] && parts[1]) {
+          mm = String(parts[0]).padStart(2, '0');
+          hh = String(parts[1]).padStart(2, '0');
+        }
+      }
+      timeInput.value = `${hh}:${mm}`;
+      status.textContent = s.enabled ? `已启用 · ${s.schedule_desc || ''}` : '已停用';
+    } catch (e) {}
+  }
+  await loadSchedule();
+
+  // 定时采集：保存设置
+  $('#newoffer-schedule-save').addEventListener('click', async () => {
+    const time = $('#newoffer-schedule-time').value;
+    const enabled = $('#newoffer-schedule-enabled').checked;
+    if (!time) { toast('请选择采集时间'); return; }
+    const btn = $('#newoffer-schedule-save');
+    btn.disabled = true; btn.textContent = '保存中…';
+    try {
+      const resp = await api('/api/newoffer/schedule', 'POST', { time, enabled: enabled ? 1 : 0 });
+      if (resp && resp.ok) {
+        toast(enabled ? `✅ 已启用定时采集 · ${resp.schedule_desc}` : '⏸ 已停用定时采集');
+        await loadSchedule();
+      } else {
+        toast((resp && resp.error) || '保存失败');
+      }
+    } catch (e) { toast('保存失败：' + e.message); }
+    btn.disabled = false; btn.textContent = '保存';
   });
 
   // 状态筛选 + 关键词搜索（都重置到第 1 页）
