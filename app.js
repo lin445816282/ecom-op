@@ -721,13 +721,14 @@ async function renderNewoffer() {
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px">
         ${items.map(it => {
           const st = stMap[it.status] || ['—', '#64748b', '#f1f5f9'];
-          const img = it.image || '';
-          const imgHtml = img
-            ? `<img src="${esc(img)}" loading="lazy" referrerpolicy="no-referrer" style="width:100%;height:100%;object-fit:cover" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><div style="display:none;width:100%;height:100%;align-items:center;justify-content:center;color:#cbd5e1;font-size:12px">无图</div>`
+          const thumb = it.image_thumb || it.image || '';
+          const full = it.image || it.image_thumb || '';
+          const imgHtml = thumb
+            ? `<img src="${esc(thumb)}" loading="lazy" referrerpolicy="no-referrer" style="width:100%;height:100%;object-fit:cover" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><div style="display:none;width:100%;height:100%;align-items:center;justify-content:center;color:#cbd5e1;font-size:12px">无图</div>`
             : `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:#cbd5e1;font-size:12px">无图</div>`;
           return `
           <div style="border:1px solid #eef1f6;border-radius:12px;overflow:hidden;background:#fff;display:flex;flex-direction:column">
-            <div class="newoffer-thumb" data-img="${esc(img)}" data-title="${esc(it.title)}" style="height:170px;background:#f8fafc;position:relative;overflow:hidden;${img ? 'cursor:zoom-in' : ''}">
+            <div class="newoffer-thumb" data-img="${esc(full)}" data-title="${esc(it.title)}" style="height:170px;background:#f8fafc;position:relative;overflow:hidden;${full ? 'cursor:zoom-in' : ''}">
               ${imgHtml}
               <span style="position:absolute;top:8px;left:8px;background:${st[2]};color:${st[1]};border-radius:6px;padding:2px 8px;font-size:11px;font-weight:600">${st[0]}</span>
             </div>

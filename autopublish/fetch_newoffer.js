@@ -59,8 +59,10 @@ async function ev(c,expr){const r=await c.send('Runtime.evaluate',{expression:ex
       const m = gc.match(/^(\\d{4})-(\\d{1,2})-(\\d{1,2})/);
       const date = m ? (parseInt(m[2],10)+'月'+parseInt(m[3],10)+'日') : '';
       const month = m ? (parseInt(m[2],10)+'月') : '';
-      function normImg(u){ if(!u) return ''; u=String(u).trim(); if(u.indexOf('//')===0) u='https:'+u; return u; }
+      function normImg(u){ if(!u) return ''; u=String(u).trim(); if(u.indexOf('//')===0) return 'https:'+u; if(u.indexOf('http')===0) return u; return 'https://cbu01.alicdn.com/'+u; }
       function pickImg(o){
+        var oi=o.offerImages;
+        if(Array.isArray(oi)&&oi.length){ var f=oi[0]; if(f&&typeof f==='object'){ var u=f.imageURI||f.imageUrl||''; if(typeof u==='string'&&u) return normImg(u); } }
         var sk=['image','imgUrl','picUrl','mainImage','imageUrl','thumbnail','thumb','img'];
         for(var i=0;i<sk.length;i++){ var v=o[sk[i]]; if(typeof v==='string'&&v) return normImg(v); }
         var ak=['images','imageList','picList','imgList','thumbnails','pics'];
@@ -70,10 +72,16 @@ async function ev(c,expr){const r=await c.send('Runtime.evaluate',{expression:ex
         } }
         return '';
       }
+      function pickThumb(o){
+        var oi=o.offerImages;
+        if(Array.isArray(oi)&&oi.length){ var f=oi[0]; if(f&&typeof f==='object'){ var u=f.size310x310ImageURI||''; if(typeof u==='string'&&u) return normImg(u); } }
+        return pickImg(o);
+      }
       return {
         offer_id: String(o.id),
         title: o.subject || '',
         image: pickImg(o),
+        image_thumb: pickThumb(o),
         price: o.offerPrice || '',
         offer_url: 'https://detail.1688.com/offer/' + o.id + '.html',
         date: date,
