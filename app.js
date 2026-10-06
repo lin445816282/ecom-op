@@ -639,8 +639,10 @@ async function renderNewoffer() {
   el.innerHTML = '<div style="padding:24px;color:#666">加载中…</div>';
   let suppliers = [];
   let shops = [];
+  let platforms = [];
   try { suppliers = (await api('/api/catalog/suppliers')).items || []; } catch(e) { suppliers = []; }
   try { shops = (await api('/api/catalog/shops')).items || []; } catch(e) { shops = []; }
+  try { platforms = (await api('/api/catalog/platforms')).items || []; } catch(e) { platforms = []; }
   const withPrefix = suppliers.filter(s => (s.prefix || '').trim());
 
   const selStyle = 'padding:8px 10px;border:1px solid #dbe2ec;border-radius:8px;font-size:13px;background:#fff;min-width:180px';
@@ -674,18 +676,35 @@ async function renderNewoffer() {
           <input id="newoffer-q" placeholder="搜索标题关键词" style="padding:6px 10px;border:1px solid #dbe2ec;border-radius:8px;font-size:13px;width:200px">
         </div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <span style="font-size:12px;color:#64748b">上架到店铺：</span>
-          <div id="newoffer-shops" style="display:flex;gap:8px;flex-wrap:wrap"></div>
           <button class="btn btn-primary" id="newoffer-publish" style="padding:8px 16px">一键上架选中</button>
         </div>
+      </div>
+      <div style="margin-bottom:14px;padding:10px 12px;background:#f8fafc;border:1px solid #eef1f6;border-radius:10px">
+        <div style="font-size:12px;color:#64748b;font-weight:600;margin-bottom:8px">上架到店铺（按平台）</div>
+        <div id="newoffer-shops"></div>
       </div>
       <div id="newoffer-list" style="color:#94a3b8">加载中…</div>
     </div>
   `;
 
-  // 店铺多选 checkbox
+  // 店铺按平台分组显示（拼多多/淘宝/抖音/京东/小红书/微信）
   const shopBox = $('#newoffer-shops');
-  shopBox.innerHTML = shops.map(s => `<label style="display:flex;align-items:center;gap:4px;font-size:13px;cursor:pointer"><input type="checkbox" class="newoffer-shop" value="${s.id}">${esc(s.name)}</label>`).join('');
+  const platMap = {};
+  platforms.forEach(p => platMap[p.id] = p.name);
+  const grouped = {};
+  shops.forEach(s => {
+    const pn = platMap[s.platform_id] || '其他';
+    if (!grouped[pn]) grouped[pn] = [];
+    grouped[pn].push(s);
+  });
+  shopBox.innerHTML = Object.entries(grouped).map(([pn, ss]) => `
+    <div style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap;margin-bottom:8px">
+      <span style="font-size:12px;color:#475569;font-weight:600;min-width:48px;padding-top:6px;flex-shrink:0">${esc(pn)}</span>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;flex:1">
+        ${ss.map(s => `<label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer;background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:5px 12px"><input type="checkbox" class="newoffer-shop" value="${s.id}">${esc(s.name)}</label>`).join('')}
+      </div>
+    </div>
+  `).join('');
 
   // 列表渲染（最新在上 + 分页 + 关键词查询）
   let newofferPage = 1;
