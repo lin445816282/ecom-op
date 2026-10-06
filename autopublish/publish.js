@@ -222,16 +222,10 @@ async function fillByType(c, selector, text){
     const qimgF=await c.send('DOM.querySelector',{nodeId:docF.root.nodeId,selector:'input[type="file"]'});
     if(qimgF && qimgF.nodeId){
       await c.send('DOM.setFileInputFiles',{nodeId:qimgF.nodeId,files:cfg.images.slice(0,10)});
-      // 轮询等待图片真正上传完成（task_462 教训：9 张图上传+处理 > 8s，
-      // 固定 sleep 8s 后点「下一步」会因图片未就绪被静默拦截，无任何报错）
-      const _targetN = Math.min(cfg.images.length, 10);
-      let _upDone = false;
-      for(let _ui=0; _ui<30; _ui++){
-        await sleep(2000);
-        const _n = await ev(c, `(()=>{const m=(document.body.innerText||'').match(/上传图片\\s*\\((\\d+)\\s*\\//);return m?parseInt(m[1]):-1})()`);
-        if(_n >= _targetN){ _upDone = true; break; }
-      }
-      log('  上传完成' + (_upDone?'':'(未完全上传，继续)'));
+      // 固定等待图片上传（task_471 教训：不同店铺图片状态文字格式不同，
+      // 正则轮询「上传图片 (N/10)」只匹配部分店铺会 60s 空等；改固定等待 + 下一步重试兜底）
+      await sleep(12000);
+      log('  上传完成');
     } else {
       log('  ⚠️ 未找到主图 file input');
     }
