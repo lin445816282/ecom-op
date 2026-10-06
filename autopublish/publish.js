@@ -270,6 +270,45 @@ async function fillByType(c, selector, text){
       }
     }
 
+    // ===== 旗舰店：选择推荐分类（task_479 教训）=====
+    // 上传主图+填标题后，页面动态出现「*商品分类」推荐列表（category_v4_catePanel），
+    // 必须点选一个分类才能跳详情页；不选直接点「下一步」被前置校验静默拦截（不跳转、无报错）。
+    const _recCat = await ev(c, `(()=>{
+      const panel=document.querySelector('[class*="catePanel"]');
+      if(!panel) return 'no panel';
+      const items=[...panel.querySelectorAll('[class*="chooseCategory"], [class*="cateItem"]')].filter(e=>{
+        const r=e.getBoundingClientRect(); return r.width>0 && r.height>0;
+      });
+      if(!items.length) return 'no items';
+      const want=${JSON.stringify(cfg.categoryPath)};
+      const parts=want.split(' > ').map(s=>s.trim());
+      const midWord=parts[1]||'';
+      const lastWord=parts[parts.length-1]||'';
+      const norm=t=>(t||'').replace(/\\s+/g,' ').trim();
+      let el=items.find(e=>norm(e.textContent)===want);
+      if(!el&&midWord) el=items.find(e=>norm(e.textContent).includes(midWord));
+      if(!el&&lastWord) el=items.find(e=>norm(e.textContent).includes(lastWord));
+      if(!el) el=items[0];
+      const r=el.getBoundingClientRect();
+      return JSON.stringify({x:Math.round(r.x+r.width/2), y:Math.round(r.y+r.height/2), text:norm(el.textContent)});
+    })()`);
+    if(_recCat && _recCat!=='no panel' && _recCat!=='no items'){
+      try{
+        const _rc=JSON.parse(_recCat);
+        log('  选择推荐分类:', _rc.text);
+        await c.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:_rc.x-40,y:_rc.y});
+        await sleep(150);
+        await c.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:_rc.x,y:_rc.y});
+        await sleep(300);
+        await c.send('Input.dispatchMouseEvent',{type:'mousePressed',x:_rc.x,y:_rc.y,button:'left',clickCount:1});
+        await sleep(100);
+        await c.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:_rc.x,y:_rc.y,button:'left',clickCount:1});
+        await sleep(2000);
+      }catch(e){ log('  选择推荐分类异常:', e.message); }
+    } else {
+      log('  推荐分类:', _recCat);
+    }
+
     // ===== 旗舰店：下一步（点击 + 轮询重试，图片上传完成前点击会被静默拦截）=====
     log('  点「下一步」进入详情页');
     let _jumped=false;
@@ -558,9 +597,9 @@ async function fillByType(c, selector, text){
   }catch(e){ log('  品牌处理异常:', e.message); }
 
   // ===== Step 7.6: 运费模板（选「多仓」开头的模板） =====
-  // 运费模板字段在「服务与承诺」区块：radio group「推荐默认模板」/「其他模板」。
-  // 选「其他模板」→ 展开 .template-box-select（内含 select 下拉 service.cost_template_id）→
-  // 点下拉 → 弹模板列表 → 选「多仓」开头的那个（如「多仓按重…海南新西港澳台不配送…」）。
+  // 运费模板字段在「服务与承诺」区块，是 beast-core select「请选择运费模板」
+  // （实测闲时来/嘉裕无「推荐默认模板/其他模板」radio）。点「展开修改」展开字段 →
+  // 点 select 下拉 → 选「多仓」开头的模板 → 填物流重量。
   log('[7.6/8] 选运费模板（多仓开头）');
   const _freightPrefix = (cfg.freightPrefix || '多仓').toString();
   try{
@@ -589,47 +628,10 @@ async function fillByType(c, selector, text){
       }catch(e){}
       await sleep(2000);  // 等 .template-box 展开
     }
-    // 1) 滚动到「其他模板」radio 并轮询等渲染（展开后 radio 才可见），渲染后用真实鼠标点击
-    //    （task_441/443 教训：JS click 不触发 React radio 选中，且坐标 0 时点击无效）
-    let _f1ok=false;
-    for(let _ri=0;_ri<12;_ri++){
-      const _f1 = await ev(c, `(()=>{
-        const el=[...document.querySelectorAll('*')].find(e=>e.children.length===0&&(e.textContent||'').trim()==='其他模板'&&e.getBoundingClientRect().width>0);
-        if(!el) return JSON.stringify({err:'no_other'});
-        let rc=el.getBoundingClientRect();
-        if(rc.width>0&&rc.height>0){ el.scrollIntoView({block:'center'}); rc=el.getBoundingClientRect(); }
-        const _rb=el.closest('[data-testid="beast-core-radio"]');
-        return JSON.stringify({x:Math.round(rc.x+rc.width/2), y:Math.round(rc.y+rc.height/2), w:Math.round(rc.width), h:Math.round(rc.height), checked:_rb?_rb.getAttribute('data-checked'):'false'});
-      })()`);
-      let _pt={};
-      try{ _pt=JSON.parse(_f1||'{}'); }catch(e){}
-      if(_pt.err==='no_other'){
-        // 「展开修改」后展开慢，继续向下滚动 + 等待重试（task_467 教训：不要立即 break，否则运费模板漏改）
-        await ev(c, `window.scrollBy(0,300)`);
-        await sleep(1000);
-        continue;
-      }
-      if(_pt.x&&_pt.y&&_pt.w>0&&_pt.h>0){
-        if(_pt.checked==='true'){ _f1ok=true; }  // 已选中，直接走后续
-        else{
-          await c.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:_pt.x-40,y:_pt.y});
-          await sleep(150);
-          await c.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:_pt.x,y:_pt.y});
-          await sleep(300);
-          await c.send('Input.dispatchMouseEvent',{type:'mousePressed',x:_pt.x,y:_pt.y,button:'left',clickCount:1});
-          await sleep(80);
-          await c.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:_pt.x,y:_pt.y,button:'left',clickCount:1});
-          _f1ok=true;
-        }
-        break;
-      }
-      // 坐标还是 0（未渲染）：向下滚动触发懒加载后重试
-      await ev(c, `window.scrollBy(0,300)`);
-      await sleep(1000);
-    }
-    log('  运费模板-点击其他模板:', _f1ok?'done':'failed');
-    if(_f1ok){
-      await sleep(2000);  // 选中后等 2 秒渲染 select 下拉
+    // 1) 直接找运费模板 beast-core select（实测闲时来/嘉裕 2026-09：字段是 select「请选择运费模板」，
+    //    无「推荐默认模板/其他模板」radio。旧逻辑找 radio 永远 failed → 漏选模板、漏填物流重量）
+    {
+      await sleep(2000);  // 展开修改后等字段渲染出 select
       // 2) 滚动到运费模板字段 + 轮询等 select 渲染（React 懒加载，需滚动到才渲染）
       let _selReady=false;
       for(let _i=0;_i<12;_i++){
@@ -646,25 +648,28 @@ async function fillByType(c, selector, text){
       }
       log('  运费模板-select 渲染:', _selReady?'ok':'超时未渲染');
       if(!_selReady){
-        log('  ⚠️ 运费模板下拉未渲染（可能该店铺无其他模板），保持默认');
+        log('  ⚠️ 运费模板 select 未渲染，保持默认（店铺默认运费模板）');
       } else {
-        // 3) 真实鼠标点击 select 展开下拉（比 JS click 更可靠，React select 需真实事件）
-        const _coord=await ev(c, `(()=>{
+        // 3) 展开 select 下拉（实测 2026-09：beast-core select 用 JS click 能展开，
+        //    真实鼠标点 header 反而无反应——headData 保持 normal）
+        const _expanded = await ev(c, `(()=>{
           const sel=document.querySelector('[id="service.cost_template_id"] [data-testid="beast-core-select"]');
+          if(!sel) return 'no_sel';
           const head=sel.querySelector('[data-testid="beast-core-select-header"]')||sel;
           head.scrollIntoView({block:'center'});
-          const rc=head.getBoundingClientRect();
-          return JSON.stringify({x:Math.round(rc.x+rc.width/2),y:Math.round(rc.y+rc.height/2)});
+          head.focus();
+          head.click();
+          return 'clicked';
         })()`);
-        try{
-          const _pt=JSON.parse(_coord||'{}');
-          if(_pt.x&&_pt.y){
-            await c.send('Input.dispatchMouseEvent',{type:'mousePressed',x:_pt.x,y:_pt.y,button:'left',clickCount:1});
-            await sleep(80);
-            await c.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:_pt.x,y:_pt.y,button:'left',clickCount:1});
-          }
-        }catch(e){}
+        log('  运费模板-select 展开:', _expanded);
         await sleep(2500);
+        // 3.5) 检测下拉内容（「无结果」= options 空，店铺无模板或数据未加载）
+        const _dd = await ev(c, `(()=>{
+          const panels=[...document.querySelectorAll('[class*="dropdownPanel"],[class*="DropdownPanel"]')].filter(p=>{const r=p.getBoundingClientRect();return r.width>0&&r.height>0;});
+          if(!panels.length) return 'no_dropdown';
+          return (panels[0].innerText||'').trim().replace(/\\s+/g,' ').slice(0,120);
+        })()`);
+        log('  运费模板-下拉内容:', _dd);
         // 4) 找「多仓」开头的模板项并点击（可见叶子文本节点，取最后一个命中，避开页面其他干扰）
         const _f3 = await ev(c, `(()=>{
           const prefix=${JSON.stringify(_freightPrefix)};
