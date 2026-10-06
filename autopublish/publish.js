@@ -280,90 +280,9 @@ async function fillByType(c, selector, text){
       }
     }
 
-    // ===== 旗舰店：选择推荐分类（task_479 教训）=====
-    // 上传主图+填标题后，页面动态出现「*商品分类」推荐列表（category_v4_catePanel），
-    // 必须点选一个分类才能跳详情页；不选直接点「下一步」被前置校验静默拦截（不跳转、无报错）。
-    const _recCat = await ev(c, `(()=>{
-      const panel=document.querySelector('[class*="catePanel"]');
-      if(!panel) return 'no panel';
-      const items=[...panel.querySelectorAll('[class*="chooseCategory"], [class*="cateItem"]')].filter(e=>{
-        const r=e.getBoundingClientRect(); return r.width>0 && r.height>0;
-      });
-      if(!items.length) return 'no items';
-      const want=${JSON.stringify(cfg.categoryPath)};
-      const parts=want.split(' > ').map(s=>s.trim());
-      const midWord=parts[1]||'';
-      const lastWord=parts[parts.length-1]||'';
-      const norm=t=>(t||'').replace(/\\s+/g,' ').trim();
-      let el=items.find(e=>norm(e.textContent)===want);
-      if(!el&&midWord) el=items.find(e=>norm(e.textContent).includes(midWord));
-      if(!el&&lastWord) el=items.find(e=>norm(e.textContent).includes(lastWord));
-      if(!el) el=items[0];
-      const r=el.getBoundingClientRect();
-      return JSON.stringify({x:Math.round(r.x+r.width/2), y:Math.round(r.y+r.height/2), text:norm(el.textContent)});
-    })()`);
-    if(_recCat && _recCat!=='no panel' && _recCat!=='no items'){
-      try{
-        const _rc=JSON.parse(_recCat);
-        log('  选择推荐分类:', _rc.text);
-        await c.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:_rc.x-40,y:_rc.y});
-        await sleep(150);
-        await c.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:_rc.x,y:_rc.y});
-        await sleep(300);
-        await c.send('Input.dispatchMouseEvent',{type:'mousePressed',x:_rc.x,y:_rc.y,button:'left',clickCount:1});
-        await sleep(100);
-        await c.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:_rc.x,y:_rc.y,button:'left',clickCount:1});
-        await sleep(2000);
-      }catch(e){ log('  选择推荐分类异常:', e.message); }
-    } else {
-      log('  推荐分类:', _recCat);
-    }
-
-    // ===== 旗舰店：选择品牌（task_479 教训：改版后品牌不自动带出，需点「查看可用品牌」→ 弹窗选「品牌可用」）=====
-    const _brandNeed = await ev(c, `(()=>{
-      return (document.body.innerText||'').includes('仅可选择店铺有资质的品牌');
-    })()`);
-    if(_brandNeed){
-      log('  品牌未选，点「查看可用品牌」');
-      // 品牌字段是 beast-core 可搜索 select，旗舰店唯一品牌「OSHIYI/欧世艺」会自动带出。
-      // 流程：点「查看可用品牌」→ 打开资质 Modal（全屏遮罩）→ 关闭 Modal → 点 select 下拉选项确认。
-      await ev(c, `(()=>{
-        const e=[...document.querySelectorAll('*')].find(e=>e.children.length===0&&(e.textContent||'').trim()==='查看可用品牌');
-        if(!e) return 'no btn';
-        e.scrollIntoView({block:'center'});
-        e.click();
-        return 'clicked';
-      })()`);
-      await sleep(2500);
-      // 关闭资质 Modal（全屏遮罩挡住「下一步」，必须 dispatchEvent MouseEvent 才触发 React onClick）
-      const _closed = await ev(c, `(()=>{
-        const svg=document.querySelector('[data-testid="beast-core-modal-icon-close"]');
-        if(!svg) return 'no svg';
-        svg.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,view:window}));
-        return 'closed';
-      })()`);
-      log('  关闭资质弹窗:', _closed);
-      await sleep(1500);
-      // 点品牌 select 展开下拉，选「OSHIYI/欧世艺」选项确认
-      await ev(c, `(()=>{
-        const inp=document.querySelector('input[placeholder="请输入品牌名称搜索"]');
-        if(inp){ inp.scrollIntoView({block:'center'}); inp.click(); inp.focus(); }
-        return 'ok';
-      })()`);
-      await sleep(2000);
-      const _pick = await ev(c, `(()=>{
-        const li=[...document.querySelectorAll('li[role="option"]')].find(li=>(li.textContent||'').includes('OSHIYI')||(li.textContent||'').includes('欧世艺'));
-        if(!li) return 'no option';
-        li.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,view:window}));
-        return 'clicked';
-      })()`);
-      if(_pick==='clicked'){
-        await sleep(1500);
-        log('  品牌已选');
-      } else {
-        log('  ⚠️ 品牌选项:', _pick);
-      }
-    }
+    // ===== 旗舰店：分类+品牌均自动带出，无需手动选择 =====
+    // task_484 实测：predictCate 多候选时第一个分类默认 checked，品牌「OSHIYI/欧世艺」由旗舰店资质自动带出，
+    // 直接点「下一步」即可跳转。旧代码点「查看可用品牌」打开资质 Modal 反而破坏已带出的品牌状态，导致下一步被拦截。
 
     // ===== 旗舰店：下一步（点击 + 轮询重试，图片上传完成前点击会被静默拦截）=====
     log('  点「下一步」进入详情页');
