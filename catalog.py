@@ -512,6 +512,7 @@ CREATE TABLE IF NOT EXISTS newoffer_items (
     price TEXT DEFAULT '',
     date TEXT DEFAULT '',
     month TEXT DEFAULT '',
+    gmt_create TEXT DEFAULT '',
     status TEXT DEFAULT 'new',
     publish_task_id INTEGER,
     first_seen_at TEXT DEFAULT (datetime('now','localtime')),
@@ -1805,6 +1806,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
     supcols = {r[1] for r in conn.execute("PRAGMA table_info(suppliers)").fetchall()}
     if "prefix" not in supcols:
         conn.execute("ALTER TABLE suppliers ADD COLUMN prefix TEXT DEFAULT ''")
+    # newoffer_items 表 gmt_create 列（1688 商品发布时间，用于「最新在上」精确排序）
+    nocols = {r[1] for r in conn.execute("PRAGMA table_info(newoffer_items)").fetchall()}
+    if "gmt_create" not in nocols:
+        conn.execute("ALTER TABLE newoffer_items ADD COLUMN gmt_create TEXT DEFAULT ''")
     # users 表 permissions 列（模块访问权限，JSON 数组，["*"]=全权限）
     ucols = {r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
     if "permissions" not in ucols:
@@ -4859,25 +4864,28 @@ def insert_newoffer_items(supplier_id, supplier_name, prefix, items) -> dict:
             price = it.get('price') or ''
             date = it.get('date') or ''
             month = it.get('month') or ''
+            gmt_create = it.get('gmtCreate') or ''
             offer_url = it.get('offer_url') or (f"https://detail.1688.com/offer/{offer_id}.html" if offer_id else '')
-            exist = c.execute("SELECT id FROM newoffer_items WHERE prefix=? AND offer_id=?", (prefix, offer_id)).fetchone()
+            exist = c.execute("SELECT id, gmt_create FROM newoffer_items WHERE prefix=? AND offer_id=?", (prefix, offer_id)).fetchone()
             if exist:
+                # 已存在：旧记录 gmt_create 为空时用新数据回填（供「最新在上」精确排序）
+                if not (exist[1] or '') and gmt_create:
+                    c.execute("UPDATE newoffer_items SET gmt_create=? WHERE id=?", (gmt_create, exist[0]))
                 skipped += 1
                 continue
             c.execute(
                 """INSERT INTO newoffer_items
-                (supplier_id, supplier_name, prefix, offer_id, offer_url, title, price, date, month, status)
-                VALUES (?,?,?,?,?,?,?,?,?,?)""",
-                (supplier_id, supplier_name, prefix, offer_id, offer_url, title, price, date, month, 'new'))
+                (supplier_id, supplier_name, prefix, offer_id, offer_url, title, price, date, month, gmt_create, status)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                (supplier_id, supplier_name, prefix, offer_id, offer_url, title, price, date, month, gmt_create, 'new'))
             inserted += 1
         c.commit()
     return {"inserted": inserted, "skipped": skipped}
 
 
-def list_newoffer_items(supplier_id=None, status=None, limit=500) -> list:
-    """新品专区商品列表。"""
+def list_newoffer_items(supplier_id=None, status=None, q=None, page=1, page_size=50) -> dict:
+    """新品专区商品列表：最新在上（gmt_create 倒序）+ 分页 + 关键词查询。返回 {items, total, page, page_size}。"""
     with closing(_conn()) as c:
-        sql = "SELECT * FROM newoffer_items"
         where = []
         args = []
         if supplier_id:
@@ -4886,12 +4894,15 @@ def list_newoffer_items(supplier_id=None, status=None, limit=500) -> list:
         if status:
             where.append("status=?")
             args.append(status)
-        if where:
-            sql += " WHERE " + " AND ".join(where)
-        sql += " ORDER BY first_seen_at DESC, id DESC LIMIT ?"
-        args.append(limit)
-        rows = c.execute(sql, args).fetchall()
-        return [dict(r) for r in rows]
+        if q:
+            where.append("title LIKE ?")
+            args.append(f"%{q}%")
+        where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+        total = c.execute("SELECT COUNT(*) FROM newoffer_items" + where_sql, args).fetchone()[0]
+        sql = "SELECT * FROM newoffer_items" + where_sql
+        sql += " ORDER BY gmt_create DESC, first_seen_at DESC, id DESC LIMIT ? OFFSET ?"
+        rows = c.execute(sql, args + [page_size, (page - 1) * page_size]).fetchall()
+        return {"items": [dict(r) for r in rows], "total": total, "page": page, "page_size": page_size}
 
 
 def set_newoffer_status(item_id, status, publish_task_id=None) -> None:

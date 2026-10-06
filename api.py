@@ -1625,8 +1625,17 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/newoffer/list" and self.command == "GET":
             supplier_id = int(qs.get("supplier_id", ["0"])[0] or 0)
             status = (qs.get("status", [""])[0] or "").strip() or None
-            items = catalog.list_newoffer_items(supplier_id or None, status)
-            return _json(self, {"items": items, "count": len(items)})
+            q = (qs.get("q", [""])[0] or "").strip() or None
+            try:
+                page = max(1, int(qs.get("page", ["1"])[0] or 1))
+            except (TypeError, ValueError):
+                page = 1
+            try:
+                page_size = min(200, max(1, int(qs.get("page_size", ["50"])[0] or 50)))
+            except (TypeError, ValueError):
+                page_size = 50
+            res = catalog.list_newoffer_items(supplier_id or None, status, q, page, page_size)
+            return _json(self, res)
 
         if path == "/api/newoffer/publish" and self.command == "POST":
             # 选中新品商品 → 一键上架（创建 autopublish 任务）

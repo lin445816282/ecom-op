@@ -663,7 +663,7 @@ async function renderNewoffer() {
 
     <div class="panel">
       <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px">
-        <div style="display:flex;gap:8px;align-items:center">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <strong style="font-size:15px">新品商品</strong>
           <select id="newoffer-status" style="padding:6px 10px;border:1px solid #dbe2ec;border-radius:8px;font-size:13px">
             <option value="">全部状态</option>
@@ -671,6 +671,7 @@ async function renderNewoffer() {
             <option value="publishing">上架中</option>
             <option value="published">已上架</option>
           </select>
+          <input id="newoffer-q" placeholder="搜索标题关键词" style="padding:6px 10px;border:1px solid #dbe2ec;border-radius:8px;font-size:13px;width:200px">
         </div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <span style="font-size:12px;color:#64748b">上架到店铺：</span>
@@ -686,15 +687,30 @@ async function renderNewoffer() {
   const shopBox = $('#newoffer-shops');
   shopBox.innerHTML = shops.map(s => `<label style="display:flex;align-items:center;gap:4px;font-size:13px;cursor:pointer"><input type="checkbox" class="newoffer-shop" value="${s.id}">${esc(s.name)}</label>`).join('');
 
-  // 列表渲染
+  // 列表渲染（最新在上 + 分页 + 关键词查询）
+  let newofferPage = 1;
+  let newofferTotal = 0;
+  const newofferPageSize = 50;
   async function loadList() {
     const status = $('#newoffer-status').value;
+    const q = ($('#newoffer-q').value || '').trim();
     const box = $('#newoffer-list');
     box.innerHTML = '加载中…';
-    let items = [];
-    try { items = (await api('/api/newoffer/list' + (status ? `?status=${status}` : ''))).items || []; } catch(e) { items = []; }
-    if (!items.length) { box.innerHTML = '<div style="padding:24px;text-align:center;color:#94a3b8">暂无商品，先选择供应商采集</div>'; return; }
+    let items = [], total = 0;
+    try {
+      const params = new URLSearchParams();
+      if (status) params.set('status', status);
+      if (q) params.set('q', q);
+      params.set('page', newofferPage);
+      params.set('page_size', newofferPageSize);
+      const resp = await api('/api/newoffer/list?' + params.toString());
+      items = resp.items || [];
+      total = resp.total || 0;
+    } catch(e) { items = []; total = 0; }
+    newofferTotal = total;
+    if (!items.length) { box.innerHTML = `<div style="padding:24px;text-align:center;color:#94a3b8">${q ? '未找到匹配商品' : '暂无商品，先选择供应商采集'}</div>`; return; }
     const stMap = { new: ['待上架', '#2563eb', '#eef2ff'], publishing: ['上架中', '#d97706', '#fef3c7'], published: ['已上架', '#16a34a', '#dcfce7'] };
+    const totalPages = Math.max(1, Math.ceil(total / newofferPageSize));
     box.innerHTML = `
       <table style="width:100%;border-collapse:collapse;font-size:13px">
         <thead><tr style="text-align:left;color:#94a3b8;border-bottom:1px solid #eef1f6">
@@ -719,11 +735,22 @@ async function renderNewoffer() {
           </tr>`;
         }).join('')}
         </tbody>
-      </table>`;
+      </table>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;font-size:13px;color:#64748b">
+        <span>共 ${total} 件 · 第 ${newofferPage}/${totalPages} 页</span>
+        <div style="display:flex;gap:8px">
+          <button class="btn sm" id="newoffer-prev" ${newofferPage <= 1 ? 'disabled' : ''} style="${newofferPage <= 1 ? 'opacity:.5;cursor:not-allowed' : ''}">‹ 上一页</button>
+          <button class="btn sm" id="newoffer-next" ${newofferPage >= totalPages ? 'disabled' : ''} style="${newofferPage >= totalPages ? 'opacity:.5;cursor:not-allowed' : ''}">下一页 ›</button>
+        </div>
+      </div>`;
     // 全选
     $('#newoffer-checkall').addEventListener('change', e => {
       $$('.newoffer-check:not([disabled])').forEach(c => c.checked = e.target.checked);
     });
+    // 分页
+    const prev = $('#newoffer-prev'), next = $('#newoffer-next');
+    if (prev) prev.addEventListener('click', () => { if (newofferPage > 1) { newofferPage--; loadList(); } });
+    if (next) next.addEventListener('click', () => { if (newofferPage < totalPages) { newofferPage++; loadList(); } });
   }
 
   // 采集
@@ -740,8 +767,14 @@ async function renderNewoffer() {
     btn.disabled = false; btn.textContent = '🔄 采集新品';
   });
 
-  // 状态筛选
-  $('#newoffer-status').addEventListener('change', loadList);
+  // 状态筛选 + 关键词搜索（都重置到第 1 页）
+  $('#newoffer-status').addEventListener('change', () => { newofferPage = 1; loadList(); });
+  let newofferSearchTimer = null;
+  $('#newoffer-q').addEventListener('input', () => {
+    clearTimeout(newofferSearchTimer);
+    newofferSearchTimer = setTimeout(() => { newofferPage = 1; loadList(); }, 400);
+  });
+  $('#newoffer-q').addEventListener('keydown', e => { if (e.key === 'Enter') { newofferPage = 1; loadList(); } });
 
   // 一键上架
   $('#newoffer-publish').addEventListener('click', async () => {
