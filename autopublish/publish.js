@@ -656,6 +656,26 @@ async function fillByType(c, selector, text){
       await sleep(1000);
     }
     log('  运费模板-点击其他模板:', _f1ok?'done':'failed');
+    // 兜底：闲时来新 UI（template-box 折叠 display:none，radio 不可见），真实鼠标点击找不到 radio。
+    // 改为 JS 强制展开 template-box + JS click radio 的 input（原生 input.click 才触发 React 选中，真实鼠标事件无效）。
+    if(!_f1ok){
+      await ev(c, `(()=>{
+        const box=document.querySelector('#cost_template_id');
+        if(box){ box.style.display='block'; }
+        const line=document.querySelector('.goods-basic-line.template');
+        if(line){ line.style.height='auto'; }
+        const label=[...document.querySelectorAll('#cost_template_id [data-testid="beast-core-radio"]')].find(e=>(e.textContent||'').trim()==='其他模板');
+        if(label){ const input=label.querySelector('input[type="radio"]'); if(input){ input.click(); } }
+        return 'done';
+      })()`);
+      await sleep(2000);
+      const _chk2 = await ev(c, `(()=>{
+        const label=[...document.querySelectorAll('#cost_template_id [data-testid="beast-core-radio"]')].find(e=>(e.textContent||'').trim()==='其他模板');
+        return label?label.getAttribute('data-checked'):'no';
+      })()`);
+      if(_chk2==='true'){ _f1ok=true; log('  其他模板(JS兜底)已选中'); }
+      else log('  其他模板(JS兜底)仍失败:', _chk2);
+    }
     if(_f1ok){
       await sleep(2000);  // 选中后等 2 秒渲染 select 下拉
       // 2) 滚动到运费模板字段 + 轮询等 select 渲染（React 懒加载，需滚动到才渲染）
@@ -664,7 +684,7 @@ async function fillByType(c, selector, text){
         const _h=await ev(c, `(()=>{
           const lbl=[...document.querySelectorAll('*')].find(e=>e.children.length===0&&(e.textContent||'').trim()==='运费模板'&&e.tagName==='LABEL');
           if(lbl) lbl.scrollIntoView({block:'center'});
-          const sel=document.querySelector('[id="service.cost_template_id"] [data-testid="beast-core-select"]');
+          const sel=document.querySelector('[id="service.cost_template_id"] [data-testid="beast-core-select"], #cost_template_id [data-testid="beast-core-select"]');
           if(!sel) return -1;
           return Math.round(sel.getBoundingClientRect().height);
         })()`);
@@ -678,7 +698,7 @@ async function fillByType(c, selector, text){
       } else {
         // 3) 真实鼠标点击 select 展开下拉（比 JS click 更可靠，React select 需真实事件）
         const _coord=await ev(c, `(()=>{
-          const sel=document.querySelector('[id="service.cost_template_id"] [data-testid="beast-core-select"]');
+          const sel=document.querySelector('[id="service.cost_template_id"] [data-testid="beast-core-select"], #cost_template_id [data-testid="beast-core-select"]');
           const head=sel.querySelector('[data-testid="beast-core-select-header"]')||sel;
           head.scrollIntoView({block:'center'});
           const rc=head.getBoundingClientRect();
