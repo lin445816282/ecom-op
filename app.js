@@ -1359,7 +1359,7 @@ async function renderAutopublish() {
         if (cur) cur.scrollIntoView({ behavior: 'smooth', block: 'start' });
         // 按钮保持禁用，任务结束(published/failed)后在 startApPolling 里恢复
       } else {
-        toast((resp && resp.error) || '提交失败');
+        toast((resp && resp.error) || '任务创建失败，请重试');
         $('#ap-start-btn').disabled = false;
         $('#ap-start-btn').textContent = '开始上架';
       }
