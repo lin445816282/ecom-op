@@ -62,12 +62,22 @@ async function getPage(pattern){
 }
 
 async function fillByType(c, selector, text){
-  const f=await ev(c,`(()=>{const inp=document.querySelector(${JSON.stringify(selector)});if(!inp)return 'no';inp.scrollIntoView({block:'center'});inp.click();inp.focus();return 'ok'})()`);
-  if(f!=='ok')return f;
-  await sleep(250);
-  await c.send('Input.insertText',{text:String(text)});
-  await sleep(200);
-  return 'ok';
+  // native setter 直接设 value + 触发 input/change 事件（React 受控输入）。
+  // 不用 Input.insertText：它追加到残留内容后（task_479 教训：旗舰店 goods/category 页有残留标题草稿，
+  // insertText 追加 → 标题拼接超 60 字符 → 「下一步」被静默拦截；Ctrl+A 全选对该 input 也无效）。
+  const r=await ev(c,`(()=>{
+    const inp=document.querySelector(${JSON.stringify(selector)});
+    if(!inp)return 'no';
+    inp.scrollIntoView({block:'center'});
+    inp.click();inp.focus();
+    const proto=inp.tagName==='TEXTAREA'?window.HTMLTextAreaElement.prototype:window.HTMLInputElement.prototype;
+    const setter=Object.getOwnPropertyDescriptor(proto,'value').set;
+    setter.call(inp,${JSON.stringify(text)});
+    inp.dispatchEvent(new Event('input',{bubbles:true}));
+    inp.dispatchEvent(new Event('change',{bubbles:true}));
+    return inp.value===${JSON.stringify(text)}?'ok':'mismatch:'+inp.value.slice(0,20);
+  })()`);
+  return r;
 }
 
 (async()=>{
@@ -307,6 +317,54 @@ async function fillByType(c, selector, text){
       }catch(e){ log('  选择推荐分类异常:', e.message); }
     } else {
       log('  推荐分类:', _recCat);
+    }
+
+    // ===== 旗舰店：选择品牌（task_479 教训：改版后品牌不自动带出，需点「查看可用品牌」→ 弹窗选「品牌可用」）=====
+    const _brandNeed = await ev(c, `(()=>{
+      return (document.body.innerText||'').includes('仅可选择店铺有资质的品牌');
+    })()`);
+    if(_brandNeed){
+      log('  品牌未选，点「查看可用品牌」');
+      const _b = await ev(c, `(()=>{
+        const e=[...document.querySelectorAll('*')].find(e=>e.children.length===0&&(e.textContent||'').trim()==='查看可用品牌');
+        if(!e) return null;
+        e.scrollIntoView({block:'center'});
+        const r=e.getBoundingClientRect();
+        return {x:Math.round(r.x+r.width/2), y:Math.round(r.y+r.height/2)};
+      })()`);
+      if(_b){
+        await c.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:_b.x-40,y:_b.y});
+        await sleep(150);
+        await c.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:_b.x,y:_b.y});
+        await sleep(300);
+        await c.send('Input.dispatchMouseEvent',{type:'mousePressed',x:_b.x,y:_b.y,button:'left',clickCount:1});
+        await sleep(80);
+        await c.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:_b.x,y:_b.y,button:'left',clickCount:1});
+        await sleep(2500);
+        // 弹「店铺品牌资质明细」弹窗，表格里点「品牌可用」选中品牌
+        const _pick = await ev(c, `(()=>{
+          const e=[...document.querySelectorAll('*')].find(e=>e.children.length===0&&(e.textContent||'').trim()==='品牌可用');
+          if(!e) return null;
+          e.scrollIntoView({block:'center'});
+          const r=e.getBoundingClientRect();
+          return {x:Math.round(r.x+r.width/2), y:Math.round(r.y+r.height/2)};
+        })()`);
+        if(_pick){
+          await c.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:_pick.x-40,y:_pick.y});
+          await sleep(150);
+          await c.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:_pick.x,y:_pick.y});
+          await sleep(300);
+          await c.send('Input.dispatchMouseEvent',{type:'mousePressed',x:_pick.x,y:_pick.y,button:'left',clickCount:1});
+          await sleep(80);
+          await c.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:_pick.x,y:_pick.y,button:'left',clickCount:1});
+          await sleep(2000);
+          log('  品牌已选');
+        } else {
+          log('  ⚠️ 未找到「品牌可用」（品牌弹窗未弹出或结构变化）');
+        }
+      } else {
+        log('  ⚠️ 未找到「查看可用品牌」按钮');
+      }
     }
 
     // ===== 旗舰店：下一步（点击 + 轮询重试，图片上传完成前点击会被静默拦截）=====
