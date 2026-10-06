@@ -1655,11 +1655,14 @@ class Handler(BaseHTTPRequestHandler):
                 if it.get("status") == "published":
                     skipped_published += 1
                     continue
+                first_task = None
                 for sid in shop_ids:
                     t = catalog.create_autopublish_task(it["offer_url"], sid, operator, "promo")
                     _enqueue_autopublish(t["id"], t["shop_id"], None)
                     created.append(t["id"])
-                catalog.set_newoffer_status(it["id"], "publishing")
+                    if first_task is None:
+                        first_task = t["id"]
+                catalog.set_newoffer_status(it["id"], "publishing", first_task)
             return _json(self, {"ok": True, "tasks": created, "count": len(created),
                                 "skipped_published": skipped_published})
 
