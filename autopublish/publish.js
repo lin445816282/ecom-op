@@ -325,29 +325,43 @@ async function fillByType(c, selector, text){
     })()`);
     if(_brandNeed){
       log('  品牌未选，点「查看可用品牌」');
-      // JS click（实测真实鼠标点 SPAN 不弹窗，JS click 可靠弹出「店铺品牌资质明细」弹窗）
-      const _v = await ev(c, `(()=>{
+      // 品牌字段是 beast-core 可搜索 select，旗舰店唯一品牌「OSHIYI/欧世艺」会自动带出。
+      // 流程：点「查看可用品牌」→ 打开资质 Modal（全屏遮罩）→ 关闭 Modal → 点 select 下拉选项确认。
+      await ev(c, `(()=>{
         const e=[...document.querySelectorAll('*')].find(e=>e.children.length===0&&(e.textContent||'').trim()==='查看可用品牌');
         if(!e) return 'no btn';
         e.scrollIntoView({block:'center'});
         e.click();
         return 'clicked';
       })()`);
-      log('  查看可用品牌:', _v);
-      await sleep(3000);
-      // 弹窗表格里点「品牌可用」叶子节点选中品牌（品牌状态列）
+      await sleep(2500);
+      // 关闭资质 Modal（全屏遮罩挡住「下一步」，必须 dispatchEvent MouseEvent 才触发 React onClick）
+      const _closed = await ev(c, `(()=>{
+        const svg=document.querySelector('[data-testid="beast-core-modal-icon-close"]');
+        if(!svg) return 'no svg';
+        svg.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,view:window}));
+        return 'closed';
+      })()`);
+      log('  关闭资质弹窗:', _closed);
+      await sleep(1500);
+      // 点品牌 select 展开下拉，选「OSHIYI/欧世艺」选项确认
+      await ev(c, `(()=>{
+        const inp=document.querySelector('input[placeholder="请输入品牌名称搜索"]');
+        if(inp){ inp.scrollIntoView({block:'center'}); inp.click(); inp.focus(); }
+        return 'ok';
+      })()`);
+      await sleep(2000);
       const _pick = await ev(c, `(()=>{
-        const e=[...document.querySelectorAll('*')].find(e=>e.children.length===0&&(e.textContent||'').trim()==='品牌可用');
-        if(!e) return 'no 品牌可用';
-        e.scrollIntoView({block:'center'});
-        e.click();
+        const li=[...document.querySelectorAll('li[role="option"]')].find(li=>(li.textContent||'').includes('OSHIYI')||(li.textContent||'').includes('欧世艺'));
+        if(!li) return 'no option';
+        li.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,view:window}));
         return 'clicked';
       })()`);
       if(_pick==='clicked'){
-        await sleep(2000);
+        await sleep(1500);
         log('  品牌已选');
       } else {
-        log('  ⚠️ 品牌选择失败:', _pick);
+        log('  ⚠️ 品牌选项:', _pick);
       }
     }
 
