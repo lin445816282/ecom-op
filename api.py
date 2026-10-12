@@ -3720,12 +3720,15 @@ def _taobao_publish(config_wsl: str, task_id: int, shop_id: int, pricing: dict =
     import subprocess
     catalog.update_autopublish_task(task_id, status="publishing", stage="publish")
     catalog.append_autopublish_log(task_id, "publish", "running", "淘宝 AI 以图发品 + V2 填表…")
-    script_wsl = os.path.join(AUTOPUBLISH_DIR_WSL, "taobao_publish.py")
-    cdp_url = os.environ.get("TAOBAO_CDP_URL", f"http://{_wsl_host_ip()}:{TAOBAO_CDP_PORT}")
+    # 淘宝 CDP(9222) 在 Windows 侧，WSL 访问宿主 IP 会 hang（防火墙/NAT 阻断），
+    # 且 skill 验证 Windows 侧 Python 直连 127.0.0.1:9222 最稳定 → 用 Windows Python 跑执行器。
+    script_win = AUTOPUBLISH_DIR_WIN + "\\taobao_publish.py"
+    config_win = config_wsl.replace("/mnt/c/", "C:\\").replace("/mnt/d/", "D:\\").replace("/", "\\")
+    cdp_url = os.environ.get("TAOBAO_CDP_URL", f"http://127.0.0.1:{TAOBAO_CDP_PORT}")
     try:
         res = subprocess.run(
-            [sys.executable, script_wsl, config_wsl, cdp_url],
-            capture_output=True, text=True, timeout=600,
+            ["cmd.exe", "/c", "python", script_win, config_win, cdp_url],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=600,
         )
         stdout = (res.stdout or "")
         stderr = (res.stderr or "")

@@ -23,6 +23,15 @@ import time
 import shutil
 from urllib.request import Request, urlopen
 
+# Windows 侧跑时 stdout 默认 GBK，含中文 print 会 UnicodeEncodeError 或乱码。
+# 重定向到 UTF-8，让 subprocess 侧（text=True, encoding=utf-8）能正确解码。
+try:
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 try:
     import websocket  # websocket-client，suppress_origin=True 是连淘宝 Edge 的唯一可靠方式
 except ImportError:
@@ -49,7 +58,9 @@ def cdp_req(url, method="GET"):
 
 
 def ws_connect(tab):
-    """连接指定 tab 的 WebSocket，返回 (ws, send, recv_any, evaluate)。"""
+    """连接指定 tab 的 WebSocket，返回 (ws, send, recv, evaluate)。
+    send 返回消息 id；recv(mid) 只匹配该 id 的响应，跳过无 id 事件和其他 id 响应（乱序/堆积）。
+    这样 enable 产生的响应、键盘事件响应都不会错位到后续 recv。"""
     ws_url = tab["webSocketDebuggerUrl"]
     ws = websocket.create_connection(ws_url, timeout=15, suppress_origin=True)
     _mid = [0]
@@ -59,16 +70,14 @@ def ws_connect(tab):
         ws.send(json.dumps({"id": _mid[0], "method": method, "params": params or {}}))
         return _mid[0]
 
-    def recv_any(timeout=15):
-        """稳健 recv：跳过 CDP 事件（无 id 消息），只返回带 id 的响应。
-        淘宝 V2 页面 DOM 极重，enable 触发事件洪流会挤占响应通道导致永久超时，
-        故全程不调 enable，直接用 recv_any 过滤。"""
+    def recv(mid, timeout=15):
+        """匹配指定 mid 的响应；跳过无 id 事件和其他 id 响应。"""
         ws.settimeout(timeout)
         dl = time.time() + timeout
         while time.time() < dl:
             try:
                 m = json.loads(ws.recv())
-                if "id" in m:
+                if m.get("id") == mid:
                     return m
             except Exception:
                 if time.time() > dl - 0.5:
@@ -77,14 +86,13 @@ def ws_connect(tab):
         return None
 
     def evaluate(expr):
-        """执行 JS 并取回 returnByValue 结果。"""
         mid = send("Runtime.evaluate", {"expression": expr, "returnByValue": True})
-        r = recv_any()
+        r = recv(mid)
         if not r:
             return None
         return r.get("result", {}).get("result", {}).get("value")
 
-    return ws, send, recv_any, evaluate
+    return ws, send, recv, evaluate
 
 
 def tab_cleanup(keep_url_frags=("myseller", "about:blank", "upload.taobao", "publish.htm")):
@@ -109,8 +117,13 @@ def tab_cleanup(keep_url_frags=("myseller", "about:blank", "upload.taobao", "pub
 
 
 # ---------------- 工具函数 ----------------
+IS_WINDOWS = sys.platform == "win32"
+
+
 def _to_wsl_path(p):
-    """Windows 路径 → WSL 路径（给 PIL 读）。C:\\tmp\\x → /mnt/c/tmp/x"""
+    """Windows 路径 → WSL 路径（给 WSL 侧 PIL 读）。Windows 侧直接返回原路径。"""
+    if IS_WINDOWS:
+        return p
     p = str(p).replace("\\", "/")
     if p.startswith("C:/"):
         return "/mnt/c/" + p[3:]
@@ -120,7 +133,9 @@ def _to_wsl_path(p):
 
 
 def _to_win_path(p):
-    """WSL 路径 → Windows 路径（给 CDP setFileInputFiles）。/mnt/c/tmp/x → C:/tmp/x"""
+    """WSL 路径 → Windows 路径（给 CDP setFileInputFiles）。Windows 侧直接返回原路径。"""
+    if IS_WINDOWS:
+        return p
     p = str(p)
     if p.startswith("/mnt/c/"):
         return "C:/" + p[len("/mnt/c/"):]
@@ -131,24 +146,24 @@ def _to_win_path(p):
 
 def preprocess_images(config, outdir):
     """主图预处理：WebP 伪装 JPG 需转真 JPG（1688 常见坑），统一转 JPG。
-    config.images 是 Windows 路径（scrape.js 在 Windows 侧下载），
-    需先转 WSL 路径给 PIL 读，再转回 Windows 路径给 CDP。"""
+    config.images 是 Windows 路径（scrape.js 在 Windows 侧下载）。
+    WSL 侧跑需转 WSL 路径给 PIL 读；Windows 侧跑直接用 Windows 路径。"""
     from PIL import Image
     images = config.get("images") or []
     out = []
     for i, src in enumerate(images):
         if not src:
             continue
-        src_wsl = _to_wsl_path(src)
+        src_read = _to_wsl_path(src)
         dst = os.path.join(outdir, f"tb_img{i + 1}.jpg")
         try:
-            img = Image.open(src_wsl)
+            img = Image.open(src_read)
             if img.mode in ("RGBA", "P"):
                 img = img.convert("RGB")
             img.save(dst, "JPEG", quality=95)
             out.append(_to_win_path(dst))
         except Exception as e:
-            # 转换失败（图不存在/损坏）就沿用原 Windows 路径，CDP 可能仍能注入
+            # 转换失败（图不存在/损坏）就沿用原路径，CDP 可能仍能注入
             log(f"图片 {i + 1} 预处理失败（沿用原图）：{e}")
             out.append(_to_win_path(src))
     return out[:10]  # 淘宝主图最多 10 张，但 AI 以图发品通常 5 张
@@ -244,35 +259,49 @@ def ai_publish(images_win):
     if not base_tab:
         log("无已登录 myseller tab，无法 AI 发品")
         return None
-    ws, send, recv_any, evaluate = ws_connect(base_tab)
+    ws, send, recv, evaluate = ws_connect(base_tab)
 
     try:
+        # 先 enable（AI 发品页需要；V2 表单页才跳过 enable）
+        send("Runtime.enable"); send("DOM.enable"); send("Page.enable")
         # navigate 到 AI 发品页（从已登录 tab → 旧版页面）
-        send("Page.navigate", {"url": "https://item.upload.taobao.com/sell/ai/category.htm"})
-        time.sleep(5)
+        _mid = send("Page.navigate", {"url": "https://item.upload.taobao.com/sell/ai/category.htm"})
+        recv(_mid)
+        time.sleep(8)
         title = evaluate("document.title") or ""
-        log(f"AI 发品页：{title}")
+        url_now = evaluate("window.location.href") or ""
+        log(f"AI 发品页：title={title!r} url={url_now[:60]}")
         if "登录" in title:
             log("未登录，中止 AI 发品")
             return None
 
+        # 步骤1：点击「以图发品」卡片的「开启」按钮（category.htm 现在是发品入口，两个卡片各有开启按钮）
+        _r = evaluate('(function(){var all=document.querySelectorAll("button,a,div,span");for(var i=0;i<all.length;i++){var t=(all[i].textContent||"").trim();if(t==="开启"){var p=all[i].parentElement;var pt="";for(var up=0;up<5&&p;up++){pt=(p.textContent||"");if(pt.indexOf("以图发品")>=0)break;p=p.parentElement;}if(pt.indexOf("以图发品")>=0){all[i].click();all[i].dispatchEvent(new MouseEvent("click",{bubbles:true}));return "clicked-open";}}}return "nf";})()')
+        log(f"点「以图发品·开启」：{_r}")
+        time.sleep(3)
+
+        # 步骤2：点击「以图发品」tab（进入发品界面后默认「搜索发品」，切到以图发品才渲染图片上传区+file input）
+        _r2 = evaluate('(function(){var all=document.querySelectorAll("*");for(var i=0;i<all.length;i++){var t=(all[i].textContent||"").trim();if(t==="以图发品"&&all[i].children.length===0){all[i].click();all[i].dispatchEvent(new MouseEvent("click",{bubbles:true}));return "clicked-tab";}}return "nf";})()')
+        log(f"点「以图发品」tab：{_r2}")
+        time.sleep(3)
+
         # 零点击注入：dispatch mouseenter 激活上传区（不触发文件弹框）
-        evaluate("(function(){var z=document.querySelector('.upload-wrapper')||document.querySelector('[class*=\"upload\"]')||document.querySelector('.image-upload')||document.body;z.dispatchEvent(new MouseEvent('mouseenter',{bubbles:true}));return 'ok';})()")
+        evaluate("(function(){var z=document.querySelector('.upload-wrapper')||document.querySelector('[class*=\\\\\\\"upload\\\\\\\"]')||document.querySelector('.image-upload')||document.body;z.dispatchEvent(new MouseEvent('mouseenter',{bubbles:true}));return 'ok';})()")
         time.sleep(0.5)
 
         # 定位隐藏 file input（depth:-1 或 5）
-        send("DOM.getDocument", {"depth": -1})
-        doc = recv_any()
-        if not doc:
+        _mid = send("DOM.getDocument", {"depth": -1})
+        doc = recv(_mid)
+        if not doc or "root" not in (doc.get("result") or {}):
             # 大 DOM 下 depth:-1 可能失败，退 depth:5
-            send("DOM.getDocument", {"depth": 5})
-            doc = recv_any()
-        if not doc or "result" not in doc:
-            log("DOM.getDocument 失败，AI 发品中止")
+            _mid = send("DOM.getDocument", {"depth": 5})
+            doc = recv(_mid)
+        if not doc or "root" not in (doc.get("result") or {}):
+            log(f"DOM.getDocument 失败：{json.dumps(doc)[:150] if doc else 'None'}")
             return None
         root = doc["result"]["root"]["nodeId"]
-        send("DOM.querySelectorAll", {"nodeId": root, "selector": "input[type=file]"})
-        qs = recv_any()
+        _mid = send("DOM.querySelectorAll", {"nodeId": root, "selector": "input[type=file]"})
+        qs = recv(_mid)
         node_ids = (qs or {}).get("result", {}).get("nodeIds", [])
         log(f"file input 数：{len(node_ids)}")
         if not node_ids:
@@ -286,8 +315,13 @@ def ai_publish(images_win):
         time.sleep(6)
         log(f"已注入 {len(images_win)} 张主图")
 
-        # N1：点击「下一步」（含「确认，下一步」变体）
-        n1 = evaluate(_js_btn_click("下一步"))
+        # N1：轮询等待「确认，下一步」按钮 enabled（图片上传+AI识别需时间，最多约 40s）
+        n1 = "nf"
+        for _wi in range(20):
+            time.sleep(2)
+            n1 = evaluate(_js_btn_click("下一步"))
+            if n1 == "ok":
+                break
         log(f"N1: {n1}")
         if n1 != "ok":
             return None
@@ -423,7 +457,7 @@ def fill_v2_main_price(evaluate, price):
 
 
 # ---------------- 第 5 步：SKU 抽屉 ----------------
-def fill_sku_drawer(evaluate, send, recv_any, skus):
+def fill_sku_drawer(evaluate, send, recv, skus):
     """SKU 抽屉：单层自定义模式 + CDP 键盘法（Ctrl+A→Backspace→insertText→Tab→+）。
     skill 验证：nativeSetter 对中文 SKU 名无效，CDP insertText 8/8 一次过。"""
     # 关闭可能弹出的批量导入弹窗
@@ -564,9 +598,9 @@ def verify_form(evaluate):
             var fe=(gs&&gs.engine&&gs.engine.getModels)?gs.engine.getModels().formError:{};
             r.formError=JSON.stringify(fe||{});
         }catch(e){r.formError='n/a';}
-        // 第三层：body 报错文本
+        // 第三层：body 报错文本（真正错误是「错误 (N)」格式，skill v2-form-verify 验证）
         var b=document.body.innerText||'';
-        r.bodyErr=(b.indexOf('填写错误')>=0||b.indexOf('必填')>=0||b.indexOf('请填写')>=0)?'HAS_ERROR':'';
+        r.bodyErr=/错误\\s*\\(?\\d/.test(b)?'HAS_ERROR':'';
         return JSON.stringify(r);
     })()
     """
@@ -630,7 +664,7 @@ def main():
         sys.exit(1)
 
     # 重连 V2 tab（AI 发品后同一 tab，但需重新握手）
-    ws, send, recv_any, evaluate = ws_connect(v2_tab)
+    ws, send, recv, evaluate = ws_connect(v2_tab)
     try:
         # 第 1 步：GS 注入（多件优惠 + 重量）—— 必须最先（GS 会清 DOM 值，skill「GS→DOM」硬顺序）
         weight = config.get("logisticsWeight") or 1.0
@@ -644,7 +678,7 @@ def main():
         fill_v2_main_price(evaluate, main_price)
         time.sleep(1)
         # 第 4 步：SKU 抽屉
-        fill_sku_drawer(evaluate, send, recv_any, skus)
+        fill_sku_drawer(evaluate, send, recv, skus)
         time.sleep(1)
         # 第 5 步：价格/库存
         fill_sku_price_stock(evaluate, skus)
