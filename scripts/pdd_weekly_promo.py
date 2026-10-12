@@ -57,7 +57,12 @@ def fetch_report(port, start, end):
         )
         out = (r.stdout or "").strip()
         if r.returncode != 0:
-            return {"err": f"node 失败: {(r.stderr or '')[:200]}"}
+            if out.startswith("{"):
+                try:
+                    return json.loads(out)
+                except Exception:
+                    pass
+            return {"err": f"node 失败: {(r.stderr or out or '')[:200]}"}
         return json.loads(out)
     except subprocess.TimeoutExpired:
         return {"err": "采集超时（90s）"}

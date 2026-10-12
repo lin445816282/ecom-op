@@ -271,6 +271,22 @@ tbody tr:last-child td { border-bottom: 0; }
 .btn.sm { padding: 7px 11px; font-size: 12px; border-radius: 8px; }
 .btn.xs { padding: 4px 8px; font-size: 11px; border-radius: 7px; }
 
+/* 新品专区「一键上架选中」主操作按钮：渐变 + 图标 + 圆角阴影，更醒目大方 */
+.newoffer-publish-btn {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 10px 22px; font-size: 14px; font-weight: 700; color: #fff;
+  background: linear-gradient(135deg, #2563eb 0%, #7c3aed 100%);
+  border: none; border-radius: 12px; cursor: pointer;
+  box-shadow: 0 6px 18px -4px rgba(79, 70, 229, .55), 0 2px 6px rgba(79, 70, 229, .3);
+  transition: .2s;
+}
+.newoffer-publish-btn:hover {
+  transform: translateY(-2px); filter: brightness(1.06);
+  box-shadow: 0 10px 24px -6px rgba(79, 70, 229, .65);
+}
+.newoffer-publish-btn:active { transform: translateY(0); box-shadow: 0 4px 12px -4px rgba(79, 70, 229, .5); }
+.newoffer-publish-btn:disabled { opacity: .55; cursor: not-allowed; transform: none; filter: none; }
+
 .mod-badge {
   display: inline-block; min-width: 17px; height: 17px; line-height: 17px; padding: 0 5px;
   border-radius: 9px; background: #ef4444; color: #fff; font-size: 10px; font-weight: 700;
@@ -755,6 +771,11 @@ textarea { min-height: 72px; resize: vertical; }
 .ap-task-repub { padding: 4px 12px; font-size: 12px; background: #2563eb; color: #fff; border: none; border-radius: 6px; cursor: pointer; white-space: nowrap; }
 .ap-task-progress { background: #e0f2fe; color: #0369a1; border-radius: 6px; padding: 3px 8px; font-size: 11px; font-weight: 600; white-space: nowrap; }
 .ap-task-gid { font-size: 12px; color: #16a34a; white-space: nowrap; }
+.ap-task-copy { padding: 4px 10px; font-size: 12px; background: #f0f9ff; color: #0369a1; border: 1px solid #bae6fd; border-radius: 6px; cursor: pointer; white-space: nowrap; }
+.ap-task-copy:hover { background: #e0f2fe; }
+.ap-task-linkdead { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; border-radius: 6px; padding: 3px 8px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+.ap-task-del { padding: 4px 10px; font-size: 12px; background: #fff; color: #dc2626; border: 1px solid #fecaca; border-radius: 6px; cursor: pointer; white-space: nowrap; }
+.ap-task-del:hover { background: #fef2f2; }
 .ap-task-time { color: #94a3b8; font-size: 12px; white-space: nowrap; }
 
 /* 历史任务列表：手机端自适应 */
@@ -763,10 +784,31 @@ textarea { min-height: 72px; resize: vertical; }
   .ap-task-check { order: 0; }
   .ap-task-id { order: 1; }
   .ap-task-status { order: 2; margin-left: auto; }
-  .ap-task-main { flex: 1 1 100%; order: 3; }
-  .ap-task-repub { order: 4; }
-  .ap-task-progress { order: 5; }
-  .ap-task-gid { order: 6; }
-  .ap-task-time { order: 7; margin-left: auto; }
+  .ap-task-linkdead { order: 3; }
+  .ap-task-main { flex: 1 1 100%; order: 4; }
+  .ap-task-repub { order: 5; }
+  .ap-task-progress { order: 6; }
+  .ap-task-gid { order: 7; }
+  .ap-task-copy { order: 8; }
+  .ap-task-del { order: 9; }
+  .ap-task-time { order: 10; margin-left: auto; }
+}
+
+/* 自动自愈面板统计卡 */
+.selfheal-stat { flex: 1; min-width: 90px; border-radius: 10px; padding: 12px 14px; text-align: center; }
+.selfheal-stat .num { font-size: 22px; font-weight: 800; line-height: 1.1; }
+.selfheal-stat .lbl { font-size: 11px; color: #64748b; margin-top: 4px; font-weight: 600; }
+
+/* 采集按钮加载动画（转圈 spinner，用于全量商品采集等耗时操作） */
+@keyframes offerlist-spin { to { transform: rotate(360deg); } }
+.btn-spinner {
+  display: inline-block;
+  width: 13px; height: 13px;
+  border: 2px solid rgba(255,255,255,.45);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: offerlist-spin .7s linear infinite;
+  vertical-align: -2px;
+  margin-right: 6px;
 }
 

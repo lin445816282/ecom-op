@@ -778,6 +778,11 @@ class Handler(BaseHTTPRequestHandler):
             )
             return _json(self, {"items": rows})
 
+        if path == "/api/catalog/promo-daily-bill-monthly" and self.command == "GET":
+            shop_id = qs.get("shop_id", [None])[0]
+            rows = catalog.query_promo_daily_bill_monthly(int(shop_id) if shop_id else None)
+            return _json(self, {"items": rows})
+
         if path == "/api/hook-cost" and self.command == "GET":
             n = int(qs.get("n", ["1"])[0] or 1)
             return _json(self, catalog.calc_hook_cost(n))
@@ -1446,6 +1451,47 @@ class Handler(BaseHTTPRequestHandler):
             updated = catalog.update_autopublish_pricing(item, mode)
             return _json(self, {"ok": True, "updated": updated, "mode": mode})
 
+        if path == "/api/autopublish/settings" and self.command == "GET":
+            return _json(self, catalog.get_autopublish_settings())
+
+        if path == "/api/autopublish/settings" and self.command == "POST":
+            item = self._read_body()
+            updated = catalog.update_autopublish_settings(item)
+            return _json(self, {"ok": True, "updated": updated})
+
+        if path == "/api/autopublish/stopall" and self.command == "POST":
+            res = catalog.stop_all_autopublish()
+            return _json(self, {"ok": True, **res})
+
+        if path == "/api/autopublish/batch-run" and self.command == "POST":
+            item = self._read_body()
+            try:
+                start_id = int(item.get("start_id") or 0)
+            except (TypeError, ValueError):
+                start_id = 0
+            try:
+                batch_size = int(item.get("batch_size") or 5)
+            except (TypeError, ValueError):
+                batch_size = 5
+            batch_size = max(1, min(50, batch_size))
+            with _AP_BATCH["lock"]:
+                _AP_BATCH["enabled"] = True
+                _AP_BATCH["min_id"] = start_id
+                _AP_BATCH["batch_size"] = batch_size
+                _AP_BATCH["active_ids"] = []
+            return _json(self, {"ok": True, "start_id": start_id, "batch_size": batch_size,
+                                "message": f"已启动分批执行：从 {start_id} 起每 {batch_size} 个一组"})
+
+        if path == "/api/autopublish/batch-status" and self.command == "GET":
+            with _AP_BATCH["lock"]:
+                enabled = _AP_BATCH["enabled"]
+                active = list(_AP_BATCH["active_ids"])
+                min_id = _AP_BATCH["min_id"]
+                size = _AP_BATCH["batch_size"]
+            summary = catalog.get_stopped_batch_summary(min_id) if enabled else {"remaining": 0, "next": []}
+            return _json(self, {"enabled": enabled, "active": active, "min_id": min_id,
+                                "batch_size": size, **summary})
+
         if path == "/api/autopublish" and self.command == "POST":
             import threading
             item = self._read_body()
@@ -1463,7 +1509,7 @@ class Handler(BaseHTTPRequestHandler):
                     return _json(self, {"ok": True, "duplicate": True, "duplicates": dups,
                                         "message": "该商品已在本店上传过"})
             operator = (self._current_user(qs) or {}).get("name") or ""
-            task = catalog.create_autopublish_task(url, shop_id, operator, pricing.get("price_mode", "promo"))
+            task = catalog.create_autopublish_task(url, shop_id, operator, pricing.get("price_mode", "promo"), pricing)
             _enqueue_autopublish(task["id"], task["shop_id"], pricing)
             return _json(self, {"ok": True, "task": task})
 
@@ -1509,7 +1555,7 @@ class Handler(BaseHTTPRequestHandler):
             tasks = []
             for u in urls:
                 for sid in shop_ids:
-                    t = catalog.create_autopublish_task(u, sid, operator, pricing.get("price_mode", "promo"))
+                    t = catalog.create_autopublish_task(u, sid, operator, pricing.get("price_mode", "promo"), pricing)
                     tasks.append(t)
                     _enqueue_autopublish(t["id"], t["shop_id"], pricing)
             return _json(self, {"ok": True, "tasks": tasks, "count": len(tasks),
@@ -1559,6 +1605,16 @@ class Handler(BaseHTTPRequestHandler):
             return _json(self, {"ok": True, "verified": verified, "changed": changed,
                                 "statuses": statuses})
 
+        if path.startswith("/api/autopublish/") and self.command == "DELETE":
+            # 删除上架任务（清理链接失效等无效任务）
+            try:
+                task_id = int(path.rsplit("/", 1)[-1])
+            except ValueError:
+                return _json(self, {"error": "非法 id"}, 400)
+            if not catalog.delete_autopublish_task(task_id):
+                return _json(self, {"error": "任务不存在"}, 404)
+            return _json(self, {"ok": True})
+
         if path.startswith("/api/autopublish/") and path.endswith("/republish") and self.command == "POST":
             # 历史失败/草稿任务一键重新上架：先回查该商品是否已在售（避免重复上架），未上架才重跑全流程
             import threading
@@ -1595,7 +1651,16 @@ class Handler(BaseHTTPRequestHandler):
             # 2. 重置任务并完整重跑（scrape→ai→publish，新类目映射自动生效）
             catalog.update_autopublish_task(task_id, status="queued", stage="", error="")
             catalog.append_autopublish_log(task_id, "scrape", "running", "🔄 手动重新上架：开始完整重跑…")
-            _enqueue_autopublish(task_id, shop_id, None)
+            # 恢复首次上架时的定价参数（利润率/运费/投产比/物流重量等），重新上架与首次上架定价一致；
+            # 老任务无 pricing_json 则回退 None，物流重量由兜底默认 1kg 保证。
+            _pricing = None
+            try:
+                _pj = (task.get("pricing_json") or "").strip()
+                if _pj:
+                    _pricing = json.loads(_pj)
+            except Exception:
+                _pricing = None
+            _enqueue_autopublish(task_id, shop_id, _pricing)
             return _json(self, {"ok": True, "already": False,
                                 "task": catalog.get_autopublish_task(task_id),
                                 "message": "已启动重新上架"})
@@ -1622,8 +1687,11 @@ class Handler(BaseHTTPRequestHandler):
                 supplier_id = int(item.get("supplier_id") or 0)
             except (TypeError, ValueError):
                 supplier_id = 0
-            if not supplier_id:
-                return _json(self, {"error": "缺少 supplier_id"}, 400)
+            # supplier_id=0 表示采集全部供应商（前端「全部」选项）
+            if supplier_id == 0:
+                r = _newoffer_collect_all()
+                return _json(self, {"ok": True, "all": True, "inserted": r["inserted"],
+                                    "skipped": r["skipped"], "results": r["results"]})
             sup = catalog.get_supplier(supplier_id)
             if not sup:
                 return _json(self, {"error": "供应商不存在"}, 404)
@@ -1641,6 +1709,117 @@ class Handler(BaseHTTPRequestHandler):
             save = catalog.insert_newoffer_items(supplier_id, sup.get("name") or "", prefix, items)
             return _json(self, {"ok": True, "supplier": sup, "items": items, "count": len(items),
                                 "inserted": save.get("inserted", 0), "skipped": save.get("skipped", 0)})
+
+        if path == "/api/offerlist/suppliers" and self.command == "GET":
+            # 返回有 prefix（1688 店铺前缀）的供应商，供「全量商品采集」下拉选择
+            sups = [s for s in catalog.list_suppliers() if (s.get("prefix") or "").strip()]
+            return _json(self, {"suppliers": sups})
+
+        if path == "/api/offerlist/collect" and self.command == "POST":
+            # 按供应商前缀采集 1688 店铺全量商品（offerlist.htm 翻页）
+            item = self._read_body()
+            try:
+                supplier_id = int(item.get("supplier_id") or 0)
+            except (TypeError, ValueError):
+                supplier_id = 0
+            if not supplier_id:
+                return _json(self, {"error": "缺少 supplier_id"}, 400)
+            sup = catalog.get_supplier(supplier_id)
+            if not sup:
+                return _json(self, {"error": "供应商不存在"}, 404)
+            prefix = (sup.get("prefix") or "").strip()
+            if not prefix:
+                return _json(self, {"error": "该供应商未记录店铺前缀，无法定位全量商品"}, 400)
+            outdir_win = "C:\\tmp\\pdd-publish\\offerlist"
+            outdir_wsl = "/mnt/c/tmp/pdd-publish/offerlist"
+            os.makedirs(outdir_wsl, exist_ok=True)
+            res = _run_node_script("fetch_offerlist.js", [prefix, outdir_win, str(CLIENT_1688_PORT)], timeout=300)
+            if not res.get("data"):
+                return _json(self, {"error": res.get("error") or res.get("stderr") or "采集失败"}, 500)
+            items = res["data"].get("items") or []
+            save = catalog.insert_shop_offers(supplier_id, sup.get("name") or "", prefix, items)
+            return _json(self, {"ok": True, "supplier": sup, "count": len(items),
+                                "inserted": save.get("inserted", 0), "skipped": save.get("skipped", 0)})
+
+        if path == "/api/offerlist/list" and self.command == "GET":
+            supplier_id = int(qs.get("supplier_id", ["0"])[0] or 0)
+            status = (qs.get("status", [""])[0] or "").strip() or None
+            q = (qs.get("q", [""])[0] or "").strip() or None
+            try:
+                page = max(1, int(qs.get("page", ["1"])[0] or 1))
+            except (TypeError, ValueError):
+                page = 1
+            try:
+                page_size = min(200, max(1, int(qs.get("page_size", ["50"])[0] or 50)))
+            except (TypeError, ValueError):
+                page_size = 50
+            res = catalog.list_shop_offers(supplier_id or None, status, q, page, page_size)
+            return _json(self, res)
+
+        if path == "/api/offerlist/publish" and self.command == "POST":
+            # 选中全量商品 → 一键上架（创建 autopublish 任务，成功后自动回填主图/商品信息）
+            item = self._read_body()
+            ids = item.get("ids") or []
+            if isinstance(ids, (int, str)):
+                ids = [int(ids)]
+            else:
+                ids = [int(x) for x in ids if str(x).isdigit()]
+            shop_ids = item.get("shop_ids") or []
+            if isinstance(shop_ids, (int, str)):
+                shop_ids = [int(shop_ids)]
+            else:
+                shop_ids = [int(s) for s in shop_ids if str(s).isdigit()]
+            if not shop_ids:
+                shop_ids = [5]
+            if not ids:
+                return _json(self, {"error": "缺少 ids"}, 400)
+            force = bool(item.get("force"))
+            pricing = item.get("pricing") or {}
+            items_map = {}
+            for nid in ids:
+                it = catalog.get_shop_offer(nid)
+                if it and it.get("offer_url"):
+                    items_map[nid] = it
+            if not force:
+                dups = []
+                for nid, it in items_map.items():
+                    oid = str(it.get("offer_id") or "").strip()
+                    for sid in shop_ids:
+                        for x in catalog.find_duplicate_publishes(it["offer_url"], sid, oid):
+                            dups.append({"item_id": nid, "title": it.get("title") or "", "shop_id": sid, **x})
+                if dups:
+                    return _json(self, {"ok": True, "duplicate": True, "duplicates": dups,
+                                        "dup_count": len(dups), "message": "部分商品已在本店上传过"})
+            operator = (self._current_user(qs) or {}).get("name") or ""
+            created = []
+            skipped_published = 0
+            for nid in ids:
+                it = items_map.get(nid)
+                if not it:
+                    continue
+                first_task = None
+                for sid in shop_ids:
+                    t = catalog.create_autopublish_task(it["offer_url"], sid, operator, pricing.get("price_mode", "promo"), pricing)
+                    _enqueue_autopublish(t["id"], t["shop_id"], pricing)
+                    created.append(t["id"])
+                    if first_task is None:
+                        first_task = t["id"]
+                catalog.set_shop_offer_status(it["id"], "publishing", first_task)
+            return _json(self, {"ok": True, "tasks": created, "count": len(created),
+                                "skipped_published": skipped_published})
+
+        if path == "/api/offerlist/delete" and self.command == "POST":
+            # 删除选中的全量商品（单个或多个 id）
+            item = self._read_body()
+            ids = item.get("ids") or []
+            if isinstance(ids, (int, str)):
+                ids = [int(ids)]
+            else:
+                ids = [int(x) for x in ids if str(x).isdigit()]
+            if not ids:
+                return _json(self, {"error": "缺少 ids"}, 400)
+            n = catalog.delete_shop_offers(ids)
+            return _json(self, {"ok": True, "deleted": n})
 
         if path == "/api/newoffer/list" and self.command == "GET":
             supplier_id = int(qs.get("supplier_id", ["0"])[0] or 0)
@@ -1707,6 +1886,7 @@ class Handler(BaseHTTPRequestHandler):
             if not ids:
                 return _json(self, {"error": "缺少 ids"}, 400)
             force = bool(item.get("force"))
+            pricing = item.get("pricing") or {}
             # 先收集有效商品（offer_url 即 source_url，供查重 + 后续建任务复用）
             items_map = {}
             for nid in ids:
@@ -1731,13 +1911,10 @@ class Handler(BaseHTTPRequestHandler):
                 it = items_map.get(nid)
                 if not it:
                     continue
-                if it.get("status") == "published":
-                    skipped_published += 1
-                    continue
                 first_task = None
                 for sid in shop_ids:
-                    t = catalog.create_autopublish_task(it["offer_url"], sid, operator, "promo")
-                    _enqueue_autopublish(t["id"], t["shop_id"], None)
+                    t = catalog.create_autopublish_task(it["offer_url"], sid, operator, pricing.get("price_mode", "promo"), pricing)
+                    _enqueue_autopublish(t["id"], t["shop_id"], pricing)
                     created.append(t["id"])
                     if first_task is None:
                         first_task = t["id"]
@@ -1760,6 +1937,20 @@ class Handler(BaseHTTPRequestHandler):
                 if it.get("status") == "publishing":
                     it["publish_progress"] = _read_publish_progress(it["id"])
             return _json(self, {"items": items, "total": result["total"], "page": page, "page_size": page_size})
+
+        if path == "/api/autopublish/selfheal" and self.command == "GET":
+            # 自动重试自愈面板：聚合统计 + 明细（触发过自动重试的任务）
+            return _json(self, catalog.get_selfheal_stats())
+
+        if path == "/api/autopublish/queue" and self.command == "GET":
+            # 执行队列卡片：正在执行 + 后续排队前 3 条；附带上单个商品超时时间（前端算倒计时）
+            data = catalog.get_autopublish_queue()
+            try:
+                _s = catalog.get_autopublish_settings()
+                data["timeout"] = int(float(_s.get("timeout", 480)))
+            except Exception:
+                data["timeout"] = 480
+            return _json(self, data)
 
         if path.startswith("/api/autopublish/") and self.command == "GET":
             try:
@@ -2513,7 +2704,12 @@ def _normalize_publish_images(outdir_wsl: str) -> int:
     import glob
     from PIL import Image
     n = 0
-    for p in glob.glob(os.path.join(outdir_wsl, "img_*.jpg")):
+    _img_files = (
+        glob.glob(os.path.join(outdir_wsl, "img_*.jpg"))
+        + glob.glob(os.path.join(outdir_wsl, "sku_*.jpg"))
+        + glob.glob(os.path.join(outdir_wsl, "detail_*.jpg"))
+    )
+    for p in _img_files:
         try:
             im = Image.open(p)
             w, h = im.size
@@ -2666,6 +2862,10 @@ def _resolve_1688_offer_id(url: str) -> str:
 
 # 批量上架并发控制：scrape 全局串行（1688 抓取实例端口 9238 共享），publish 按店铺串行（店铺 CDP 端口独立）
 _SCRAPE_LOCK = threading.Lock()
+# 1688 抓取间隔冷却：批量上架连续抓取详情页会触发 x5sec 反爬风控（滑块验证码），
+# 记录上次抓取结束时间，下次抓取前补足到 ≥10s 间隔（复用缓存不访问 1688，不受影响）。
+_LAST_SCRAPE_TS = 0.0
+_SCRAPE_GAP = 10.0
 _SHOP_LOCKS = {}
 
 # 店铺级任务队列：每店铺同时最多 1 个上架任务。
@@ -2685,6 +2885,11 @@ def _shop_worker(shop_id):
             break
         task_id, pricing = item
         try:
+            # 全量停止后，队列里残留的 stopped 任务在这里被跳过（不真正执行）
+            _t = catalog.get_autopublish_task(task_id)
+            if _t.get("status") == "stopped":
+                q.task_done()
+                continue
             _autopublish_bg(task_id, pricing)
         except Exception:
             pass
@@ -2700,6 +2905,97 @@ def _enqueue_autopublish(task_id, shop_id, pricing):
             _SHOP_QUEUES[shop_id] = q
             threading.Thread(target=_shop_worker, args=(shop_id,), daemon=True).start()
     q.put((task_id, pricing))
+
+
+# 分批执行调度：全量停止后，从指定 ID 起每 batch_size 个一组，一组全部终态后自动开启下一组。
+_AP_BATCH = {
+    "enabled": False,
+    "min_id": 0,
+    "batch_size": 5,
+    "active_ids": [],      # 当前批次活跃任务 id（进行态）
+    "lock": threading.Lock(),
+}
+
+
+def _ap_batch_worker():
+    """分批执行守护线程：监控当前批次是否全部进入终态，是则取下一批 stopped 任务入队。"""
+    while True:
+        time.sleep(10)
+        try:
+            with _AP_BATCH["lock"]:
+                if not _AP_BATCH["enabled"]:
+                    continue
+                # 当前批次全部终态后，才开下一批
+                if _AP_BATCH["active_ids"]:
+                    left = catalog.count_nonterminal_autopublish(_AP_BATCH["active_ids"])
+                    if left > 0:
+                        continue
+                _AP_BATCH["active_ids"] = []
+                # 取下一批 stopped 任务（id 升序，>=min_id），改 queued 后入队
+                batch = catalog.claim_stopped_batch(_AP_BATCH["min_id"], _AP_BATCH["batch_size"])
+                if not batch:
+                    _AP_BATCH["enabled"] = False
+                    continue
+                for t in batch:
+                    pricing = None
+                    try:
+                        _pj = (t.get("pricing_json") or "").strip()
+                        if _pj:
+                            pricing = json.loads(_pj)
+                    except Exception:
+                        pricing = None
+                    _enqueue_autopublish(t["id"], t["shop_id"], pricing)
+                _AP_BATCH["active_ids"] = [t["id"] for t in batch]
+        except Exception:
+            pass
+
+
+def _ap_orphan_recover_loop():
+    """孤儿中间态任务回收守护线程：周期性扫描并回收卡死的 crawling/ai/publishing/queued 任务。
+
+    后端进程中断/重启后，正在执行的任务会永远卡在中间态（无 worker 续跑），
+    导致「执行队列」卡片一直显示「即将超时」。这里每 60s 回收一次超 2 倍单商品超时
+    仍未推进的任务，标记 failed，让队列恢复干净。
+    """
+    import time as _time
+    while True:
+        try:
+            _s = catalog.get_autopublish_settings()
+            _timeout = int(float(_s.get("timeout", 480)))
+        except Exception:
+            _timeout = 480
+        try:
+            _n = catalog.recover_orphan_autopublish(_timeout * 2)
+            if _n:
+                print(f"[孤儿回收] 回收 {_n} 个卡死任务（>{_timeout*2}s 未推进）")
+        except Exception as _e:
+            print(f"[孤儿回收] 异常: {_e}")
+        _time.sleep(60)
+
+
+# 自动重试自愈：暂时性错误（超时/连接/CDP挂）自动重新入队重试，减少人工介入。
+_AUTOPUB_RETRY = {}  # task_id -> 已重试次数
+AUTOPUB_MAX_RETRY = 2
+AUTOPUB_RETRY_DELAY = 45  # 重试间隔秒（等 CDP 恢复）
+
+# 通用 AI 诊断自处理：失败后让 DeepSeek 读日志判根因，能自动修则自动重跑，不能修则附诊断结论。
+_AI_SELFHEAL_RETRY = {}  # task_id -> AI 诊断后已自动重跑次数
+AI_SELFHEAL_MAX_RETRY = 3
+AI_SELFHEAL_RETRY_DELAY = 60  # AI 诊断重跑间隔秒
+
+_RETRY_KW = ("CDP超时", "HTTP超时", "执行超时", "ECONNREFUSED", "connect",
+             "无响应", "Connection", "Timeout", "timed out", "reset by peer")
+_NO_RETRY_KW = ("短链", "未跳转", "抓取失败", "链接失效", "轮播图", "商详",
+                "价格库存", "未填全", "不能为空", "被拦截", "Invalid parameters")
+
+
+def _should_autopub_retry(msg: str) -> bool:
+    """判断失败原因是否属于可自动重试的暂时性错误（超时/连接类）。"""
+    if not msg:
+        return False
+    if any(k in msg for k in _NO_RETRY_KW):
+        return False
+    return any(k in msg for k in _RETRY_KW)
 
 
 def _shop_lock(shop_id: int):
@@ -2743,70 +3039,57 @@ def _auto_verify_bg(task_id: int, shop_id: int, goods_id: str):
         catalog.append_autopublish_log(task_id, "publish", "done", f"⚠️ 自动回查失败:{e}")
 
 
-def _cdp_port_alive(port: int) -> bool:
-    """探测某 CDP 端口是否监听（Windows 侧 PowerShell，WSL 里 curl 连不上 Windows CDP）。"""
-    import subprocess
-    ps = (
-        'Get-NetTCPConnection -LocalPort %d -State Listen -ErrorAction SilentlyContinue '
-        '| Select-Object -First 1 -ExpandProperty OwningProcess'
-    ) % port
+def _cdp_probe_node(ports: list) -> dict:
+    """用 node.exe（Windows 侧）探测 CDP 端口 /json 是否响应，返回 {port: bool(alive)}。
+
+    2026-10 改：原 PowerShell Get-NetTCPConnection 从 WSL 调用会卡死超时（同类 Get-CimInstance 卡死），
+    导致 /api/cdp/status 全部误判 offline。node.exe 跑在 Windows 侧，访问 127.0.0.1 可靠且快。
+    """
+    import subprocess, json
+    script_win = AUTOPUBLISH_DIR_WIN + "\\cdp_status.js"
     try:
         r = subprocess.run(
-            ["powershell.exe", "-NoProfile", "-Command", ps],
+            [NODE_EXE, script_win] + [str(p) for p in ports],
             capture_output=True, text=True, timeout=15,
         )
-        return bool(r.stdout.strip())
+        lines = [l.strip() for l in (r.stdout or "").splitlines() if l.strip().startswith("[")]
+        if not lines:
+            return {}
+        data = json.loads(lines[-1])
+        return {int(x.get("port")): bool(x.get("alive")) for x in data}
     except Exception:
-        return False
+        return {}
+
+
+def _cdp_port_alive(port: int) -> bool:
+    """探测某 CDP 端口是否存活（node.exe 探测 /json）。"""
+    return bool(_cdp_probe_node([port]).get(port, False))
 
 
 def _cdp_status_all() -> list:
-    """返回所有 CDP 实例的实时状态（alive / pid / 标签 / 端口）。"""
-    import subprocess
-    # 一次性查所有端口监听状态，避免逐个 powershell 调用太慢
+    """返回所有 CDP 实例的实时状态（alive / 标签 / 端口）。node.exe 探测，一次查全部。"""
     ports = [c["port"] for c in CDP_INSTANCES]
-    ps = (
-        "Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue "
-        "| Where-Object { $_.LocalPort -in @(%s) } "
-        "| Select-Object LocalPort,OwningProcess | Format-Table -HideTableHeaders"
-    ) % ",".join(str(p) for p in ports)
-    alive_map = {}
-    try:
-        r = subprocess.run(
-            ["powershell.exe", "-NoProfile", "-Command", ps],
-            capture_output=True, text=True, timeout=20,
-        )
-        for line in r.stdout.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            # 形如 "9232   12345"
-            parts = line.split()
-            if len(parts) >= 2 and parts[0].isdigit():
-                alive_map[int(parts[0])] = parts[1]
-    except Exception:
-        pass
+    alive_map = _cdp_probe_node(ports)
     out = []
     for c in CDP_INSTANCES:
         port = c["port"]
-        pid = alive_map.get(port)
         out.append({
             "port": port,
             "label": c["label"],
             "role": c["role"],
             "target": c["target"],
-            "alive": bool(pid),
-            "pid": pid or None,
+            "alive": bool(alive_map.get(port)),
+            "pid": None,
         })
     return out
 
 
 def _cdp_restart(port: int) -> dict:
-    """重启指定 CDP 端口：杀整棵进程树 → 用对应 profile 重新起 Edge。
+    """重启指定 CDP 端口：杀进程树 → 用 profile 重新起 Edge（node 脚本，避开 PowerShell 卡死）。
 
     返回 {ok, port, label, message, launched, alive}。
     """
-    import subprocess
+    import subprocess, json
     inst = next((c for c in CDP_INSTANCES if c["port"] == port), None)
     if not inst:
         return {"ok": False, "port": port, "message": "未知端口"}
@@ -2814,55 +3097,68 @@ def _cdp_restart(port: int) -> dict:
     profile = inst["profile"]
     target = inst["target"]
 
-    # 1. 杀监听该端口的进程树（taskkill /T /F /PID）
-    kill_ps = (
-        "$c = Get-NetTCPConnection -LocalPort %d -State Listen -ErrorAction SilentlyContinue "
-        "| Select-Object -First 1 -ExpandProperty OwningProcess; "
-        "if ($c) { taskkill /F /T /PID $c | Out-Null; Start-Sleep -Seconds 2; 'KILLED ' + $c } "
-        "else { 'NO_PROC' }"
-    ) % port
+    script_win = AUTOPUBLISH_DIR_WIN + "\\cdp_restart.js"
+    data = {"ok": False, "error": "重启未执行"}
     try:
         r = subprocess.run(
-            ["powershell.exe", "-NoProfile", "-Command", kill_ps],
-            capture_output=True, text=True, timeout=30,
+            [NODE_EXE, script_win, str(port), profile, target],
+            capture_output=True, text=True, timeout=60,
         )
-        kill_msg = (r.stdout or "").strip()
+        lines = [l.strip() for l in (r.stdout or "").splitlines() if l.strip().startswith("{")]
+        if lines:
+            data = json.loads(lines[-1])
     except Exception as e:
-        kill_msg = f"杀进程异常:{e}"
-
-    # 2. 重新启动 Edge（独立 user-data-dir，保留登录态）
-    launch_ps = (
-        "$Edge = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'; "
-        "if (-not (Test-Path $Edge)) { $Edge = 'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe' }; "
-        "Start-Process $Edge -ArgumentList "
-        "'--remote-debugging-port=%d','--remote-debugging-address=0.0.0.0','--remote-allow-origins=*',"
-        "'--no-first-run','--no-default-browser-check','--user-data-dir=%s','%s' -WindowStyle Minimized"
-    ) % (port, profile, target)
-    try:
-        subprocess.run(
-            ["powershell.exe", "-NoProfile", "-Command", launch_ps],
-            capture_output=True, text=True, timeout=30,
-        )
-    except Exception:
-        pass
-
-    # 3. 等端口监听（最多 12 秒）
-    alive = False
-    for _ in range(12):
-        import time as _t
-        _t.sleep(1)
-        if _cdp_port_alive(port):
-            alive = True
-            break
+        data = {"ok": False, "error": f"重启异常:{e}"}
 
     return {
-        "ok": True,
+        "ok": bool(data.get("ok")),
         "port": port,
         "label": label,
-        "message": kill_msg,
+        "message": ("已杀进程" if data.get("killed") else "无进程") + ("" if data.get("alive") else "（未就绪）"),
         "launched": True,
-        "alive": alive,
+        "alive": bool(data.get("alive")),
     }
+
+
+# CDP 实例自愈：端口 -> 连续 offline 轮数（连续多轮才重启，避免误杀抖动/启动中实例）
+_CDP_DEAD_COUNT = {}
+
+
+def _cdp_autoheal_loop():
+    """CDP 实例自愈守护线程：每 60s 探测，连续 2 轮 offline 的实例自动重启。
+
+    CDP 实例（Edge）偶发崩溃/挂起（KERNELBASE.dll 崩溃、端口不监听），挂掉后自动化上架/抓取
+    会批量失败。此线程兜底自愈：连续 2 轮（约 2 分钟）探测不到才重启，重启间隔也受此限制。
+    """
+    import time as _time
+    while True:
+        try:
+            ports = [c["port"] for c in CDP_INSTANCES]
+            alive_map = _cdp_probe_node(ports)
+            for c in CDP_INSTANCES:
+                port = c["port"]
+                label = c["label"]
+                if alive_map.get(port):
+                    _CDP_DEAD_COUNT[port] = 0
+                    continue
+                _CDP_DEAD_COUNT[port] = _CDP_DEAD_COUNT.get(port, 0) + 1
+                if _CDP_DEAD_COUNT[port] < 2:
+                    continue
+                _CDP_DEAD_COUNT[port] = 0
+                try:
+                    res = _cdp_restart(port)
+                    if res.get("alive"):
+                        catalog.log_task_run("cdp_autoheal", "success",
+                                             f"{label}({port}) 连续离线已自动重启")
+                    else:
+                        catalog.log_task_run("cdp_autoheal", "error",
+                                             f"{label}({port}) 重启后仍未就绪")
+                except Exception as e:
+                    catalog.log_task_run("cdp_autoheal", "error",
+                                         f"{label}({port}) 重启异常:{e}")
+        except Exception:
+            pass
+        _time.sleep(60)
 
 
 def _read_publish_progress(task_id: int) -> dict:
@@ -2930,6 +3226,55 @@ def _extract_logistics_weight(body_text: str):
     return round(math.ceil(kg * 10) / 10.0, 1)
 
 
+def _count_sku(cfg: dict) -> int:
+    """统计 config.json 里的 SKU 行数：1 维规格 = 规格值个数；2 维 = 笛卡尔积。"""
+    specs = cfg.get("specs") or []
+    if len(specs) == 1:
+        return len(specs[0].get("values") or [])
+    if len(specs) >= 2:
+        return len(specs[0].get("values") or []) * len(specs[1].get("values") or [])
+    return 0
+
+
+def _truncate_sku(cfg: dict, limit: int) -> dict:
+    """截断规格到 limit 个 SKU 以内，供 SKU 减半重试。
+
+    1 维规格：截断规格值（同步截断 priceBySpec2/previewImages）。
+    2 维规格：优先减 spec2（款式/颜色）值——priceBySpec2/previewImages 按 spec1 存，
+             减 spec2 不影响价格/预览图对应（task_590/591 教训：2 维 30 SKU 虚拟列表填不完）。
+    """
+    import copy
+    new = copy.deepcopy(cfg)
+    specs = new.get("specs") or []
+    if len(specs) == 1 and len(specs[0].get("values") or []) > limit:
+        kept = specs[0]["values"][:limit]
+        new["specs"][0]["values"] = kept
+        pb = new.get("priceBySpec2") or {}
+        new["priceBySpec2"] = {k: v for k, v in pb.items() if k in kept}
+        pv = new.get("previewImages") or {}
+        new["previewImages"] = {k: v for k, v in pv.items() if k in kept}
+    elif len(specs) >= 2:
+        v1 = specs[0].get("values") or []
+        v2 = specs[1].get("values") or []
+        total = len(v1) * len(v2)
+        if total > limit:
+            # 优先减 spec2（尺寸/颜色）到 max_v2 个。下限 2：减到 1 个值会让拼多多表单
+            # 残留第 2 个空规格值槽位，生成空 SKU 行 → 提交被拦截「请输入第X行规格的库存」（task_2406 教训）
+            max_v2 = max(2, limit // max(len(v1), 1))
+            if max_v2 < len(v2):
+                specs[1]["values"] = v2[:max_v2]
+                total = len(v1) * max_v2
+            # 减 spec2 后仍超 limit → 减 spec1（款式/主规格），同步 previewImages（按 spec1 值存）
+            if total > limit:
+                max_v1 = max(1, limit // max(len(specs[1]["values"]), 1))
+                if max_v1 < len(v1):
+                    kept1 = v1[:max_v1]
+                    specs[0]["values"] = kept1
+                    pv = new.get("previewImages") or {}
+                    new["previewImages"] = {k: v for k, v in pv.items() if k in kept1}
+    return new
+
+
 def _autopublish_bg(task_id: int, pricing: dict = None):
     """一键上架编排：scrape(1688抓取) → ai(data.ai_generate_publish_config) → publish(CDP上架)。
 
@@ -2939,16 +3284,28 @@ def _autopublish_bg(task_id: int, pricing: dict = None):
     单个链接整体超时 5 分钟（300s），超时即真实记录 timeout 失败并结束。
     """
     import subprocess
+    global _LAST_SCRAPE_TS
     task = catalog.get_autopublish_task(task_id)
     if not task:
         return
     url = task["source_url"]
     shop_id = task["shop_id"]
 
-    # 单链接整体超时（10 分钟）。超时后任何环节都要立即终止并真实记录。
-    # 曾设 300s：批量上架时同店任务排队等锁，等锁时间误算进环节耗时，导致大量「假超时」。
-    OVERALL_TIMEOUT = int(os.environ.get("AUTOPUBLISH_TIMEOUT", "600"))
+    # 单链接整体超时（8 分钟 = 480s）。超时后任何环节都要立即终止并真实记录 failed，进行下一个任务。
+    # 用户要求：每个商品上架控制在 5-8 分钟，做不到就结束进行下一个，避免卡住队列。
+    # 曾设 720s：2 维 SKU 减半重试需多轮 publish，但会导致复杂商品卡队列太久；改为 480s 硬上限。
+    # 超时值可在「批量上架」页面设置（存 fixed_cost_params.ap_timeout），优先读库，回落环境变量/默认 480。
+    try:
+        _ap_set = catalog.get_autopublish_settings()
+        OVERALL_TIMEOUT = int(float(_ap_set.get("timeout", 480)))
+    except Exception:
+        OVERALL_TIMEOUT = int(os.environ.get("AUTOPUBLISH_TIMEOUT", "480"))
     _t0 = time.time()
+    # 记录开始执行时间（epoch 秒），供执行队列卡片倒计时显示剩余超时时间
+    try:
+        catalog.mark_autopublish_started(task_id, _t0)
+    except Exception:
+        pass
 
     def _overtime(stage):
         """检查是否已超时，返回超时秒数（未超时返回 0）。"""
@@ -2957,6 +3314,54 @@ def _autopublish_bg(task_id: int, pricing: dict = None):
 
     def _fail(stage, msg):
         catalog.append_autopublish_log(task_id, stage, "failed", msg)
+        # 自动重试自愈：暂时性错误（超时/连接/CDP挂）自动重新入队重试，减少人工介入
+        _retried = _AUTOPUB_RETRY.get(task_id, 0)
+        if _should_autopub_retry(msg) and _retried < AUTOPUB_MAX_RETRY:
+            _AUTOPUB_RETRY[task_id] = _retried + 1
+            catalog.update_autopublish_task(task_id, status="queued", stage="", error="")
+            catalog.append_autopublish_log(
+                task_id, stage, "retry",
+                f"🔄 自动重试 {_retried + 1}/{AUTOPUB_MAX_RETRY}（{msg[:60]}）")
+            threading.Timer(AUTOPUB_RETRY_DELAY, _enqueue_autopublish,
+                            args=(task_id, shop_id, pricing)).start()
+            return
+        _AUTOPUB_RETRY.pop(task_id, None)
+        # 通用 AI 诊断自处理：硬编码重试不命中时，让 AI 读日志判根因，
+        # 能自动修（暂时性/时序/随机性）则自动重跑，不能修则把诊断结论附进 error。
+        _ai_retried = _AI_SELFHEAL_RETRY.get(task_id, 0)
+        if _ai_retried < AI_SELFHEAL_MAX_RETRY:
+            _diag = {"can_retry": False, "reason": "", "fix_hint": ""}
+            try:
+                _task_rec = catalog.get_autopublish_task(task_id) or {}
+                _title = (_task_rec.get("raw_title") or _task_rec.get("ai_title") or "").strip()
+                _log_tail = ""
+                _lp = os.path.join(outdir_wsl, "config.publish.log")
+                if os.path.exists(_lp):
+                    try:
+                        with open(_lp, encoding="utf-8", errors="ignore") as _f:
+                            _lines = [l.strip() for l in _f.readlines() if l.strip()]
+                            _log_tail = "\n".join(_lines[-25:])
+                    except Exception:
+                        _log_tail = ""
+                _diag = data.ai_diagnose_publish_failure(_title, stage, msg, _log_tail)
+            except Exception:
+                _diag = {"can_retry": False, "reason": "AI诊断异常", "fix_hint": ""}
+            if _diag.get("can_retry"):
+                _AI_SELFHEAL_RETRY[task_id] = _ai_retried + 1
+                catalog.update_autopublish_task(task_id, status="queued", stage="", error="")
+                catalog.append_autopublish_log(
+                    task_id, stage, "retry",
+                    f"🤖 AI诊断可自愈，自动重跑 {_ai_retried + 1}/{AI_SELFHEAL_MAX_RETRY}（{_diag.get('reason', '')[:50]}）")
+                threading.Timer(AI_SELFHEAL_RETRY_DELAY, _enqueue_autopublish,
+                                args=(task_id, shop_id, pricing)).start()
+                return
+            _reason = (_diag.get("reason") or "").strip()
+            _hint = (_diag.get("fix_hint") or "").strip()
+            if _reason:
+                msg = msg + " ｜ 🤖AI诊断：" + _reason
+                if _hint:
+                    msg = msg + "；建议：" + _hint
+        _AI_SELFHEAL_RETRY.pop(task_id, None)
         catalog.update_autopublish_task(task_id, status="failed", error=msg)
         try:
             # 把具体失败原因作为 description 塞进错误知识库，自动带根因线索
@@ -2977,18 +3382,63 @@ def _autopublish_bg(task_id: int, pricing: dict = None):
     config_win = outdir_win + "\\config.json"
     config_wsl = os.path.join(outdir_wsl, "config.json")
 
-    # ---- 环节1：1688 抓取（scrape.js 写 product.json + 图） ----
-    catalog.append_autopublish_log(task_id, "scrape", "running", "开始抓取 1688 商品详情…")
-    catalog.update_autopublish_task(task_id, status="crawling", stage="scrape")
-    with _SCRAPE_LOCK:
-        res = _run_node_script("scrape.js", [url, outdir_win, str(CLIENT_1688_PORT)], timeout=120)
-    if _overtime("scrape"):
-        return _fail_timeout("scrape")
-    if not res.get("data"):
-        return _fail("scrape", res.get("error") or res.get("stderr") or "抓取失败（无数据）")
-    d = res["data"]
-    if d.get("error"):
-        return _fail("scrape", d["error"])
+    # ---- 环节1：1688 抓取（scrape.js 写 product.json + 图）----
+    # 先查缓存复用（多店铺共用 + 失败重试复用）：同 offer_id 已抓过且图片有效 → 复用，跳过重复采集（省时 + 降反爬）
+    import glob as _glob
+    _reused = False
+    _oid = _resolve_1688_offer_id(url)
+    if _oid:
+        _cached = catalog.get_scraped_product(_oid)
+        _shared_win = (_cached or {}).get("images_dir") or ""
+        # 缓存有效期 3 天：超期自动过期重新采集（避免 1688 改价/改标题后缓存过时）
+        _cached_fresh = False
+        try:
+            _sa = (_cached or {}).get("scraped_at") or ""
+            if _sa:
+                from datetime import datetime as _dt
+                _age_sec = (_dt.now() - _dt.strptime(_sa, "%Y-%m-%d %H:%M:%S")).total_seconds()
+                _cached_fresh = _age_sec <= 3 * 86400
+        except Exception:
+            _cached_fresh = False
+        if _shared_win and _cached_fresh:
+            _shared_wsl = _shared_win.replace("C:\\", "/mnt/c/").replace("\\", "/")
+            _cached_imgs = _glob.glob(os.path.join(_shared_wsl, "*.jpg")) if os.path.isdir(_shared_wsl) else []
+            if _cached_imgs and (_cached or {}).get("product_json"):
+                try:
+                    import shutil as _shutil
+                    with open(os.path.join(outdir_wsl, "product.json"), "w", encoding="utf-8") as _f:
+                        _f.write(_cached["product_json"])
+                    for _img in _cached_imgs:
+                        _shutil.copy(_img, os.path.join(outdir_wsl, os.path.basename(_img)))
+                    _reused = True
+                    catalog.append_autopublish_log(task_id, "scrape", "done",
+                                                   f"♻️ 复用缓存抓取产物（offer {_oid}，{len(_cached_imgs)} 张图），跳过重复采集")
+                except Exception as _e:
+                    _reused = False
+                    catalog.append_autopublish_log(task_id, "scrape", "done", f"⚠️ 缓存复用失败({_e})，重新采集")
+        elif _shared_win and not _cached_fresh:
+            catalog.append_autopublish_log(task_id, "scrape", "done", f"⏰ 缓存已过期（>3天），重新采集（offer {_oid}）")
+    if _reused:
+        # 复用场景：无 scrape.js 摘要，offer_id 用解析结果，title/images 走 product.json
+        d = {"offerId": _oid}
+    else:
+        catalog.append_autopublish_log(task_id, "scrape", "running", "开始抓取 1688 商品详情…")
+        catalog.update_autopublish_task(task_id, status="crawling", stage="scrape")
+        with _SCRAPE_LOCK:
+            # 抓取间隔冷却：距上次抓取结束不足 10s 则补足，避免批量连续抓取触发 x5sec 风控
+            _gap = _SCRAPE_GAP - (time.time() - _LAST_SCRAPE_TS)
+            if _gap > 0:
+                catalog.append_autopublish_log(task_id, "scrape", "running", f"⏳ 抓取间隔冷却 {_gap:.1f}s（防 1688 反爬风控）…")
+                time.sleep(_gap)
+            res = _run_node_script("scrape.js", [url, outdir_win, str(CLIENT_1688_PORT)], timeout=120)
+            _LAST_SCRAPE_TS = time.time()
+        if _overtime("scrape"):
+            return _fail_timeout("scrape")
+        if not res.get("data"):
+            return _fail("scrape", res.get("error") or res.get("stderr") or "抓取失败（无数据）")
+        d = res["data"]
+        if d.get("error"):
+            return _fail("scrape", d["error"])
     # 读 product.json（含完整 bodyText，AI 环节要用）
     product = {}
     try:
@@ -3027,6 +3477,24 @@ def _autopublish_bg(task_id: int, pricing: dict = None):
         task_id, "scrape", "done",
         f"抓取成功：{product.get('title','')[:30]} ｜ 图 {len(product.get('images',[]))} 张",
     )
+    # 抓取成功后缓存产物到共享目录（供多店铺共用 + 失败重试复用）
+    if not _reused:
+        try:
+            _oid2 = (d.get("offerId") or "").strip()
+            if _oid2 and product.get("title") and (product.get("images") or []):
+                _shared_win = f"C:\\tmp\\pdd-publish\\scraped_{_oid2}"
+                _shared_wsl = f"/mnt/c/tmp/pdd-publish/scraped_{_oid2}"
+                os.makedirs(_shared_wsl, exist_ok=True)
+                import shutil as _shutil2
+                _img_files = _glob.glob(os.path.join(outdir_wsl, "*.jpg"))
+                for _img in _img_files:
+                    _shutil2.copy(_img, os.path.join(_shared_wsl, os.path.basename(_img)))
+                catalog.save_scraped_product(_oid2, json.dumps(product, ensure_ascii=False),
+                                             _shared_win, product.get("title", ""), len(_img_files))
+                catalog.append_autopublish_log(task_id, "scrape", "done",
+                                               f"📦 抓取产物已缓存（offer {_oid2}），后续店铺/重试可直接复用")
+        except Exception as _e:
+            catalog.append_autopublish_log(task_id, "scrape", "done", f"⚠️ 抓取产物缓存失败:{_e}")
 
     # ---- 环节2：AI 生成 config.json ----
     if _overtime("ai"):
@@ -3044,12 +3512,12 @@ def _autopublish_bg(task_id: int, pricing: dict = None):
         return _fail("ai", "AI 未生成配置")
     catalog.update_autopublish_task(task_id, ai_title=cfg.get("title", ""))
     # 物流重量（多仓按重运费模板需要填）：优先从 1688 bodyText 提取真实重量(g)，
-    # 兜底 pricing 透传。供 publish.js 填「物流重量」字段。
+    # 兜底 pricing 透传，再兜底默认 1kg。保证 publish.js 永远有物流重量可填（多仓按重模板不空）。
     _w = _extract_logistics_weight(product.get("bodyText", ""))
     if _w:
         cfg["logisticsWeight"] = _w
-    elif pricing and pricing.get("logistics_weight"):
-        cfg["logisticsWeight"] = pricing["logistics_weight"]
+    else:
+        cfg["logisticsWeight"] = (pricing or {}).get("logistics_weight") or 1
     # 写 config.json 供 publish.js 读
     try:
         with open(config_wsl, "w", encoding="utf-8") as f:
@@ -3071,8 +3539,58 @@ def _autopublish_bg(task_id: int, pricing: dict = None):
     port = SHOP_CDP_PORT.get(shop_id)
     if not port:
         return _fail("publish", f"店铺 {shop_id} 未配置 CDP 端口")
-    with _shop_lock(shop_id):
-        res = _run_node_script("publish.js", [config_win, str(port)], timeout=360)
+    # SKU 减半重试：先全量上架；若「价格库存未填全」（SKU 太多/虚拟列表滚动问题），
+    # 减半规格值重试（24→12→6），下限 3 个 SKU。其余失败（拦截/超时/CDP挂）不重试。
+    # task_588/590 教训：2 维 30 SKU 从全量跑起太慢（30→15→5 三轮超 600s），
+    # 且实测 ~12 行是虚拟列表稳定上限，超过 12 直接从 12 起步，跳过注定填不完的全量轮。
+    _sku_limit = min(_count_sku(cfg), 12)
+    _cfg_cur = cfg
+    res = None
+    _last_out = ""
+    _cat_fix = 0  # 类目 AI 修复次数（task_2226 类目匹配失败教训：AI 首猜类目不存在，需 AI 重新分析）
+    while True:
+        _cfg_cur = _truncate_sku(cfg, _sku_limit)
+        try:
+            with open(config_wsl, "w", encoding="utf-8") as _f:
+                json.dump(_cfg_cur, _f, ensure_ascii=False, indent=2)
+        except Exception as _e:
+            return _fail("publish", f"写 config.json 失败:{_e}")
+        with _shop_lock(shop_id):
+            res = _run_node_script("publish.js", [config_win, str(port)], timeout=300)
+        _last_out = (res or {}).get("stdout", "")
+        # 有明确结果（成功 RESULT_SUBMITTED / 明确拦截 RESULT_FAILED）→ 不再重试
+        if "RESULT_SUBMITTED" in _last_out or "RESULT_FAILED" in _last_out:
+            break
+        # 类目匹配失败 → AI 重新分析类目重试（最多 5 次），减少人工确认
+        if "类目未匹配" in _last_out and _cat_fix < 5:
+            _cat_fix += 1
+            catalog.append_autopublish_log(
+                task_id, "publish", "done",
+                f"🧠 类目匹配失败，AI 重新分析类目（{_cat_fix}/5）…")
+            _fix = data.ai_fix_category(product, cfg.get("categoryPath", ""), cfg.get("categoryKeyword", ""))
+            if _fix.get("error"):
+                catalog.append_autopublish_log(task_id, "publish", "done", f"⚠️ AI 类目修复失败:{_fix['error']}")
+                break
+            cfg["categoryPath"] = _fix.get("categoryPath") or cfg.get("categoryPath")
+            cfg["categoryKeyword"] = _fix.get("categoryKeyword") or cfg.get("categoryKeyword")
+            catalog.append_autopublish_log(
+                task_id, "publish", "done",
+                f"✅ AI 类目修复为：{cfg['categoryPath']}（搜索词 {cfg['categoryKeyword']}）")
+            if _overtime("publish"):
+                break
+            continue
+        # 只有「价格库存未填全」才减半重试（1 维截规格值 / 2 维减 spec2 款式值）；其他失败直接走后续失败处理
+        if "未填全" not in _last_out:
+            break
+        _next = _sku_limit // 2
+        if _next < 3 or _next >= _sku_limit:
+            break
+        catalog.append_autopublish_log(task_id, "publish", "done",
+                                       f"⚠️ {_sku_limit} 个 SKU 价格库存未填全，减半为 {_next} 个重试…")
+        _sku_limit = _next
+        if _overtime("publish"):
+            break
+    cfg = _cfg_cur  # 后续存表用实际生效的 cfg（减半后）
     # 读取 publish.js 自动学习的类目映射，固化到数据库（下次同类商品直接命中）
     try:
         _learn_path = os.path.join(outdir_wsl, "config.category_learn.json")
@@ -3085,8 +3603,10 @@ def _autopublish_bg(task_id: int, pricing: dict = None):
                 catalog.add_category_map(_lkw, _lpath, _lkw, source="learned")
                 # 同时把搜索词 matched_kw 作为别名 keyword 固化（task_471 教训：只记最后一级类目名
                 # 「酒具套装」，下次标题里的「酒杯」搜不到。需同时记搜索词别名，让「酒杯」也能命中）
+                # task_576 教训：matched_kw 可能与类目语义无关（搜「杯架」误命中「收纳箱」），
+                # 固化前校验 matched_kw 与类目路径必须有字面重叠（至少一个共同汉字），过滤错误别名。
                 _mkw = (_learned.get("matched_kw") or "").strip()
-                if _mkw and _mkw != _lkw:
+                if _mkw and _mkw != _lkw and any(ch in _lpath for ch in _mkw):
                     catalog.add_category_map(_mkw, _lpath, _mkw, source="learned")
                 catalog.append_autopublish_log(task_id, "publish", "done",
                                                f"🧠 类目已自动学习固化：{_lkw} → {_lpath}")
@@ -3095,7 +3615,12 @@ def _autopublish_bg(task_id: int, pricing: dict = None):
     if _overtime("publish"):
         return _fail_timeout("publish")
     if not res.get("data") and not res.get("ok"):
-        return _fail("publish", res.get("error") or res.get("stderr") or "上架失败")
+        # publish.js 中间步骤 process.exit(1) 时只写 stdout 日志、不写 stderr，
+        # 取 stdout 最后几行作为具体失败线索（如「类目未匹配」「未跳转发布页」），不再笼统记「上架失败」。
+        _out_lines = [l.strip() for l in (res.get("stdout") or "").splitlines() if l.strip()]
+        _out_tail = " | ".join(_out_lines[-3:])[-200:] if _out_lines else ""
+        _err_detail = res.get("error") or res.get("stderr") or _out_tail or "上架失败"
+        return _fail("publish", _err_detail)
     # publish.js 输出是进度日志（非 JSON），判断成功靠 stdout 里的 RESULT_SUCCESS 明确标记
     # 不能用 "/success" 或 "上架成功" 宽松匹配：续填模式的日志里含 URL ".../success?goods_id=xxx" 会误判
     out = res.get("stdout", "")
@@ -3225,9 +3750,23 @@ def _newoffer_scheduler_loop():
 
 def main():
     catalog.init_db()  # 每次启动执行幂等迁移（补缺失列）
+    # 启动时先回收一次孤儿中间态任务（上次进程中断遗留的卡死 crawling/queued 任务）
+    try:
+        _s = catalog.get_autopublish_settings()
+        _n0 = catalog.recover_orphan_autopublish(int(float(_s.get("timeout", 480))) * 2)
+        if _n0:
+            print(f"[孤儿回收] 启动时回收 {_n0} 个卡死任务")
+    except Exception as _e:
+        print(f"[孤儿回收] 启动回收异常: {_e}")
     # 启动新品专区定时采集调度线程（前端可设置采集时间）
     import threading
     threading.Thread(target=_newoffer_scheduler_loop, daemon=True).start()
+    # 启动 CDP 实例自愈守护线程（实例挂掉后自动重启，保障自动化上架/抓取持续可用）
+    threading.Thread(target=_cdp_autoheal_loop, daemon=True).start()
+    # 启动分批执行调度线程（全量停止后按每 N 个一组逐组执行）
+    threading.Thread(target=_ap_batch_worker, daemon=True).start()
+    # 启动孤儿中间态任务回收守护线程（进程中断遗留的卡死任务自动标失败）
+    threading.Thread(target=_ap_orphan_recover_loop, daemon=True).start()
     server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     print(f"运营工作台已启动：http://127.0.0.1:{PORT}")
     print("按 Ctrl+C 停止。")

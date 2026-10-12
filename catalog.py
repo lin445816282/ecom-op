@@ -524,6 +524,33 @@ CREATE TABLE IF NOT EXISTS newoffer_items (
 );
 CREATE INDEX IF NOT EXISTS idx_newoffer_status ON newoffer_items(status);
 
+CREATE TABLE IF NOT EXISTS shop_offers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    supplier_id INTEGER NOT NULL,
+    supplier_name TEXT DEFAULT '',
+    prefix TEXT DEFAULT '',
+    offer_id TEXT NOT NULL,
+    offer_url TEXT DEFAULT '',
+    title TEXT DEFAULT '',
+    image TEXT DEFAULT '',
+    image_thumb TEXT DEFAULT '',
+    price TEXT DEFAULT '',
+    date TEXT DEFAULT '',
+    month TEXT DEFAULT '',
+    gmt_create TEXT DEFAULT '',
+    status TEXT DEFAULT 'new',
+    publish_task_id INTEGER,
+    first_seen_at TEXT DEFAULT (datetime('now','localtime')),
+    published_at TEXT DEFAULT '',
+    published_goods_id TEXT DEFAULT '',
+    published_title TEXT DEFAULT '',
+    published_main_image TEXT DEFAULT '',
+    published_sale_price REAL,
+    UNIQUE(prefix, offer_id)
+);
+CREATE INDEX IF NOT EXISTS idx_shop_offers_status ON shop_offers(status);
+CREATE INDEX IF NOT EXISTS idx_shop_offers_supplier ON shop_offers(supplier_id);
+
 CREATE TABLE IF NOT EXISTS published_goods (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id INTEGER,
@@ -656,6 +683,15 @@ CREATE TABLE IF NOT EXISTS category_map (
     created_at TEXT DEFAULT (datetime('now','localtime')),
     updated_at TEXT DEFAULT (datetime('now','localtime')),
     UNIQUE(keyword, category_path)
+);
+CREATE TABLE IF NOT EXISTS scraped_products (
+    offer_id TEXT PRIMARY KEY,
+    product_json TEXT DEFAULT '',
+    images_dir TEXT DEFAULT '',
+    title TEXT DEFAULT '',
+    image_count INTEGER DEFAULT 0,
+    scraped_at TEXT DEFAULT (datetime('now','localtime')),
+    updated_at TEXT DEFAULT (datetime('now','localtime'))
 );
 CREATE TABLE IF NOT EXISTS title_banned_words (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -805,6 +841,38 @@ def list_category_map_db() -> list[dict]:
         return [dict(r) for r in rows]
 
 
+def get_scraped_product(offer_id: str) -> dict:
+    """读 1688 抓取产物缓存（按 offer_id），供多店铺共用 + 失败重试复用。"""
+    oid = (offer_id or "").strip()
+    if not oid:
+        return {}
+    with closing(_conn()) as c:
+        row = c.execute(
+            "SELECT * FROM scraped_products WHERE offer_id=?", (oid,)
+        ).fetchone()
+        return dict(row) if row else {}
+
+
+def save_scraped_product(offer_id: str, product_json: str, images_dir: str,
+                         title: str = "", image_count: int = 0) -> dict:
+    """缓存 1688 抓取产物（product.json 内容 + 共享图片目录），按 offer_id 覆盖。"""
+    oid = (offer_id or "").strip()
+    if not oid:
+        return {}
+    with closing(_conn()) as c:
+        c.execute(
+            "INSERT INTO scraped_products(offer_id, product_json, images_dir, title, image_count, scraped_at, updated_at) "
+            "VALUES(?,?,?,?,?,datetime('now','localtime'),datetime('now','localtime')) "
+            "ON CONFLICT(offer_id) DO UPDATE SET product_json=excluded.product_json, "
+            "images_dir=excluded.images_dir, title=excluded.title, image_count=excluded.image_count, "
+            "scraped_at=datetime('now','localtime'), updated_at=datetime('now','localtime')",
+            (oid, product_json or "", images_dir or "", title or "", int(image_count or 0)),
+        )
+        c.commit()
+        row = c.execute("SELECT * FROM scraped_products WHERE offer_id=?", (oid,)).fetchone()
+        return dict(row) if row else {}
+
+
 # 标题禁词默认值（上架拼多多不能出现的词），表空时 seed，之后可在前端增删改
 BANNED_WORDS_DEFAULT = [
     # 平台词（竞品平台名，必禁）
@@ -868,12 +936,15 @@ def find_duplicate_publishes(source_url: str, shop_id: int, offer_id: str = '') 
 
 
 def create_autopublish_task(source_url: str, shop_id: int = 5, operator_name: str = '',
-                            price_mode: str = 'promo') -> dict:
-    """新建一键上架任务，初始状态 queued。price_mode: promo 推广价 / normal 平卖价。"""
+                            price_mode: str = 'promo', pricing: dict = None) -> dict:
+    """新建一键上架任务，初始状态 queued。price_mode: promo 推广价 / normal 平卖价。
+    pricing: 首次上架时的完整定价参数（利润率/运费/投产比/物流重量等），
+    存 pricing_json 供「重新上架」恢复，避免重新上架时定价被打回默认值。"""
+    pricing_json = json.dumps(pricing, ensure_ascii=False) if pricing else ""
     with closing(_conn()) as c:
         cur = c.execute(
-            "INSERT INTO autopublish_tasks(source_url, shop_id, status, operator_name, price_mode) VALUES(?,?,?,?,?)",
-            (source_url.strip(), shop_id, "queued", operator_name.strip(), price_mode or "promo"),
+            "INSERT INTO autopublish_tasks(source_url, shop_id, status, operator_name, price_mode, pricing_json) VALUES(?,?,?,?,?,?)",
+            (source_url.strip(), shop_id, "queued", operator_name.strip(), price_mode or "promo", pricing_json),
         )
         c.commit()
         row = c.execute(
@@ -898,6 +969,88 @@ def list_autopublish_tasks(limit: int = 50) -> list[dict]:
             "ORDER BY t.id DESC LIMIT ?", (limit,)
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def get_autopublish_queue(running_limit: int = 10, upcoming_limit: int = 3) -> dict:
+    """当前执行队列：正在执行（crawling/ai/publishing）+ 后续排队（queued）前 N 条。
+
+    用于一键上架页「执行队列」卡片：展示正在跑的任务和接下来要跑的 3 条。
+    """
+    with closing(_conn()) as c:
+        running = [dict(r) for r in c.execute(
+            "SELECT t.id, t.shop_id, t.status, t.stage, t.raw_title, t.ai_title, "
+            "t.error, t.created_at, t.started_at, s.name AS shop_name "
+            "FROM autopublish_tasks t LEFT JOIN shops s ON s.id = t.shop_id "
+            "WHERE t.status IN ('crawling','ai','publishing') "
+            "ORDER BY t.id ASC LIMIT ?", (running_limit,)
+        ).fetchall()]
+        upcoming = [dict(r) for r in c.execute(
+            "SELECT t.id, t.shop_id, t.status, t.stage, t.raw_title, t.ai_title, "
+            "t.error, t.created_at, s.name AS shop_name "
+            "FROM autopublish_tasks t LEFT JOIN shops s ON s.id = t.shop_id "
+            "WHERE t.status = 'queued' "
+            "ORDER BY t.id ASC LIMIT ?", (upcoming_limit,)
+        ).fetchall()]
+    return {"running": running, "upcoming": upcoming}
+
+
+def recover_orphan_autopublish(timeout_sec: int = 960) -> int:
+    """孤儿中间态任务自动回收：后端进程中断/重启后，卡在
+    crawling/ai/publishing/queued 且超过 timeout_sec 秒未推进的任务，
+    标记为 failed（超时），避免永远卡在「正在执行」列表。
+
+    基准时间：优先 started_at（epoch 秒）；queued 未开始(started_at=0)
+    则回退用 created_at（本地时间字符串）。返回回收任务数。
+    """
+    now = time.time()
+    n = 0
+    with closing(_conn()) as c:
+        rows = c.execute(
+            "SELECT id, shop_id, status, stage, log, started_at, created_at "
+            "FROM autopublish_tasks "
+            "WHERE status IN ('crawling','ai','publishing','queued')"
+        ).fetchall()
+        # 有正在执行任务的店铺集合：这些店的 queued 任务仍在正常排队（worker 串行消费），
+        # 不应按 created_at 超时回收（串行队列积压时排队时间可能远超 timeout*2）。
+        busy_shops = {r["shop_id"] for r in rows if r["status"] in ("crawling", "ai", "publishing")}
+        for r in rows:
+            tid = r["id"]
+            if r["status"] == "queued" and r["shop_id"] in busy_shops:
+                continue  # 本店 worker 还活着，queued 排队中，不误判为卡死
+            base = r["started_at"] or 0
+            if base <= 0:
+                try:
+                    base = datetime.strptime(
+                        (r["created_at"] or ""), "%Y-%m-%d %H:%M:%S"
+                    ).timestamp()
+                except Exception:
+                    base = 0
+            if base <= 0 or (now - base) <= timeout_sec:
+                continue
+            _msg = "进程中断，任务超时未完成（自动回收，请手动重新上架）"
+            c.execute(
+                "UPDATE autopublish_tasks SET status='failed', error=?, "
+                "updated_at=datetime('now','localtime') WHERE id=?",
+                (_msg, tid),
+            )
+            logs = []
+            try:
+                logs = json.loads(r["log"] or "[]")
+            except Exception:
+                logs = []
+            logs.append({
+                "stage": r["stage"] or "",
+                "status": "failed",
+                "msg": _msg,
+                "ts": datetime.now().strftime("%H:%M:%S"),
+            })
+            c.execute(
+                "UPDATE autopublish_tasks SET log=? WHERE id=?",
+                (json.dumps(logs, ensure_ascii=False), tid),
+            )
+            n += 1
+        c.commit()
+    return n
 
 
 def list_autopublish_tasks_paged(page: int = 1, page_size: int = 20,
@@ -942,6 +1095,128 @@ def list_autopublish_tasks_paged(page: int = 1, page_size: int = 20,
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
+def delete_autopublish_task(task_id: int) -> bool:
+    """删除一条上架任务（硬删除，用于清理链接失效等无效任务）。"""
+    with closing(_conn()) as c:
+        cur = c.execute("DELETE FROM autopublish_tasks WHERE id=?", (task_id,))
+        c.commit()
+        return cur.rowcount > 0
+
+
+def stop_all_autopublish() -> dict:
+    """全量停止：把排队中/执行中的任务标记为 stopped（已停止），返回停止数量。"""
+    with closing(_conn()) as c:
+        cur = c.execute(
+            "UPDATE autopublish_tasks SET status='stopped', stage='', "
+            "updated_at=datetime('now','localtime') "
+            "WHERE status IN ('queued','crawling','ai','publishing')"
+        )
+        c.commit()
+        return {"stopped": cur.rowcount}
+
+
+def count_nonterminal_autopublish(task_ids: list) -> int:
+    """统计给定任务里仍处于进行态（queued/crawling/ai/publishing）的数量。"""
+    if not task_ids:
+        return 0
+    with closing(_conn()) as c:
+        row = c.execute(
+            f"SELECT COUNT(*) FROM autopublish_tasks "
+            f"WHERE id IN ({','.join('?' for _ in task_ids)}) "
+            f"AND status IN ('queued','crawling','ai','publishing')",
+            list(task_ids),
+        ).fetchone()
+        return row[0] if row else 0
+
+
+def claim_stopped_batch(min_id: int, batch_size: int = 5) -> list[dict]:
+    """取下一批已停止任务（id>=min_id，按 id 升序，最多 batch_size 个），改为 queued 后返回。"""
+    with closing(_conn()) as c:
+        rows = c.execute(
+            "SELECT * FROM autopublish_tasks WHERE status='stopped' AND id>=? ORDER BY id ASC LIMIT ?",
+            (min_id, batch_size),
+        ).fetchall()
+        if not rows:
+            return []
+        ids = [r["id"] for r in rows]
+        c.execute(
+            f"UPDATE autopublish_tasks SET status='queued', stage='', error='', "
+            f"updated_at=datetime('now','localtime') WHERE id IN ({','.join('?' for _ in ids)})",
+            ids,
+        )
+        c.commit()
+        return [dict(r) for r in rows]
+
+
+def get_stopped_batch_summary(min_id: int = 0) -> dict:
+    """分批执行状态：剩余待执行(stopped)数量 + 下一批预览 id 列表。"""
+    with closing(_conn()) as c:
+        remain = c.execute(
+            "SELECT COUNT(*) FROM autopublish_tasks WHERE status='stopped' AND id>=?",
+            (min_id,),
+        ).fetchone()[0]
+        nxt = [r["id"] for r in c.execute(
+            "SELECT id FROM autopublish_tasks WHERE status='stopped' AND id>=? ORDER BY id ASC LIMIT 5",
+            (min_id,),
+        ).fetchall()]
+    return {"remaining": remain, "next": nxt}
+
+
+def get_selfheal_stats() -> dict:
+    """聚合「自动重试自愈」统计 + 明细。
+
+    自动重试自愈机制：暂时性错误（CDP超时/连接类）失败后自动重新入队重试。
+    重试记录以 log 里 status=='retry' 的条目持久化。这里遍历含 retry 日志的任务，
+    按最终状态归类：成功(published/submitted)/失败(failed)/重试中(其余进行态)。
+    """
+    with closing(_conn()) as c:
+        rows = c.execute(
+            "SELECT id, status, error, raw_title, ai_title, source_url, shop_id, "
+            "created_at, log FROM autopublish_tasks "
+            "WHERE log LIKE '%retry%' ORDER BY id DESC LIMIT 200"
+        ).fetchall()
+    items = []
+    retry_total = 0
+    succ = fail = retrying = 0
+    for r in rows:
+        logs = json.loads(r["log"] or "[]")
+        retries = [l for l in logs if l.get("status") == "retry"]
+        n = len(retries)
+        if n == 0:
+            continue
+        retry_total += n
+        st = r["status"]
+        if st in ("published", "submitted"):
+            succ += 1
+            outcome = "success"
+        elif st == "failed":
+            fail += 1
+            outcome = "failed"
+        else:
+            retrying += 1
+            outcome = "retrying"
+        last = retries[-1]
+        items.append({
+            "id": r["id"],
+            "status": st,
+            "title": r["raw_title"] or r["ai_title"] or r["source_url"] or "",
+            "retry_count": n,
+            "last_retry_msg": last.get("msg", ""),
+            "last_retry_ts": last.get("ts", ""),
+            "error": r["error"] or "",
+            "outcome": outcome,
+            "shop_id": r["shop_id"],
+        })
+    return {
+        "task_count": len(items),
+        "retry_total": retry_total,
+        "success": succ,
+        "failed": fail,
+        "retrying": retrying,
+        "items": items,
+    }
+
+
 def update_autopublish_task(task_id: int, **fields) -> dict:
     """按字段更新任务（status/stage/raw_title/ai_title/... 等），自动刷新 updated_at。"""
     if not fields:
@@ -970,6 +1245,15 @@ def update_autopublish_task(task_id: int, **fields) -> dict:
             "SELECT * FROM autopublish_tasks WHERE id=?", (task_id,)
         ).fetchone()
         return dict(row) if row else {}
+
+
+def mark_autopublish_started(task_id: int, ts: float) -> None:
+    """记录任务开始执行时间（epoch 秒），供执行队列倒计时计算剩余超时时间。"""
+    with closing(_conn()) as c:
+        c.execute(
+            "UPDATE autopublish_tasks SET started_at=? WHERE id=?", (ts, task_id)
+        )
+        c.commit()
 
 
 def append_autopublish_log(task_id: int, stage: str, status: str, msg: str) -> None:
@@ -1544,6 +1828,45 @@ def update_autopublish_pricing(params: dict, mode: str = "promo") -> dict:
     return updated
 
 
+# 一键上架「运行设置」（超时等），白名单字段 + 默认值 + 取值区间，写入 fixed_cost_params 表
+AP_SETTING_FIELDS = {
+    "timeout": {"key": "ap_timeout", "default": 480.0, "min": 60, "max": 3600},  # 单个商品整体超时（秒）
+}
+
+
+def get_autopublish_settings() -> dict:
+    """读取一键上架运行设置（超时时间等），未入库回落默认值。"""
+    keys = [m["key"] for m in AP_SETTING_FIELDS.values()]
+    with closing(_conn()) as c:
+        rows = c.execute(
+            f"SELECT key, value FROM fixed_cost_params WHERE key IN ({','.join('?' for _ in keys)})",
+            keys,
+        ).fetchall()
+    got = {r["key"]: r["value"] for r in rows}
+    return {name: got.get(m["key"], m["default"]) for name, m in AP_SETTING_FIELDS.items()}
+
+
+def update_autopublish_settings(params: dict) -> dict:
+    """更新一键上架运行设置（白名单字段，写入 fixed_cost_params 表，越界自动夹到区间内）。"""
+    updated = {}
+    with closing(_conn()) as c:
+        for field, meta in AP_SETTING_FIELDS.items():
+            if field not in (params or {}):
+                continue
+            try:
+                val = float(params[field])
+            except (TypeError, ValueError):
+                continue
+            val = max(meta.get("min", 0), min(meta.get("max", 10 ** 9), val))
+            c.execute(
+                "INSERT OR REPLACE INTO fixed_cost_params(key, value, unit) VALUES(?,?,?)",
+                (meta["key"], val, ""),
+            )
+            updated[field] = val
+        c.commit()
+    return updated
+
+
 def _classify_category(name: str) -> str:
     """按商品名关键词归类品类（成交商品，优先级从高到低）。"""
     if not name:
@@ -1822,12 +2145,18 @@ def _migrate(conn: sqlite3.Connection) -> None:
     _apmcols = {r[1] for r in conn.execute("PRAGMA table_info(autopublish_tasks)").fetchall()}
     if "price_mode" not in _apmcols:
         conn.execute("ALTER TABLE autopublish_tasks ADD COLUMN price_mode TEXT DEFAULT 'promo'")
+    # autopublish_tasks 表 pricing_json 列（首次上架定价参数快照，供「重新上架」恢复）
+    if "pricing_json" not in _apmcols:
+        conn.execute("ALTER TABLE autopublish_tasks ADD COLUMN pricing_json TEXT DEFAULT ''")
     # autopublish_tasks 表 supplier_id 列（关联 1688 货源店铺，suppliers.id）
     if "supplier_id" not in _apmcols:
         conn.execute("ALTER TABLE autopublish_tasks ADD COLUMN supplier_id INTEGER DEFAULT 0")
     # autopublish_tasks 表 offer_id 列（1688 商品 ID，短链/长链归一化后查重用，解决同商品不同链接漏判）
     if "offer_id" not in _apmcols:
         conn.execute("ALTER TABLE autopublish_tasks ADD COLUMN offer_id TEXT DEFAULT ''")
+    # autopublish_tasks 表 started_at 列（任务开始执行时间 epoch 秒，用于执行队列倒计时）
+    if "started_at" not in _apmcols:
+        conn.execute("ALTER TABLE autopublish_tasks ADD COLUMN started_at REAL DEFAULT 0")
     # suppliers 表 prefix 列（1688 店铺前缀，用于定位新品专区 newofferlist.htm）
     supcols = {r[1] for r in conn.execute("PRAGMA table_info(suppliers)").fetchall()}
     if "prefix" not in supcols:
@@ -2391,6 +2720,40 @@ def query_promo_daily_bill(shop_id: int = None, start: str = None, end: str = No
         args.append(limit)
         rows = conn.execute(sql, args).fetchall()
         return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def query_promo_daily_bill_monthly(shop_id: int = None) -> list[dict]:
+    """按月 + 店铺汇总日账单流水（支出/收入/净额/笔数），供「日明细 · 按月汇总」使用。
+
+    flow_type 语义：1=收入（充值/红包），2=支出（推广花费）；净额 = 收入 − 支出。
+    """
+    conn = _conn()
+    try:
+        sql = (
+            "SELECT substr(pdb.flow_time,1,7) AS ym, pdb.shop_id, s.name AS shop_name, "
+            "SUM(CASE WHEN pdb.flow_type=2 THEN pdb.amount ELSE 0 END) AS spend, "
+            "SUM(CASE WHEN pdb.flow_type=1 THEN pdb.amount ELSE 0 END) AS income, "
+            "COUNT(*) AS bill_count "
+            "FROM promo_daily_bill pdb LEFT JOIN shops s ON s.id=pdb.shop_id "
+        )
+        args = []
+        if shop_id:
+            sql += "WHERE pdb.shop_id=? "
+            args.append(shop_id)
+        sql += "GROUP BY ym, pdb.shop_id ORDER BY ym DESC, pdb.shop_id ASC"
+        rows = conn.execute(sql, args).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            spend = d.get("spend") or 0
+            income = d.get("income") or 0
+            d["spend"] = round(spend, 2)
+            d["income"] = round(income, 2)
+            d["net"] = round(income - spend, 2)
+            out.append(d)
+        return out
     finally:
         conn.close()
 
@@ -4958,6 +5321,118 @@ def get_newoffer_item(item_id) -> dict:
     with closing(_conn()) as c:
         row = c.execute("SELECT * FROM newoffer_items WHERE id=?", (item_id,)).fetchone()
         return dict(row) if row else None
+
+
+# ----------------------------- 店铺全量商品（offerlist.htm） -----------------------------
+
+def insert_shop_offers(supplier_id, supplier_name, prefix, items) -> dict:
+    """批量插入店铺全量商品采集结果（按 prefix+offer_id 去重）。返回 {inserted, skipped}。"""
+    inserted = 0
+    skipped = 0
+    with closing(_conn()) as c:
+        for it in items:
+            offer_id = str(it.get('offer_id') or '').strip()
+            if not offer_id:
+                continue
+            title = it.get('title') or ''
+            image = it.get('image') or ''
+            image_thumb = it.get('image_thumb') or ''
+            price = it.get('price') or ''
+            date = it.get('date') or ''
+            month = it.get('month') or ''
+            gmt_create = it.get('gmtCreate') or ''
+            offer_url = it.get('offer_url') or (f"https://detail.1688.com/offer/{offer_id}.html" if offer_id else '')
+            exist = c.execute("SELECT id, image, image_thumb FROM shop_offers WHERE prefix=? AND offer_id=?", (prefix, offer_id)).fetchone()
+            if exist:
+                if not (exist[1] or '') and image:
+                    c.execute("UPDATE shop_offers SET image=? WHERE id=?", (image, exist[0]))
+                if not (exist[2] or '') and image_thumb:
+                    c.execute("UPDATE shop_offers SET image_thumb=? WHERE id=?", (image_thumb, exist[0]))
+                skipped += 1
+                continue
+            c.execute(
+                """INSERT INTO shop_offers
+                (supplier_id, supplier_name, prefix, offer_id, offer_url, title, image, image_thumb, price, date, month, gmt_create, status)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (supplier_id, supplier_name, prefix, offer_id, offer_url, title, image, image_thumb, price, date, month, gmt_create, 'new'))
+            inserted += 1
+        c.commit()
+    return {"inserted": inserted, "skipped": skipped}
+
+
+def backfill_shop_offers() -> int:
+    """上架中(publishing)的全量商品，从 published_goods 按 source_url 回填主图/标题/售价并标 published。"""
+    n = 0
+    with closing(_conn()) as c:
+        rows = c.execute("SELECT id, offer_url FROM shop_offers WHERE status='publishing'").fetchall()
+        for row in rows:
+            pg = c.execute(
+                "SELECT goods_id, main_image, ai_title, sale_price FROM published_goods "
+                "WHERE source_url=? AND goods_id!='' ORDER BY id DESC LIMIT 1", (row['offer_url'],)).fetchone()
+            if not pg:
+                continue
+            c.execute(
+                "UPDATE shop_offers SET status='published', published_goods_id=?, published_main_image=?, "
+                "published_title=?, published_sale_price=?, published_at=datetime('now','localtime') WHERE id=?",
+                (pg['goods_id'] or '', pg['main_image'] or '', pg['ai_title'] or '', pg['sale_price'], row['id']))
+            n += 1
+        c.commit()
+    return n
+
+
+def list_shop_offers(supplier_id=None, status=None, q=None, page=1, page_size=50) -> dict:
+    """店铺全量商品列表：先回填 publishing → published，再分页返回。"""
+    backfill_shop_offers()
+    with closing(_conn()) as c:
+        where = []
+        args = []
+        if supplier_id:
+            where.append("supplier_id=?")
+            args.append(supplier_id)
+        if status:
+            where.append("status=?")
+            args.append(status)
+        if q:
+            where.append("title LIKE ?")
+            args.append(f"%{q}%")
+        where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+        total = c.execute("SELECT COUNT(*) FROM shop_offers" + where_sql, args).fetchone()[0]
+        sql = "SELECT * FROM shop_offers" + where_sql
+        sql += " ORDER BY first_seen_at DESC, id DESC LIMIT ? OFFSET ?"
+        rows = c.execute(sql, args + [page_size, (page - 1) * page_size]).fetchall()
+        return {"items": [dict(r) for r in rows], "total": total, "page": page, "page_size": page_size}
+
+
+def set_shop_offer_status(item_id, status, publish_task_id=None) -> None:
+    """更新全量商品状态（new/publishing/published）。"""
+    with closing(_conn()) as c:
+        if publish_task_id is not None:
+            c.execute("UPDATE shop_offers SET status=?, publish_task_id=?, published_at=datetime('now','localtime') WHERE id=?", (status, publish_task_id, item_id))
+        else:
+            c.execute("UPDATE shop_offers SET status=? WHERE id=?", (status, item_id))
+        c.commit()
+
+
+def get_shop_offer(item_id) -> dict:
+    """按 id 查全量商品，找不到返回 None。"""
+    with closing(_conn()) as c:
+        row = c.execute("SELECT * FROM shop_offers WHERE id=?", (item_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def delete_shop_offers(item_ids) -> int:
+    """删除店铺全量商品（单个或多个 id），返回删除条数。"""
+    if isinstance(item_ids, (int, str)):
+        item_ids = [int(item_ids)]
+    else:
+        item_ids = [int(x) for x in item_ids if str(x).isdigit()]
+    if not item_ids:
+        return 0
+    with closing(_conn()) as c:
+        ph = ",".join("?" for _ in item_ids)
+        cur = c.execute(f"DELETE FROM shop_offers WHERE id IN ({ph})", item_ids)
+        c.commit()
+        return cur.rowcount
 
 
 # ----------------------------- 任务调度中心 -----------------------------

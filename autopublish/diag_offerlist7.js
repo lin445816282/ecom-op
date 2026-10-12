@@ -1,0 +1,31 @@
+// 诊断 bodyText 完整内容，判断商品列表是否渲染
+const http = require('http');
+function get(u){return new Promise((res,rej)=>{http.get(u,r=>{let d='';r.on('data',c=>d+=c);r.on('end',()=>{try{res(JSON.parse(d))}catch(e){res(d)}})}).on('error',rej)})}
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+(async()=>{
+  const PREFIX = process.argv[2] || 'chidangy';
+  const PORT = process.argv[3] || '9238';
+  const tabs=await get(`http://127.0.0.1:${PORT}/json`);
+  if(!tabs || !tabs.length){ console.log(JSON.stringify({error:'CDP无实例'})); process.exit(1); }
+  const g=tabs.find(t=>t.type==='page'&&/1688/.test(t.url))||tabs.find(t=>t.type==='page');
+  const ws=new WebSocket(g.webSocketDebuggerUrl);
+  let id=0;const p=new Map();
+  const send=(m,pa)=>new Promise((res,rej)=>{const mid=++id;p.set(mid,{res,rej});ws.send(JSON.stringify({id:mid,method:m,params:pa}))});
+  ws.addEventListener('message',ev=>{const m=JSON.parse(ev.data);if(m.id&&p.has(m.id)){const q=p.get(m.id);p.delete(m.id);m.error?q.rej(new Error(m.error.message)):q.res(m.result)}});
+  await new Promise((res,rej)=>{const to=setTimeout(()=>rej(new Error('timeout')),8000);ws.addEventListener('open',()=>{clearTimeout(to);res()})});
+  const ev=(expr)=>send('Runtime.evaluate',{expression:expr,returnByValue:true}).then(r=>r&&r.result?r.result.value:undefined);
+  await send('Page.enable',{}); await send('Runtime.enable',{});
+  await send('Page.navigate',{url:`https://${PREFIX}.1688.com/page/offerlist.htm`});
+  for(let i=0;i<15;i++){await sleep(1000);const f=await ev('location.href');if(/offerlist/.test(f||''))break;}
+  await sleep(3000);
+  for(let i=0;i<5;i++){ await ev('window.scrollTo(0,document.body.scrollHeight)'); await sleep(1500); }
+  const r = await ev(`(()=>{
+    const t = document.body.innerText;
+    // 定位"相关产品"后的内容
+    const idx = t.indexOf('相关产品');
+    const after = idx>=0 ? t.slice(idx, idx+1200) : t.slice(0,1200);
+    return JSON.stringify({after, bodyLen:t.length, hasLogin:/登录/.test(t)});
+  })()`);
+  console.log(r);
+  process.exit(0);
+})().catch(e=>{console.log(JSON.stringify({error:e.message}));process.exit(1);});

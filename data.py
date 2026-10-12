@@ -2386,6 +2386,14 @@ CATEGORY_MAP = [
     # 烟灰缸/烟盅（task_300 类目匹配不上，实测拼多多类目树 2026-10-03）
     ("烟灰缸", "家居饰品 > 装饰器皿 > 装饰烟灰缸", "烟灰缸"),
     ("烟盅", "家居饰品 > 装饰器皿 > 装饰烟灰缸", "烟灰缸"),
+    # 果盘/果篮（task_539 类目匹配不上：AI 猜「家居生活>果盘/果篮>果盘」搜不到，
+    # 实测拼多多真实类目「餐饮具 > 餐具 > 果盆/果盘/果篮」）
+    ("果盘", "餐饮具 > 餐具 > 果盆/果盘/果篮", "果盘"),
+    ("果篮", "餐饮具 > 餐具 > 果盆/果盘/果篮", "果篮"),
+    # 垃圾桶/垃圾筒（task_576 类目匹配不上：AI 猜「家居日用>垃圾桶>家用垃圾桶」搜不到，
+    # 实测拼多多真实类目是四级「家庭/个人清洁工具 > 室内/室外清洁用具 > 垃圾桶/垃圾架 > 垃圾桶」）
+    ("垃圾桶", "家庭/个人清洁工具 > 室内/室外清洁用具 > 垃圾桶/垃圾架 > 垃圾桶", "垃圾桶"),
+    ("垃圾筒", "家庭/个人清洁工具 > 室内/室外清洁用具 > 垃圾桶/垃圾架 > 垃圾桶", "垃圾桶"),
 ]
 
 
@@ -2406,8 +2414,18 @@ def _fix_category_by_map(cfg: dict, title: str) -> bool:
         pass
     # 长词优先：更具体的品类词（如"仿真花"3字）优先于宽泛词（如"摆件"2字），避免宽泛词抢占
     merged.sort(key=lambda x: len(x[0]), reverse=True)
+    # 自愈：匹配文本 = 标题 + AI 猜的 categoryKeyword + categoryPath 各段。
+    # AI 常猜「铁艺摆件」这类拼多多不存在的复合词（task_2226：书架猜成「铁艺摆件」搜索失败），
+    # 但学习库有「摆件」→「家居饰品 > 摆件 > 摆件」，把 AI 猜的词纳入匹配后，「摆件」能通过包含关系命中修正。
+    _match_text = title or ""
+    _ckw = (cfg.get("categoryKeyword") or "").strip()
+    _cpath = (cfg.get("categoryPath") or "").strip()
+    if _ckw:
+        _match_text += " " + _ckw
+    if _cpath:
+        _match_text += " " + _cpath.replace(">", " ").replace("/", " ")
     for kw, path, ckw in merged:
-        if kw in title:
+        if kw in _match_text:
             cfg["categoryPath"] = path
             cfg["categoryKeyword"] = ckw
             return True
@@ -2444,6 +2462,34 @@ def _clean_title(title: str) -> str:
     return t
 
 
+def _extract_sku_pairs(body_text: str):
+    """从 1688 bodyText 确定性提取 [(SKU名, 进价)] 配对（不依赖 AI 归纳）。
+
+    1688 下单区 SKU 价格列表结构：SKU名 / ¥价格 / 库存N套（循环）。
+    用「库存N…」行作强锚点，往前推 2 行取 SKU 名、推 1 行取价格。
+    task_557 教训：衣柜 24 SKU（实色+茶透同价），AI 归纳把茶透误判重复只留 12 个实色，
+    且丢 SKU 后 previewImages 图索引也跟着错位（sku_5 茶透图错配给斜角65实色）。
+    """
+    import re
+    pairs = []
+    lines = [l.strip() for l in (body_text or "").split("\n")]
+    for i in range(2, len(lines)):
+        if not re.match(r"^库存\d+", lines[i]):
+            continue
+        pm = re.match(r"^¥([\d.]+)$", lines[i - 1])
+        name = lines[i - 2]
+        if not pm or not name:
+            continue
+        if "¥" in name or "￥" in name:
+            continue
+        if re.match(r"^库存", name):
+            continue
+        if len(name) > 40:
+            continue
+        pairs.append((name, float(pm.group(1))))
+    return pairs
+
+
 def ai_generate_publish_config(product: dict, pricing: dict = None, shop_name: str = "", shop_id: int = 0) -> dict:
     """DeepSeek 把 1688 抓取的 product 自动生成 publish.js 的 config。
 
@@ -2473,6 +2519,8 @@ def ai_generate_publish_config(product: dict, pricing: dict = None, shop_name: s
     title = (product.get("title") or "").strip()
     body_text = (product.get("bodyText") or "")[:6000]
     images = product.get("images") or []
+    sku_images = product.get("skuImages") or []
+    detail_images = product.get("detailImages") or []
     if not title:
         return {"config": None, "warning": "", "error": "商品标题为空"}
     if not DEEPSEEK_API_KEY:
@@ -2488,12 +2536,13 @@ def ai_generate_publish_config(product: dict, pricing: dict = None, shop_name: s
         "{\n"
         '  "categoryKeyword": "类目搜索关键词（2-4字，取 categoryPath 第二级最具体品类词，如 手套/婚庆/仿真花/气球）",\n'
         '  "categoryPath": "完整类目路径，严格用 > 分隔三级（一级>二级>三级），每级是拼多多真实类目名，禁止一级用 / 混多个词。例：服饰配件/饰品 > 手套 > 分指手套",\n'
-        '  "title": "优化后标题，≤30个汉字、≤60字符，保留核心卖点+场景词，不要夸张违规词，严禁出现平台名（抖音/快手/淘宝/天猫/京东/拼多多/小红书/微信等）。若提供了目标店铺，标题要针对该店差异化：换词序、换卖点侧重、换场景词，避免与其他店铺标题雷同",\n'
+        '  "title": "优化后标题，尽量写满 28~30 个汉字（不要短于 26 字），充分利用拼多多标题关键词搜索空间；≤30字、≤60字符。保留核心卖点+场景词+属性词+材质词，每个词都要有搜索价值、自然通顺，不要硬凑无意义词，不要夸张违规词，严禁出现平台名（抖音/快手/淘宝/天猫/京东/拼多多/小红书/微信等）。若提供了目标店铺，标题要针对该店差异化：换词序、换卖点侧重、换场景词，避免与其他店铺标题雷同",\n'
         '  "specs": [{"type":"规格类型名(颜色/款式/尺寸/型号)","values":["值1","值2"]}],\n'
         '  "priceBySpec2": {"规格2的值":{"cost":进价(元)}},\n'
         '  "stock": 库存数字(默认500),\n'
         '  "refPrice": 参考价(必须大于最大单买价),\n'
-        '  "previewImages": {"规格1的值":"对应主图索引(0-9，0表示第1张主图)"}\n'
+        '  "previewImages": {"规格1的值":"对应主图索引(0-9，0表示第1张主图)"},\n'
+        '  "attributes": {"材质":"铁","风格":"法式"}\n'
         "}\n\n"
         "硬性规则：\n"
         "1. 规格归纳：从页面文本的「颜色/款式/尺寸」等属性里提取规格。**默认只用 1 维规格（款式）**——把颜色/图案/款型变体都归到「款式」一维，值填变体名（如 白色/粉色/黄色/复古棕）。只有当商品存在**明确独立的第二维度**（服装尺码 S/M/L、鞋码、容器毫升/升容量、餐具尺寸口径）时才用第 2 维（尺寸/型号/容量），否则一律只出 1 维。**SKU 总数（各维 values 数量的乘积）必须 ≤30 个**。若原始规格展开后超过 30 个，必须精简到核心组合——只保留最热门/最主流的款式图案和数量/规格做精简笛卡尔积（如 5图案×6数量=30 个）。宁可 SKU 少而精，绝不全量展开成上百个。specs 最多 2 维。\n"
@@ -2501,6 +2550,7 @@ def ai_generate_publish_config(product: dict, pricing: dict = None, shop_name: s
         "3. 规格类型名只能用：款式/尺寸/型号/容量/材质/器型/口味（这些拼多多有且用文本输入）。⚠️ 禁用「颜色」「色号」「花色」——「颜色/色号」用色卡选择(非文本输入)填不了，「花色」根本不在拼多多规格类型列表里。颜色类商品一律用「款式」命名，值填颜色名(如 白色/粉色/黄色)。\n"
         "4. previewImages：规格1 每个值对应一张主图（用图片索引 0-9，第1张主图=0）。\n"
         "5. 若 SKU 无法归纳到 30 个以内，如实列，外层会判断预警。\n"
+        "6. attributes：从页面「商品属性/参数」里提取拼多多有用的属性，只填这几个键（没有就省略该键）：材质（填材质名如 铁/陶瓷/塑料/树脂/不锈钢/木/玻璃）、风格（填风格名如 法式/简约/欧式/田园/中式/北欧）、类型（填品类如 花盆/花瓶/果盘）、使用形式（如 桌面式/落地式/壁挂式）。⚠️ 值用 1688 原始值，不要猜，没有就别填。\n"
         "只输出 JSON 对象，不要 markdown 代码块，不要多余文字。"
     )
     body = json.dumps({
@@ -2612,18 +2662,44 @@ def ai_generate_publish_config(product: dict, pricing: dict = None, shop_name: s
     offset = (int(shop_id) % n_square) if (is_batch and n_square > 1 and shop_id) else 0
     rotated_images = ordered_images[offset:] + ordered_images[:offset] if offset else ordered_images
     cfg["images"] = rotated_images
-    # previewImages：AI 给的索引基于原始图序，轮换后索引同步偏移（新索引 = 旧索引 - offset，取模）
-    pv = cfg.get("previewImages") or {}
-    resolved_pv = {}
-    for k, v in pv.items():
-        try:
-            idx = int(v)
-        except (TypeError, ValueError):
-            idx = 0
-        if offset and n_img > 1:
-            idx = (idx - offset) % n_img
-        resolved_pv[str(k)] = rotated_images[idx] if idx < len(rotated_images) else (rotated_images[0] if rotated_images else "")
-    cfg["previewImages"] = resolved_pv
+    # 详情图（商品详情长图）：scrape 抓的 detailImages 原样透传，供 publish.js 上传商详装修区。
+    cfg["detailImages"] = detail_images
+    # ===== 确定性 SKU 提取（task_557 教训：AI 归纳丢"同价不同名"变体 + 图索引错位） =====
+    # bodyText 的 SKU 价格列表是结构化的（SKU名/¥价格/库存N套），确定性提取完整 SKU。
+    # 只有当确定性提取比 AI 多（说明 AI 丢了变体）才覆盖，否则信任 AI 的维度归纳。
+    _det_sku_note = ""
+    _det_skus = _extract_sku_pairs(product.get("bodyText") or "")
+    if _det_skus:
+        _ai_specs = cfg.get("specs") or []
+        _ai_spec1_vals = _ai_specs[0].get("values") or [] if _ai_specs else []
+        # 只有 AI 是 1 维且确定性提取更多（AI 丢变体）才覆盖；2 维规格保留 AI 的维度归纳
+        if len(_ai_specs) == 1 and len(_det_skus) > len(_ai_spec1_vals):
+            _det_names = [_n for _n, _p in _det_skus]
+            cfg["specs"] = [{"type": "款式", "values": _det_names}]
+            # priceBySpec2 只给 cost，pdd/danmai 由下方统一定价逻辑计算
+            cfg["priceBySpec2"] = {_n: {"cost": _p} for _n, _p in _det_skus}
+            _det_sku_note = f"SKU 已按页面完整提取 {len(_det_skus)} 个（AI 归纳 {len(_ai_spec1_vals)} 个）"
+    # previewImages：优先用 SKU 图（scrape 抓的 skuImages，已跳过主图），
+    # 无 SKU 图时回退到主图顺序匹配（第 N 个值 → 第 N 张主图）。
+    # task_553 教训：把主图+SKU图混在一起按 DOM 顺序配，前几张主图占了 SKU 图位置。
+    _spec1_vals = (cfg.get("specs") or [{}])[0].get("values") or []
+    _sku_img_pool = sku_images if sku_images else rotated_images
+    _resolved_pv = {}
+    for _i, _val in enumerate(_spec1_vals):
+        _resolved_pv[str(_val)] = (
+            _sku_img_pool[_i] if _i < len(_sku_img_pool)
+            else (_sku_img_pool[-1] if _sku_img_pool else "")
+        )
+    cfg["previewImages"] = _resolved_pv
+    # attributes：1688 参数值原样透传（不做近似映射）。发布时拼多多选项精确匹配不上则跳过（无对应不做操作）。
+    _raw_attrs = cfg.get("attributes") or {}
+    _mapped_attrs = {}
+    for _k, _v in _raw_attrs.items():
+        _v = str(_v or "").strip()
+        if not _v:
+            continue
+        _mapped_attrs[str(_k)] = _v
+    cfg["attributes"] = _mapped_attrs
     # 定价：AI 提取进价 cost，这里用固定公式算 pdd/danmai/refPrice（不再让 AI 自由定价）
     costs = cfg.get("priceBySpec2") or {}
     if not costs:
@@ -2649,6 +2725,8 @@ def ai_generate_publish_config(product: dict, pricing: dict = None, shop_name: s
 
     # SKU 复杂度预警
     warning = _trim_note
+    if _det_sku_note:
+        warning = (warning + "；" if warning else "") + _det_sku_note
     specs = cfg.get("specs", [])
     total_sku = 1
     for s in specs:
@@ -2666,3 +2744,136 @@ def ai_generate_publish_config(product: dict, pricing: dict = None, shop_name: s
         warning = (warning + "；" if warning else "") + _no_square_warn
 
     return {"config": cfg, "warning": warning, "error": None}
+
+
+def ai_fix_category(product: dict, failed_path: str = "", failed_kw: str = "") -> dict:
+    """类目匹配失败后，让 DeepSeek 重新分析商品、生成拼多多真实存在的类目。
+
+    用于 publish 环节类目搜索失败时的 AI 兜底：AI 首猜的类目（如「铁艺摆件」）在拼多多
+    类目树里不存在，搜索失败。让 AI 换个更通用/更准的品类词重猜（task_2226 类目失败教训）。
+    返回 {categoryPath, categoryKeyword} 或 {error}。
+    """
+    import re
+    title = (product.get("title") or "").strip()
+    body_text = (product.get("bodyText") or "")[:3000]
+    if not DEEPSEEK_API_KEY:
+        return {"error": "未配置 DeepSeek API key"}
+    fail_line = (f"之前猜错、拼多多搜不到的类目：{failed_path}（搜索词：{failed_kw}）\n\n" if failed_path else "")
+    prompt = (
+        "你是拼多多商品类目专家。之前 AI 生成的类目在拼多多后台搜不到，需要你重新分析商品，给出真实存在的类目。\n\n"
+        f"商品标题：{title}\n"
+        f"商品页面文本：\n{body_text}\n\n"
+        f"{fail_line}"
+        "请输出一个 JSON 对象：\n"
+        "{\n"
+        '  "categoryKeyword": "类目搜索关键词（2-4字，取最具体、最通用的品类词，如 摆件/收纳箱/挂钩/花盆/果盘）",\n'
+        '  "categoryPath": "完整类目路径，严格用 > 分隔（一级>二级>三级），每级是拼多多真实存在的类目名"\n'
+        "}\n\n"
+        "硬性要求：\n"
+        "1. 类目路径必须是拼多多真实存在的，禁止编造「铁艺摆件」这类不存在的复合品类名；用最贴近商品本质的通用品类词。\n"
+        "2. 换一个和上次不同的思路：上次用了「XX摆件」失败，这次改用更宽的「摆件」，或更贴近商品实际用途的「收纳/置物/花盆」类。\n"
+        "只输出 JSON，不要 markdown 代码块，不要多余文字。"
+    )
+    body = json.dumps({
+        "model": "deepseek-chat",
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.3,
+        "stream": False,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        "https://api.deepseek.com/chat/completions",
+        data=body,
+        headers={
+            "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        resp = json.loads(urllib.request.urlopen(req, timeout=60).read())
+        content = resp["choices"][0]["message"]["content"]
+    except Exception as e:
+        return {"error": f"DeepSeek 调用失败：{e}"}
+    m = re.search(r"\{.*\}", content, re.DOTALL)
+    if not m:
+        return {"error": f"AI 输出解析失败：{content[:200]}"}
+    try:
+        d = json.loads(m.group(0))
+    except Exception:
+        return {"error": f"config JSON 非法：{content[:200]}"}
+    return {
+        "categoryPath": (d.get("categoryPath") or "").strip(),
+        "categoryKeyword": (d.get("categoryKeyword") or "").strip(),
+    }
+
+
+def ai_diagnose_publish_failure(title: str = "", stage: str = "", error_msg: str = "", log_tail: str = "") -> dict:
+    """失败后让 DeepSeek 读错误 + 发布日志尾部，诊断根因并判断能否自动重跑自愈。
+
+    通用 AI 自处理：上架任务失败后，不再只靠硬编码 if-else 分类，而是让 AI 读日志判断：
+    - 可自动修复（暂时性错误/时序/WebSocket参数等重跑能好）→ can_retry=True
+    - 不可自动修复（货源链接失效/类目树差异/资质拦截/重复上架等）→ can_retry=False
+
+    返回 {can_retry: bool, reason: str, fix_hint: str}。调用失败/超时/解析失败一律返回 can_retry=False 的
+    降级结果（reason 说明诊断本身失败），绝不抛异常——调用方按"不自动重跑"处理，保证不因诊断环节引入新故障。
+    """
+    import re
+    if not DEEPSEEK_API_KEY:
+        return {"can_retry": False, "reason": "未配置 DeepSeek API key，无法 AI 诊断", "fix_hint": ""}
+    prompt = (
+        "你是拼多多商品上架自动化运维专家。下面是一次上架任务失败的信息，请判断：这个失败「重跑一次能否成功」。\n\n"
+        f"商品标题：{title or '（未知）'}\n"
+        f"失败环节：{stage or '（未知）'}\n"
+        f"失败信息：{error_msg[:1500] or '（空）'}\n"
+        f"发布日志尾部：\n{log_tail[:2500] or '（空）'}\n\n"
+        "请输出 JSON 对象：\n"
+        "{\n"
+        '  "can_retry": true 或 false,\n'
+        '  "reason": "根因简述（30字内）",\n'
+        '  "fix_hint": "修复建议（50字内，can_retry=false 时必填）"\n'
+        "}\n\n"
+        "判断标准：\n"
+        "1. can_retry=true：失败是暂时性/时序性/随机性的，重跑大概率成功。包括：CDP超时、连接中断(ECONNREFUSED)、"
+        "WebSocket 参数错误(Invalid parameters)、页面加载慢导致的时序问题、图片上传偶发失败、按钮点击偶发失败。\n"
+        "2. can_retry=false：失败是确定性的，重跑还是同样结果。包括：1688 货源链接失效/短链跳转失败/验证码拦截、"
+        "类目在拼多多不存在且已多次 AI 修复仍失败、资质/品牌被拦截、重复上架、类目确认按钮找不到（页面改版）。\n"
+        "3. 拿不准时，宁可选 can_retry=true（重跑一次成本低，且重跑失败会自动停），但「链接失效」「验证码」「资质拦截」"
+        "「重复上架」这几类确定性失败必须 can_retry=false。\n"
+        "只输出 JSON，不要 markdown 代码块，不要多余文字。"
+    )
+    body = json.dumps({
+        "model": "deepseek-chat",
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.1,
+        "stream": False,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        "https://api.deepseek.com/chat/completions",
+        data=body,
+        headers={
+            "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        resp = json.loads(urllib.request.urlopen(req, timeout=60).read())
+        content = resp["choices"][0]["message"]["content"]
+    except Exception as e:
+        return {"can_retry": False, "reason": f"AI 诊断调用失败：{e}", "fix_hint": ""}
+    m = re.search(r"\{.*\}", content, re.DOTALL)
+    if not m:
+        return {"can_retry": False, "reason": f"AI 诊断输出解析失败：{content[:150]}", "fix_hint": ""}
+    try:
+        d = json.loads(m.group(0))
+    except Exception:
+        return {"can_retry": False, "reason": f"AI 诊断 JSON 非法：{content[:150]}", "fix_hint": ""}
+    can_retry = bool(d.get("can_retry"))
+    # 兜底：确定性失败关键词强制 can_retry=False，防止 AI 误判导致无限重跑
+    _no_retry_kw = ("链接失效", "验证码", "资质拦截", "重复上架", "短链", "类目不存在", "改版", "不存在",
+                    "风控", "x5sec", "滑块", "反爬", "拦截")
+    if any(k in (error_msg or "") for k in _no_retry_kw):
+        can_retry = False
+    return {
+        "can_retry": can_retry,
+        "reason": str(d.get("reason") or "").strip(),
+        "fix_hint": str(d.get("fix_hint") or "").strip(),
+    }

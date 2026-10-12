@@ -221,7 +221,7 @@ function showImageLightbox(src) {
 
 // 自定义二次确认弹窗（替代原生 confirm，微信内置浏览器可用）
 function confirmDialog(msg, opts = {}) {
-  const { title = '确认操作', confirmText = '确认删除', cancelText = '取消', danger = true } = opts;
+  const { title = '确认操作', confirmText = '确认删除', cancelText = '取消', danger = true, extraText = '' } = opts;
   return new Promise(resolve => {
     const overlay = document.createElement('div');
     overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:999;display:flex;align-items:center;justify-content:center;padding:24px';
@@ -232,13 +232,20 @@ function confirmDialog(msg, opts = {}) {
       <div style="font-size:14px;color:#4b5677;line-height:1.6;margin-bottom:22px;word-break:break-all">${msg}</div>
       <div style="display:flex;gap:10px;justify-content:flex-end">
         <button class="btn" style="padding:8px 18px">${esc(cancelText)}</button>
+        ${extraText ? `<button class="btn primary" style="padding:8px 18px">${esc(extraText)}</button>` : ''}
         <button class="btn ${danger ? 'danger' : 'primary'}" style="padding:8px 18px">${esc(confirmText)}</button>
       </div>`;
     overlay.appendChild(box);
     document.body.appendChild(overlay);
     const close = val => { overlay.remove(); resolve(val); };
-    box.querySelectorAll('button')[0].onclick = () => close(false);
-    box.querySelectorAll('button')[1].onclick = () => close(true);
+    const btns = box.querySelectorAll('button');
+    btns[0].onclick = () => close(false);
+    if (extraText) {
+      btns[1].onclick = () => close('extra');
+      btns[2].onclick = () => close(true);
+    } else {
+      btns[1].onclick = () => close(true);
+    }
     overlay.onclick = e => { if (e.target === overlay) close(false); };
   });
 }
@@ -654,6 +661,7 @@ async function renderNewoffer() {
           <div style="font-size:12px;color:#64748b;margin-bottom:6px">供应商（含 1688 店铺前缀）</div>
           <select id="newoffer-supplier" style="${selStyle}">
             <option value="">请选择供应商</option>
+            <option value="0">全部供应商</option>
             ${withPrefix.map(s => `<option value="${s.id}">${esc(s.name)}（${esc(s.prefix)}）</option>`).join('')}
           </select>
         </div>
@@ -683,38 +691,61 @@ async function renderNewoffer() {
             <option value="publishing">上架中</option>
             <option value="published">已上架</option>
           </select>
+          <select id="newoffer-supplier-filter" style="padding:6px 10px;border:1px solid #dbe2ec;border-radius:8px;font-size:13px;max-width:220px">
+            <option value="">全部店铺</option>
+            ${withPrefix.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}
+          </select>
           <input id="newoffer-q" placeholder="搜索标题关键词" style="padding:6px 10px;border:1px solid #dbe2ec;border-radius:8px;font-size:13px;width:200px">
         </div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <button class="btn btn-primary" id="newoffer-publish" style="padding:8px 16px">一键上架选中</button>
+          <button class="newoffer-publish-btn" id="newoffer-publish">🚀 一键上架选中</button>
         </div>
       </div>
       <div style="margin-bottom:14px;padding:10px 12px;background:#f8fafc;border:1px solid #eef1f6;border-radius:10px">
-        <div style="font-size:12px;color:#64748b;font-weight:600;margin-bottom:8px">上架到店铺（按平台）</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+          <div style="font-size:12px;color:#64748b;font-weight:600">上架到店铺（按平台）</div>
+          <select id="newoffer-platform-filter" style="padding:5px 8px;border:1px solid #dbe2ec;border-radius:8px;font-size:12px;background:#fff">
+            <option value="">全部平台</option>
+            ${platforms.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}
+          </select>
+        </div>
         <div id="newoffer-shops"></div>
       </div>
       <div id="newoffer-list" style="color:#94a3b8">加载中…</div>
     </div>
   `;
 
-  // 店铺按平台分组显示（拼多多/淘宝/抖音/京东/小红书/微信）
+  // 店铺按平台分组显示（拼多多/淘宝/抖音/京东/小红书/微信），支持按平台筛选（默认拼多多）
   const shopBox = $('#newoffer-shops');
   const platMap = {};
   platforms.forEach(p => platMap[p.id] = p.name);
-  const grouped = {};
-  shops.forEach(s => {
-    const pn = platMap[s.platform_id] || '其他';
-    if (!grouped[pn]) grouped[pn] = [];
-    grouped[pn].push(s);
-  });
-  shopBox.innerHTML = Object.entries(grouped).map(([pn, ss]) => `
-    <div style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap;margin-bottom:8px">
-      <span style="font-size:12px;color:#475569;font-weight:600;min-width:48px;padding-top:6px;flex-shrink:0">${esc(pn)}</span>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;flex:1">
-        ${ss.map(s => `<label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer;background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:5px 12px"><input type="checkbox" class="newoffer-shop" value="${s.id}">${esc(s.name)}</label>`).join('')}
-      </div>
-    </div>
-  `).join('');
+  function renderShopBox(platId) {
+    const grouped = {};
+    shops.forEach(s => {
+      if (platId && String(s.platform_id) !== String(platId)) return;
+      const pn = platMap[s.platform_id] || '其他';
+      if (!grouped[pn]) grouped[pn] = [];
+      grouped[pn].push(s);
+    });
+    const entries = Object.entries(grouped);
+    shopBox.innerHTML = entries.length
+      ? entries.map(([pn, ss]) => `
+        <div style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap;margin-bottom:8px">
+          <span style="font-size:12px;color:#475569;font-weight:600;min-width:48px;padding-top:6px;flex-shrink:0">${esc(pn)}</span>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;flex:1">
+            ${ss.map(s => `<label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer;background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:5px 12px"><input type="checkbox" class="newoffer-shop" value="${s.id}">${esc(s.name)}</label>`).join('')}
+          </div>
+        </div>
+      `).join('')
+      : '<div style="color:#94a3b8;font-size:12px">该平台暂无店铺</div>';
+  }
+  // 默认选中拼多多平台（platform key = pdd）
+  const pdd = platforms.find(p => p.key === 'pdd' || p.name === '拼多多');
+  const platFilter = $('#newoffer-platform-filter');
+  const defaultPlatId = pdd ? String(pdd.id) : '';
+  if (defaultPlatId) platFilter.value = defaultPlatId;
+  platFilter.addEventListener('change', () => renderShopBox(platFilter.value));
+  renderShopBox(defaultPlatId);
 
   // 列表渲染（最新在上 + 分页 + 关键词查询）
   let newofferPage = 1;
@@ -723,6 +754,7 @@ async function renderNewoffer() {
   async function loadList() {
     const status = $('#newoffer-status').value;
     const q = ($('#newoffer-q').value || '').trim();
+    const supplierId = $('#newoffer-supplier-filter').value;
     const box = $('#newoffer-list');
     box.innerHTML = '加载中…';
     let items = [], total = 0;
@@ -730,6 +762,7 @@ async function renderNewoffer() {
       const params = new URLSearchParams();
       if (status) params.set('status', status);
       if (q) params.set('q', q);
+      if (supplierId) params.set('supplier_id', supplierId);
       params.set('page', newofferPage);
       params.set('page_size', newofferPageSize);
       const resp = await api('/api/newoffer/list?' + params.toString());
@@ -766,7 +799,7 @@ async function renderNewoffer() {
               <div style="display:flex;justify-content:space-between;align-items:center;margin-top:auto">
                 <span style="color:#dc2626;font-weight:700;font-size:14px">¥${esc(it.price || '—')}</span>
                 <label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer;color:#475569">
-                  <input type="checkbox" class="newoffer-check" value="${it.id}" ${it.status !== 'new' ? 'disabled' : ''}>选
+                  <input type="checkbox" class="newoffer-check" value="${it.id}" ${it.status === 'publishing' ? 'disabled' : ''}>选
                 </label>
               </div>
               <div style="color:#94a3b8;font-size:11px">${esc(it.supplier_name || '')} · ${esc(it.date || '—')}</div>
@@ -810,12 +843,18 @@ async function renderNewoffer() {
   // 采集
   $('#newoffer-collect').addEventListener('click', async () => {
     const sid = $('#newoffer-supplier').value;
-    if (!sid) { toast('请先选择供应商'); return; }
+    if (sid === '') { toast('请先选择供应商'); return; }
+    const isAll = (sid === '0');
     const btn = $('#newoffer-collect');
-    btn.disabled = true; btn.textContent = '采集中…';
+    btn.disabled = true; btn.textContent = isAll ? '采集中（全部供应商，较慢）…' : '采集中…';
     try {
       const resp = await api('/api/supplier/fetchNew', 'POST', { supplier_id: parseInt(sid) });
-      toast(`采集完成：新增 ${resp.inserted} 条，跳过重复 ${resp.skipped} 条`);
+      if (resp && resp.all) {
+        const fails = (resp.results || []).filter(r => r.error);
+        toast(`全部采集完成：新增 ${resp.inserted} 条，跳过重复 ${resp.skipped} 条${fails.length ? '（' + fails.length + ' 个供应商失败）' : ''}`);
+      } else {
+        toast(`采集完成：新增 ${resp.inserted} 条，跳过重复 ${resp.skipped} 条`);
+      }
       await loadList();
     } catch(e) { toast('采集失败：' + e.message); }
     btn.disabled = false; btn.textContent = '🔄 采集新品';
@@ -864,6 +903,7 @@ async function renderNewoffer() {
 
   // 状态筛选 + 关键词搜索（都重置到第 1 页）
   $('#newoffer-status').addEventListener('change', () => { newofferPage = 1; loadList(); });
+  $('#newoffer-supplier-filter').addEventListener('change', () => { newofferPage = 1; loadList(); });
   let newofferSearchTimer = null;
   $('#newoffer-q').addEventListener('input', () => {
     clearTimeout(newofferSearchTimer);
@@ -871,16 +911,81 @@ async function renderNewoffer() {
   });
   $('#newoffer-q').addEventListener('keydown', e => { if (e.key === 'Enter') { newofferPage = 1; loadList(); } });
 
+  // 一键上架确认弹框：选价格体系 + 显示即将上传条数
+  const showPublishDialog = (itemCount, shopCount) => new Promise(async (resolve) => {
+    let schemes = [];
+    try { schemes = (await api('/api/pricing/schemes')).items || []; } catch (e) { schemes = []; }
+    if (!schemes.length) schemes = [{ id: 1, name: '推广价', profit_rate: 20, roi: 2, aftersale_rate: 5, freight: 3, danmai_mult: 1.5, is_default: 1 }];
+    const def = schemes.find(s => s.is_default) || schemes[0];
+    const totalLinks = itemCount * shopCount;
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:9000;display:flex;align-items:center;justify-content:center;padding:24px';
+    overlay.innerHTML = `
+      <div style="background:#fff;border-radius:16px;padding:24px;width:100%;max-width:440px;box-shadow:0 20px 60px rgba(0,0,0,.3)">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+          <div style="font-size:17px;font-weight:700;color:#17203a">🚀 一键上架确认</div>
+          <button id="pd-close" style="background:none;border:none;font-size:22px;color:#94a3b8;cursor:pointer;line-height:1">×</button>
+        </div>
+        <div style="font-size:13px;color:#475569;line-height:1.8;margin-bottom:16px">
+          即将上传 <b style="color:#2563eb;font-size:16px">${totalLinks}</b> 条商品链接
+          <span style="color:#94a3b8">（${itemCount} 件商品 × ${shopCount} 个店铺）</span>
+        </div>
+        <div style="margin-bottom:8px;font-size:13px;color:#475569;font-weight:600">价格体系</div>
+        <select id="pd-scheme" style="width:100%;padding:10px 12px;border:1px solid #cbd5e1;border-radius:10px;font-size:14px;background:#fff;font-family:inherit">
+          ${schemes.map(s => `<option value="${s.id}" ${String(s.id) === String(def.id) ? 'selected' : ''}>${esc(s.name)}${s.is_default ? '（默认）' : ''}</option>`).join('')}
+        </select>
+        <div id="pd-scheme-desc" style="font-size:12px;color:#94a3b8;margin-top:8px;min-height:18px"></div>
+        <div style="display:flex;gap:10px;margin-top:20px">
+          <button id="pd-cancel" style="flex:1;padding:11px;background:#f1f5f9;color:#475569;border:1px solid #e2e8f0;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer">取消</button>
+          <button id="pd-ok" style="flex:1;padding:11px;background:linear-gradient(135deg,#2563eb,#7c3aed);color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer">确认上架</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const schemeSel = overlay.querySelector('#pd-scheme');
+    const schemeDesc = overlay.querySelector('#pd-scheme-desc');
+    const renderDesc = () => {
+      const s = schemes.find(x => String(x.id) === schemeSel.value);
+      schemeDesc.textContent = s
+        ? (((s.roi || 0) > 0
+            ? `利润率 ${s.profit_rate}% · 投产比 ${s.roi} · 售后 ${s.aftersale_rate}% · 运费 ${s.freight}元 · 单买 ${s.danmai_mult}倍`
+            : `平卖价 · 利润率 ${s.profit_rate}% · 售后 ${s.aftersale_rate}% · 运费 ${s.freight}元 · 单买 ${s.danmai_mult}倍`))
+        : '';
+    };
+    schemeSel.addEventListener('change', renderDesc);
+    renderDesc();
+    const close = (val) => { overlay.remove(); resolve(val); };
+    overlay.querySelector('#pd-close').onclick = () => close(null);
+    overlay.querySelector('#pd-cancel').onclick = () => close(null);
+    overlay.onclick = (e) => { if (e.target === overlay) close(null); };
+    overlay.querySelector('#pd-ok').onclick = () => {
+      const s = schemes.find(x => String(x.id) === schemeSel.value);
+      if (!s) { close(null); return; }
+      close({
+        scheme_id: s.id,
+        scheme_name: s.name,
+        price_mode: (s.roi || 0) > 0 ? 'promo' : 'normal',
+        profit_rate: (Number(s.profit_rate) || 20) / 100,
+        roi: Number(s.roi) || 0,
+        aftersale_rate: (Number(s.aftersale_rate) || 5) / 100,
+        freight: Number(s.freight) || 3,
+        danmai_mult: Number(s.danmai_mult) || 1.5,
+      });
+    };
+  });
+
   // 一键上架
   $('#newoffer-publish').addEventListener('click', async () => {
     const ids = $$('.newoffer-check:checked').map(c => parseInt(c.value));
     const shop_ids = $$('.newoffer-shop:checked').map(c => parseInt(c.value));
     if (!ids.length) { toast('请先勾选要上架的商品'); return; }
     if (!shop_ids.length) { toast('请至少选择一个店铺'); return; }
+    // 弹框确认：选价格体系 + 显示上架条数
+    const pricing = await showPublishDialog(ids.length, shop_ids.length);
+    if (!pricing) return;
     const btn = $('#newoffer-publish');
     btn.disabled = true; btn.textContent = '创建任务中…';
     try {
-      let resp = await api('/api/newoffer/publish', 'POST', { ids, shop_ids });
+      let resp = await api('/api/newoffer/publish', 'POST', { ids, shop_ids, pricing });
       // 重复提醒：同店同链接已上传过，弹框确认后才带 force 重提
       if (resp && resp.duplicate) {
         const dups = resp.duplicates || [];
@@ -891,15 +996,15 @@ async function renderNewoffer() {
           { title: '⚠️ 重复上架提醒', confirmText: '全部继续', cancelText: '取消', danger: false }
         );
         if (!ok) {
-          btn.disabled = false; btn.textContent = '一键上架选中';
+          btn.disabled = false; btn.textContent = '🚀 一键上架选中';
           return;
         }
-        resp = await api('/api/newoffer/publish', 'POST', { ids, shop_ids, force: true });
+        resp = await api('/api/newoffer/publish', 'POST', { ids, shop_ids, pricing, force: true });
       }
       toast(`已创建 ${resp.count} 个上架任务（${resp.skipped_published || 0} 个已上架跳过）`);
       await loadList();
     } catch(e) { toast('上架失败：' + e.message); }
-    btn.disabled = false; btn.textContent = '一键上架选中';
+    btn.disabled = false; btn.textContent = '🚀 一键上架选中';
   });
 
   await loadList();
@@ -1007,6 +1112,18 @@ async function renderAutopublish() {
       </div>
 
       <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:18px;margin-bottom:16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="toggleSelfheal()">
+          <div style="font-weight:700;font-size:15px">🩺 自动自愈 <span id="selfheal-count" style="font-size:12px;color:#94a3b8;font-weight:400"></span></div>
+          <span id="selfheal-toggle-icon" style="color:#94a3b8;font-size:12px">展开 ▼</span>
+        </div>
+        <div style="color:#64748b;font-size:13px;margin:4px 0 0">CDP超时/连接类暂时性错误失败后自动重新入队重试（每任务最多2次、间隔45秒）。这里实时统计自动自愈的运行情况。</div>
+        <div id="selfheal-body" style="display:none;margin-top:12px">
+          <div id="selfheal-stats" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px"></div>
+          <div id="selfheal-list"><div class="empty" style="color:#94a3b8">加载中…</div></div>
+        </div>
+      </div>
+
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:18px;margin-bottom:16px">
         <div style="font-weight:700;font-size:15px;margin-bottom:4px">🚀 一键上架</div>
         <div style="color:#64748b;font-size:13px;margin-bottom:12px">粘贴 1688 商品链接，自动跑完「抓取 → AI 生成配置 → CDP 上架拼多多」全流程，实时看进度。</div>
         <div style="display:flex;gap:10px;flex-wrap:wrap">
@@ -1050,6 +1167,12 @@ async function renderAutopublish() {
           <button class="btn primary" id="ap-batch-btn" style="padding:11px 22px;font-size:14px">开始批量上架</button>
           <span style="color:#94a3b8;font-size:12px;margin-left:10px">定价复用上方参数</span>
         </div>
+        <div style="margin-top:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:13px;color:#475569;border-top:1px dashed #e2e8f0;padding-top:10px">
+          <span style="font-weight:600;color:#334155">⏱ 单个商品超时：</span>
+          <input id="ap-timeout" type="number" value="8" step="0.5" min="1" max="60" style="width:60px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px"> 分钟
+          <span style="color:#94a3b8;font-size:12px">（超时自动结束、跳过进行下一个，范围 1~60 分钟）</span>
+          <button class="btn" id="ap-timeout-save" style="padding:6px 14px;font-size:12px;background:#16a34a;color:#fff;border:none;border-radius:8px;cursor:pointer;white-space:nowrap">💾 保存</button>
+        </div>
       </div>
 
       <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:18px;margin-bottom:16px">
@@ -1079,6 +1202,56 @@ async function renderAutopublish() {
       </div>
 
       <div id="ap-current" style="margin-bottom:16px"></div>
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin-bottom:16px">
+        <div style="font-weight:700;font-size:14px;color:#334155;margin-bottom:10px">⚡ 执行队列 <span style="font-size:12px;color:#94a3b8;font-weight:400">（点击查看详情）</span></div>
+        <div id="ap-queue-list"><div class="empty" style="color:#94a3b8">加载中…</div></div>
+      </div>
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:18px;margin-bottom:16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="toggleOfferlistCard()">
+          <div style="font-weight:700;font-size:15px">🏪 店铺全量商品 <span id="offerlist-count" style="font-size:12px;color:#94a3b8;font-weight:400"></span></div>
+          <span id="offerlist-toggle-icon" style="color:#94a3b8;font-size:12px">展开 ▼</span>
+        </div>
+        <div style="color:#64748b;font-size:13px;margin:4px 0 0">按 1688 店铺采集全量商品链接（offerlist 翻页），存表去重；列表展示主图缩略图（点击放大），上架后自动回填主图及商品信息并标注「已上架」。</div>
+        <div id="offerlist-body" style="display:none;margin-top:12px">
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+            <input id="offerlist-supplier" list="offerlist-supplier-dl" placeholder="输入店铺名/前缀模糊搜索…" autocomplete="off" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;background:#fff;min-width:280px">
+            <datalist id="offerlist-supplier-dl"></datalist>
+            <button class="btn primary" id="offerlist-collect" style="padding:8px 16px;font-size:13px">🔄 采集全量商品</button>
+            <span style="font-size:12px;color:#94a3b8">全量翻页采集较慢，请耐心等待</span>
+          </div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+            <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:#475569;cursor:pointer"><input type="checkbox" id="offerlist-checkall"> 全选</label>
+            <select id="offerlist-status" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:8px;font-size:12px;background:#fff">
+              <option value="">全部状态</option>
+              <option value="new">待上架</option>
+              <option value="publishing">上架中</option>
+              <option value="published">已上架</option>
+            </select>
+            <input id="offerlist-q" placeholder="搜索标题关键词" style="padding:6px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:12px;width:180px">
+            <span style="font-size:12px;color:#475569;font-weight:600">目标店铺：</span>
+            <input id="offerlist-shop" list="offerlist-shop-dl" placeholder="输入店铺名搜索…" autocomplete="off" style="padding:6px 8px;border:1px solid #cbd5e1;border-radius:8px;font-size:12px;width:220px">
+            <datalist id="offerlist-shop-dl"></datalist>
+            <button class="btn primary" id="offerlist-publish" style="padding:7px 14px;font-size:13px;background:#16a34a;color:#fff;border:none;border-radius:8px;cursor:pointer">🚀 一键上架选中</button>
+            <button class="btn" id="offerlist-del-sel" style="padding:7px 14px;font-size:13px;background:#dc2626;color:#fff;border:none;border-radius:8px;cursor:pointer">🗑 删除选中</button>
+          </div>
+          <div id="offerlist-list" style="color:#94a3b8">加载中…</div>
+        </div>
+      </div>
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin-bottom:16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+          <div style="font-weight:700;font-size:14px;color:#334155">📦 分批执行控制 <span id="ap-batch-flag" style="font-size:12px;color:#94a3b8;font-weight:400"></span></div>
+          <button class="btn mini" id="ap-batch-refresh" style="padding:5px 12px;font-size:12px;background:#fff;color:#2563eb;border:1px solid #bfdbfe;border-radius:6px;cursor:pointer">刷新</button>
+        </div>
+        <div id="ap-batch-body" style="margin-top:10px;font-size:13px;color:#475569">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <label style="display:flex;align-items:center;gap:5px">起始ID <input id="ap-batch-start" type="number" value="661" min="1" style="width:80px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px"></label>
+            <label style="display:flex;align-items:center;gap:5px">每批 <input id="ap-batch-size" type="number" value="5" min="1" max="50" style="width:60px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px"> 个</label>
+            <button class="btn" id="ap-batch-stop-btn" style="padding:7px 14px;font-size:13px;background:#dc2626;color:#fff;border:none;border-radius:8px;cursor:pointer;white-space:nowrap">⏹ 全量停止</button>
+            <button class="btn primary" id="ap-batch-run-btn" style="padding:7px 16px;font-size:13px;background:#16a34a;color:#fff;border:none;border-radius:8px;cursor:pointer;white-space:nowrap">▶ 启动分批执行</button>
+          </div>
+          <div id="ap-batch-info" style="margin-top:8px;color:#94a3b8;font-size:12px">加载中…</div>
+        </div>
+      </div>
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:10px">
         <div style="font-weight:700;font-size:14px;color:#334155">历史任务 <span id="ap-total" style="font-size:12px;color:#94a3b8;font-weight:400"></span></div>
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
@@ -1098,6 +1271,7 @@ async function renderAutopublish() {
           <option value="publishing">上架中</option>
           <option value="queued">排队</option>
           <option value="crawling">抓取中</option>
+          <option value="stopped">已停止</option>
         </select>
         <select id="ap-filter-shop" style="padding:7px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:13px;font-family:inherit;background:#fff">
           <option value="">全部店铺</option>
@@ -1251,6 +1425,7 @@ async function renderAutopublish() {
             <div style="font-size:12px;color:#66708a;margin-top:3px">利润率 ${s.profit_rate}% ${s.roi > 0 ? `· 投产比 ${s.roi}` : '· 平卖(无投产比)'} · 售后 ${s.aftersale_rate}% · 运费 ${s.freight}元 · 单买 ${s.danmai_mult}倍</div>
           </div>
           <div style="display:flex;gap:8px;flex-shrink:0">
+            ${s.is_default ? '' : `<button data-sm-default="${s.id}" style="padding:5px 12px;font-size:12px;background:#fff;color:#16a34a;border:1px solid #bbf7d0;border-radius:6px;cursor:pointer">设为默认</button>`}
             <button data-sm-edit="${s.id}" style="padding:5px 12px;font-size:12px;background:#fff;color:#2563eb;border:1px solid #bfdbfe;border-radius:6px;cursor:pointer">编辑</button>
             <button data-sm-del="${s.id}" style="padding:5px 12px;font-size:12px;background:#fff;color:#dc2626;border:1px solid #fca5a5;border-radius:6px;cursor:pointer">删除</button>
           </div>
@@ -1259,6 +1434,7 @@ async function renderAutopublish() {
     `).join('');
     list.querySelectorAll('[data-sm-edit]').forEach(b => b.onclick = () => editScheme(schemesCache.find(s => String(s.id) === b.dataset.smEdit)));
     list.querySelectorAll('[data-sm-del]').forEach(b => b.onclick = () => deleteScheme(schemesCache.find(s => String(s.id) === b.dataset.smDel)));
+    list.querySelectorAll('[data-sm-default]').forEach(b => b.onclick = () => setDefaultScheme(schemesCache.find(s => String(s.id) === b.dataset.smDefault)));
   };
 
   const editScheme = async (s) => {
@@ -1301,6 +1477,17 @@ async function renderAutopublish() {
       if (resp && resp.ok) { toast('已删除'); await loadSchemes(); renderSchemeList(); }
       else toast((resp && resp.error) || '删除失败');
     } catch (e) { toast('删除失败: ' + e.message); }
+  };
+
+  const setDefaultScheme = async (s) => {
+    if (!s || s.is_default) return;
+    const ok = await confirmDialog(`将「${s.name}」设为默认价格体系？`, { title: '设为默认', confirmText: '设为默认' });
+    if (!ok) return;
+    try {
+      const resp = await api(`/api/pricing/schemes/${s.id}`, 'PUT', { is_default: 1 });
+      if (resp && resp.ok) { toast(`「${s.name}」已设为默认`); await loadSchemes(); renderSchemeList(); }
+      else toast((resp && resp.error) || '操作失败');
+    } catch (e) { toast('操作失败: ' + e.message); }
   };
 
   const renderSchemeManager = () => {
@@ -1518,7 +1705,81 @@ async function renderAutopublish() {
     }
   };
 
+  // 单个商品超时设置：读取当前值（秒→分钟显示），保存（分钟→秒提交）
+  const loadApSettings = async () => {
+    try {
+      const s = await api('/api/autopublish/settings');
+      const sec = Number(s && s.timeout) || 480;
+      const el = $('#ap-timeout');
+      if (el) el.value = Math.round(sec / 60 * 10) / 10;
+    } catch (e) { /* 保持默认 8 分钟 */ }
+  };
+  loadApSettings();
+  const timeoutSaveBtn = $('#ap-timeout-save');
+  if (timeoutSaveBtn) timeoutSaveBtn.onclick = async () => {
+    const el = $('#ap-timeout');
+    const min = Number(el && el.value);
+    if (!min || min < 1 || min > 60) { toast('超时请输入 1~60 分钟'); return; }
+    const sec = Math.round(min * 60);
+    timeoutSaveBtn.disabled = true;
+    timeoutSaveBtn.textContent = '保存中…';
+    try {
+      const resp = await api('/api/autopublish/settings', 'POST', { timeout: sec });
+      if (resp && resp.ok) toast(`单个商品超时已设为 ${min} 分钟（${sec}s），新任务生效`);
+      else toast((resp && resp.error) || '保存失败');
+    } catch (e) { toast('保存失败: ' + e.message); }
+    timeoutSaveBtn.disabled = false;
+    timeoutSaveBtn.textContent = '💾 保存';
+  };
+
+  // ===== 分批执行控制 =====
+  const loadApBatchStatus = async () => {
+    try {
+      const d = await api('/api/autopublish/batch-status');
+      const flag = $('#ap-batch-flag');
+      const info = $('#ap-batch-info');
+      if (!d) return;
+      if (flag) flag.textContent = d.enabled ? '● 运行中' : '';
+      if (d.enabled) {
+        const act = (d.active || []).map(x => '#' + x).join(', ');
+        info.innerHTML = `当前批次：<b>${act || '—'}</b> ｜ 剩余待执行 <b>${d.remaining}</b> 个 ｜ 每批 ${d.batch_size} 个（从 #${d.min_id} 起）`;
+      } else {
+        info.innerHTML = `未启动。点「▶ 启动分批执行」按起始ID每批 N 个逐组执行。`;
+      }
+    } catch (e) { /* 忽略 */ }
+  };
+  loadApBatchStatus();
+  const batchStopBtn = $('#ap-batch-stop-btn');
+  if (batchStopBtn) batchStopBtn.onclick = async () => {
+    const ok = await confirmDialog('确定全量停止所有排队中/执行中的任务吗？停止后可重新启动分批执行。', { title: '⏹ 全量停止', confirmText: '停止', danger: true });
+    if (!ok) return;
+    batchStopBtn.disabled = true;
+    try {
+      const resp = await api('/api/autopublish/stopall', 'POST', {});
+      if (resp && resp.ok) { toast(`已停止 ${resp.stopped} 个任务`); loadApBatchStatus(); loadApList(); }
+      else toast((resp && resp.error) || '停止失败');
+    } catch (e) { toast('停止失败: ' + e.message); }
+    batchStopBtn.disabled = false;
+  };
+  const batchRunBtn = $('#ap-batch-run-btn');
+  if (batchRunBtn) batchRunBtn.onclick = async () => {
+    const start_id = Number($('#ap-batch-start').value) || 0;
+    const batch_size = Number($('#ap-batch-size').value) || 5;
+    if (!start_id) { toast('请填写起始ID'); return; }
+    batchRunBtn.disabled = true;
+    try {
+      const resp = await api('/api/autopublish/batch-run', 'POST', { start_id, batch_size });
+      if (resp && resp.ok) { toast(resp.message || '已启动分批执行'); loadApBatchStatus(); }
+      else toast((resp && resp.error) || '启动失败');
+    } catch (e) { toast('启动失败: ' + e.message); }
+    batchRunBtn.disabled = false;
+  };
+  const batchRefreshBtn = $('#ap-batch-refresh');
+  if (batchRefreshBtn) batchRefreshBtn.onclick = loadApBatchStatus;
+
   await loadApList();
+  loadSelfheal();
+  loadApQueue();
   startApListPolling();
 
   // 全选可重上架 + 批量重新生成
@@ -1568,10 +1829,333 @@ async function renderAutopublish() {
     } catch (e) {}
   };
   loadSupplierOptions();
+  initOfferlistCard();
 }
 
 const AP_STAGE = { scrape:'抓取1688', ai:'AI生成配置', publish:'CDP上架' };
 const AP_STATUS = { running:'⏳', done:'✅', failed:'❌' };
+
+// ===== 店铺全量商品（offerlist.htm）：采集 + 列表 + 上架标注 + 回填 =====
+let _offerlistPage = 1;
+const _offerlistPageSize = 50;
+let _offerlistCollecting = false;  // 采集防重复点击标志（连点/双击只触发一次）
+
+function toggleOfferlistCard() {
+  const body = $('#offerlist-body');
+  const icon = $('#offerlist-toggle-icon');
+  if (!body) return;
+  const isHidden = body.style.display === 'none';
+  body.style.display = isHidden ? 'block' : 'none';
+  if (icon) icon.textContent = isHidden ? '收起 ▲' : '展开 ▼';
+  if (isHidden) loadOfferlist();
+}
+
+let _offerlistSuppliers = [];
+async function loadOfferlistSuppliers() {
+  try {
+    const resp = await api('/api/offerlist/suppliers');
+    _offerlistSuppliers = (resp && resp.suppliers) || [];
+    const dl = $('#offerlist-supplier-dl');
+    if (dl) {
+      dl.innerHTML = _offerlistSuppliers.map(s =>
+        `<option value="${esc(s.name)}${s.prefix ? '（' + esc(s.prefix) + '）' : ''}" data-id="${s.id}"></option>`).join('');
+    }
+  } catch (e) {}
+}
+
+function getOfferlistSupplierId() {
+  const v = (($('#offerlist-supplier') && $('#offerlist-supplier').value) || '').trim();
+  if (!v) return null;
+  let s = _offerlistSuppliers.find(x => (x.name + (x.prefix ? '（' + x.prefix + '）' : '')) === v);
+  if (!s) s = _offerlistSuppliers.find(x => (x.name || '').includes(v) || (x.prefix || '').includes(v));
+  return s ? s.id : null;
+}
+
+let _offerlistShops = [];
+async function loadOfferlistShops() {
+  // 加载拼多多店铺（platform_id=1，即可上架目标店），填进搜索 datalist（默认留空，由用户选择）
+  try {
+    const resp = await api('/api/catalog/shops?platform_id=1');
+    _offerlistShops = (resp && resp.items) || [];
+    const dl = $('#offerlist-shop-dl');
+    if (dl) {
+      dl.innerHTML = _offerlistShops.map(s =>
+        `<option value="${esc(s.name)}" data-id="${s.id}"></option>`).join('');
+    }
+  } catch (e) {}
+}
+
+function getOfferlistShopId() {
+  const v = (($('#offerlist-shop') && $('#offerlist-shop').value) || '').trim();
+  if (!v) return null;
+  let s = _offerlistShops.find(x => x.name === v);
+  if (!s) s = _offerlistShops.find(x => (x.name || '').includes(v));
+  return s ? s.id : null;
+}
+
+async function loadOfferlist() {
+  const box = $('#offerlist-list');
+  const count = $('#offerlist-count');
+  if (!box) return;
+  const status = ($('#offerlist-status') && $('#offerlist-status').value) || '';
+  const q = ($('#offerlist-q') ? $('#offerlist-q').value.trim() : '');
+  const supplierId = getOfferlistSupplierId() || '';
+  let items = [], total = 0;
+  try {
+    const params = new URLSearchParams();
+    if (status) params.set('status', status);
+    if (q) params.set('q', q);
+    if (supplierId) params.set('supplier_id', supplierId);
+    params.set('page', _offerlistPage);
+    params.set('page_size', _offerlistPageSize);
+    const resp = await api('/api/offerlist/list?' + params.toString());
+    items = resp.items || [];
+    total = resp.total || 0;
+  } catch (e) { items = []; total = 0; }
+  if (count) count.textContent = total ? `（${total} 件）` : '';
+  if (!items.length) { box.innerHTML = `<div style="padding:24px;text-align:center;color:#94a3b8">${q ? '未找到匹配商品' : '暂无全量商品，先选择店铺采集'}</div>`; return; }
+  const stMap = { new: ['待上架', '#2563eb', '#eef2ff'], publishing: ['上架中', '#d97706', '#fef3c7'], published: ['已上架', '#16a34a', '#dcfce7'] };
+  const totalPages = Math.max(1, Math.ceil(total / _offerlistPageSize));
+  // 页码窗口：当前页前后各 2 个，最多显示 5 个页码号，超出边界自动收拢
+  let pageStart = 1, pageEnd = totalPages;
+  if (totalPages > 5) {
+    pageStart = Math.max(1, _offerlistPage - 2);
+    pageEnd = Math.min(totalPages, pageStart + 4);
+    if (pageEnd - pageStart < 4) pageStart = Math.max(1, pageEnd - 4);
+  }
+  const pageNums = [];
+  for (let p = pageStart; p <= pageEnd; p++) pageNums.push(p);
+  box.innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px">
+      ${items.map(it => {
+        const st = stMap[it.status] || ['—', '#64748b', '#f1f5f9'];
+        const thumb = it.image_thumb || it.image || '';
+        const full = it.image || it.image_thumb || '';
+        const title = it.published_title || it.title || '';
+        const imgHtml = thumb
+          ? `<img src="${esc(thumb)}" loading="lazy" referrerpolicy="no-referrer" style="width:100%;height:100%;object-fit:cover" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><div style="display:none;width:100%;height:100%;align-items:center;justify-content:center;color:#cbd5e1;font-size:12px">无图</div>`
+          : `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:#cbd5e1;font-size:12px">无图</div>`;
+        return `
+        <div style="border:1px solid #eef1f6;border-radius:12px;overflow:hidden;background:#fff;display:flex;flex-direction:column">
+          <div class="offerlist-thumb" data-img="${esc(full)}" data-title="${esc(title)}" style="aspect-ratio:1/1;background:#f8fafc;position:relative;overflow:hidden;${full ? 'cursor:zoom-in' : ''}">
+            ${imgHtml}
+            <span style="position:absolute;top:8px;left:8px;background:${st[2]};color:${st[1]};border-radius:6px;padding:2px 8px;font-size:11px;font-weight:600">${st[0]}</span>
+          </div>
+          <div style="padding:10px;display:flex;flex-direction:column;gap:6px;flex:1">
+            <div style="font-size:13px;font-weight:500;line-height:1.5;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:38px">${esc(title)}</div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:auto">
+              <span style="color:#dc2626;font-weight:700;font-size:14px">¥${esc(it.price || '—')}</span>
+              <label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer;color:#475569">
+                <input type="checkbox" class="offerlist-check" value="${it.id}" ${it.status === 'publishing' ? 'disabled' : ''}>选
+              </label>
+            </div>
+            <div style="color:#94a3b8;font-size:11px">${esc(it.supplier_name || '')}${it.published_sale_price ? ' · 已售 ¥' + it.published_sale_price : ''}</div>
+            <div style="display:flex;gap:6px">
+              <button class="offerlist-copy" data-url="${esc(it.offer_url || '')}" style="flex:1;padding:4px 8px;font-size:11px;background:#f1f5f9;color:#475569;border:1px solid #e2e8f0;border-radius:6px;cursor:pointer;text-align:center">📋 复制链接</button>
+              <button class="offerlist-del" data-id="${it.id}" data-title="${esc(title)}" style="padding:4px 10px;font-size:11px;background:#fef2f2;color:#dc2626;border:1px solid #fecaca;border-radius:6px;cursor:pointer">🗑</button>
+            </div>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px;font-size:13px;color:#64748b;flex-wrap:wrap;gap:8px">
+      <span>第 ${_offerlistPage}/${totalPages} 页</span>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        <button class="btn sm" id="offerlist-prev" ${_offerlistPage <= 1 ? 'disabled' : ''} style="${_offerlistPage <= 1 ? 'opacity:.5;cursor:not-allowed' : ''}">‹</button>
+        ${pageNums.map(p => p === _offerlistPage
+          ? `<button class="offerlist-page" data-page="${p}" style="min-width:30px;height:30px;padding:0 8px;font-size:13px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600">${p}</button>`
+          : `<button class="offerlist-page" data-page="${p}" style="min-width:30px;height:30px;padding:0 8px;font-size:13px;background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:6px;cursor:pointer">${p}</button>`).join('')}
+        <button class="btn sm" id="offerlist-next" ${_offerlistPage >= totalPages ? 'disabled' : ''} style="${_offerlistPage >= totalPages ? 'opacity:.5;cursor:not-allowed' : ''}">›</button>
+      </div>
+    </div>`;
+  const ca = $('#offerlist-checkall');
+  if (ca) ca.onchange = () => { $$('.offerlist-check:not([disabled])').forEach(c => c.checked = ca.checked); };
+  $$('.offerlist-thumb').forEach(th => {
+    th.onclick = () => {
+      const src = th.getAttribute('data-img');
+      if (!src) return;
+      const title = th.getAttribute('data-title') || '';
+      const overlay = document.createElement('div');
+      overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.82);z-index:1000;display:flex;align-items:center;justify-content:center;padding:24px;cursor:zoom-out';
+      overlay.innerHTML = `<div style="max-width:92vw;max-height:92vh;display:flex;flex-direction:column;align-items:center;gap:12px">
+        <img src="${esc(src)}" referrerpolicy="no-referrer" style="max-width:92vw;max-height:76vh;object-fit:contain;border-radius:8px;background:#fff">
+        ${title ? `<div style="color:#fff;font-size:13px;max-width:88vw;text-align:center;line-height:1.5">${esc(title)}</div>` : ''}
+      </div>`;
+      overlay.onclick = () => overlay.remove();
+      document.body.appendChild(overlay);
+    };
+  });
+  $$('.offerlist-copy').forEach(btn => {
+    btn.onclick = () => {
+      const u = btn.getAttribute('data-url') || '';
+      if (u) copyToClip(u, '链接');
+    };
+  });
+  $$('.offerlist-del').forEach(btn => {
+    btn.onclick = async () => {
+      const id = btn.getAttribute('data-id');
+      const title = btn.getAttribute('data-title') || '';
+      const ok = await confirmDialog(`确定删除该商品吗？<br><br><b>${title}</b><br><br>删除后不可恢复。`, { title: '⚠️ 删除确认', confirmText: '删除', cancelText: '取消', danger: true });
+      if (!ok) return;
+      try {
+        const resp = await api('/api/offerlist/delete', 'POST', { ids: [parseInt(id)] });
+        toast(`已删除 ${resp.deleted} 条`);
+        await loadOfferlist();
+      } catch (e) { toast('删除失败：' + e.message); }
+    };
+  });
+  const prev = $('#offerlist-prev'), next = $('#offerlist-next');
+  if (prev) prev.onclick = () => { if (_offerlistPage > 1) { _offerlistPage--; loadOfferlist(); } };
+  if (next) next.onclick = () => { if (_offerlistPage < totalPages) { _offerlistPage++; loadOfferlist(); } };
+  $$('.offerlist-page').forEach(b => {
+    b.onclick = () => { const p = parseInt(b.getAttribute('data-page')); if (p && p !== _offerlistPage) { _offerlistPage = p; loadOfferlist(); } };
+  });
+}
+
+// 全量商品上架价格体系选择弹框（全局版，复用 showPublishDialog 逻辑）
+function showOfferlistPublishDialog(itemCount, shopCount) {
+  return new Promise(async (resolve) => {
+    let schemes = [];
+    try { schemes = (await api('/api/pricing/schemes')).items || []; } catch (e) { schemes = []; }
+    if (!schemes.length) schemes = [{ id: 1, name: '推广价', profit_rate: 20, roi: 2, aftersale_rate: 5, freight: 3, danmai_mult: 1.5, is_default: 1 }];
+    const def = schemes.find(s => s.is_default) || schemes[0];
+    const totalLinks = itemCount * shopCount;
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:9000;display:flex;align-items:center;justify-content:center;padding:24px';
+    overlay.innerHTML = `
+      <div style="background:#fff;border-radius:16px;padding:24px;width:100%;max-width:440px;box-shadow:0 20px 60px rgba(0,0,0,.3)">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+          <div style="font-size:17px;font-weight:700;color:#17203a">🚀 一键上架确认</div>
+          <button id="ol-close" style="background:none;border:none;font-size:22px;color:#94a3b8;cursor:pointer;line-height:1">×</button>
+        </div>
+        <div style="font-size:13px;color:#475569;line-height:1.8;margin-bottom:16px">
+          即将上传 <b style="color:#2563eb;font-size:16px">${totalLinks}</b> 条商品链接
+          <span style="color:#94a3b8">（${itemCount} 件商品 × ${shopCount} 个店铺）</span>
+        </div>
+        <div style="margin-bottom:8px;font-size:13px;color:#475569;font-weight:600">价格体系</div>
+        <select id="ol-scheme" style="width:100%;padding:10px 12px;border:1px solid #cbd5e1;border-radius:10px;font-size:14px;background:#fff;font-family:inherit">
+          ${schemes.map(s => `<option value="${s.id}" ${String(s.id) === String(def.id) ? 'selected' : ''}>${esc(s.name)}${s.is_default ? '（默认）' : ''}</option>`).join('')}
+        </select>
+        <div id="ol-scheme-desc" style="font-size:12px;color:#94a3b8;margin-top:8px;min-height:18px"></div>
+        <div style="display:flex;gap:10px;margin-top:20px">
+          <button id="ol-cancel" style="flex:1;padding:11px;background:#f1f5f9;color:#475569;border:1px solid #e2e8f0;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer">取消</button>
+          <button id="ol-ok" style="flex:1;padding:11px;background:linear-gradient(135deg,#2563eb,#7c3aed);color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer">确认上架</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const schemeSel = overlay.querySelector('#ol-scheme');
+    const schemeDesc = overlay.querySelector('#ol-scheme-desc');
+    const renderDesc = () => {
+      const s = schemes.find(x => String(x.id) === schemeSel.value);
+      schemeDesc.textContent = s
+        ? (((s.roi || 0) > 0
+            ? `利润率 ${s.profit_rate}% · 投产比 ${s.roi} · 售后 ${s.aftersale_rate}% · 运费 ${s.freight}元 · 单买 ${s.danmai_mult}倍`
+            : `平卖价 · 利润率 ${s.profit_rate}% · 售后 ${s.aftersale_rate}% · 运费 ${s.freight}元 · 单买 ${s.danmai_mult}倍`))
+        : '';
+    };
+    schemeSel.addEventListener('change', renderDesc);
+    renderDesc();
+    const close = (val) => { overlay.remove(); resolve(val); };
+    overlay.querySelector('#ol-close').onclick = () => close(null);
+    overlay.querySelector('#ol-cancel').onclick = () => close(null);
+    overlay.onclick = (e) => { if (e.target === overlay) close(null); };
+    overlay.querySelector('#ol-ok').onclick = () => {
+      const s = schemes.find(x => String(x.id) === schemeSel.value);
+      if (!s) { close(null); return; }
+      close({
+        scheme_id: s.id,
+        scheme_name: s.name,
+        price_mode: (s.roi || 0) > 0 ? 'promo' : 'normal',
+        profit_rate: (Number(s.profit_rate) || 20) / 100,
+        roi: Number(s.roi) || 0,
+        aftersale_rate: (Number(s.aftersale_rate) || 5) / 100,
+        freight: Number(s.freight) || 3,
+        danmai_mult: Number(s.danmai_mult) || 1.5,
+      });
+    };
+  });
+}
+
+async function initOfferlistCard() {
+  await loadOfferlistSuppliers();
+  loadOfferlistShops();
+  const collectBtn = $('#offerlist-collect');
+  if (collectBtn) collectBtn.onclick = async () => {
+    if (_offerlistCollecting) return;  // 防重复点击：连点/双击只触发一次
+    const sid = getOfferlistSupplierId();
+    if (!sid) { toast('请先输入并选中 1688 店铺'); return; }
+    _offerlistCollecting = true;
+    collectBtn.disabled = true;
+    collectBtn.innerHTML = '<span class="btn-spinner"></span>采集中…（全量翻页较慢）';
+    try {
+      const resp = await api('/api/offerlist/collect', 'POST', { supplier_id: parseInt(sid) });
+      toast(`采集完成：新增 ${resp.inserted} 条，跳过重复 ${resp.skipped} 条（共 ${resp.count} 件）`);
+      _offerlistPage = 1; await loadOfferlist();
+    } catch (e) { toast('采集失败：' + e.message); }
+    _offerlistCollecting = false;
+    collectBtn.disabled = false;
+    collectBtn.textContent = '🔄 采集全量商品';
+  };
+  const pubBtn = $('#offerlist-publish');
+  if (pubBtn) pubBtn.onclick = async () => {
+    const ids = $$('.offerlist-check:checked').map(c => parseInt(c.value));
+    if (!ids.length) { toast('请先勾选要上架的商品'); return; }
+    const shopId = getOfferlistShopId();
+    if (!shopId) { toast('请先输入并选中目标店铺'); return; }
+    const pricing = await showOfferlistPublishDialog(ids.length, 1);
+    if (!pricing) return;
+    pubBtn.disabled = true; pubBtn.textContent = '创建任务中…';
+    try {
+      let resp = await api('/api/offerlist/publish', 'POST', { ids, shop_ids: [parseInt(shopId)], pricing });
+      if (resp && resp.duplicate) {
+        const dups = resp.duplicates || [];
+        const dupItemIds = new Set(dups.map(d => parseInt(d.item_id)));
+        const lines = dups.slice(0, 10).map(d => `• ${esc(d.title || '')}（任务#${d.id}，商品ID ${d.pdd_goods_id || '—'}）`).join('<br>');
+        const more = dups.length > 10 ? `<br>…还有 ${dups.length - 10} 条` : '';
+        const act = await confirmDialog(`以下 ${dups.length} 件商品已在本店上传过：<br>${lines}${more}<br><br>可「跳过已上架」只上架其余未上架的，或「全部继续」重复上架。`, {
+          title: '⚠️ 重复上架提醒', confirmText: '全部继续', cancelText: '取消', extraText: '跳过已上架', danger: false });
+        if (act === false) { pubBtn.disabled = false; pubBtn.textContent = '🚀 一键上架选中'; return; }
+        if (act === 'extra') {
+          // 跳过已上架：从选中里剔除重复的 item_id，只上架剩余
+          const remainIds = ids.filter(id => !dupItemIds.has(id));
+          if (!remainIds.length) {
+            toast('已上架的已全部剔除，没有可上架的商品');
+            pubBtn.disabled = false; pubBtn.textContent = '🚀 一键上架选中'; return;
+          }
+          toast(`跳过 ${ids.length - remainIds.length} 件已上架的，上架剩余 ${remainIds.length} 件…`);
+          resp = await api('/api/offerlist/publish', 'POST', { ids: remainIds, shop_ids: [parseInt(shopId)], pricing });
+        } else {
+          resp = await api('/api/offerlist/publish', 'POST', { ids, shop_ids: [parseInt(shopId)], pricing, force: true });
+        }
+      }
+      toast(`已创建 ${resp.count} 个上架任务${resp.skipped_published ? '（跳过已上架 ' + resp.skipped_published + ' 条）' : ''}`);
+      _offerlistPage = 1; await loadOfferlist();
+    } catch (e) { toast('上架失败：' + e.message); }
+    pubBtn.disabled = false; pubBtn.textContent = '🚀 一键上架选中';
+  };
+  const delSelBtn = $('#offerlist-del-sel');
+  if (delSelBtn) delSelBtn.onclick = async () => {
+    const ids = $$('.offerlist-check:checked').map(c => parseInt(c.value));
+    if (!ids.length) { toast('请先勾选要删除的商品'); return; }
+    const ok = await confirmDialog(`确定删除选中的 <b>${ids.length}</b> 件商品吗？<br><br>删除后不可恢复。`, { title: '⚠️ 批量删除确认', confirmText: '删除', cancelText: '取消', danger: true });
+    if (!ok) return;
+    try {
+      const resp = await api('/api/offerlist/delete', 'POST', { ids });
+      toast(`已删除 ${resp.deleted} 条`);
+      _offerlistPage = 1; await loadOfferlist();
+    } catch (e) { toast('删除失败：' + e.message); }
+  };
+  const statusSel = $('#offerlist-status');
+  if (statusSel) statusSel.onchange = () => { _offerlistPage = 1; loadOfferlist(); };
+  const supplierSel = $('#offerlist-supplier');
+  if (supplierSel) supplierSel.addEventListener('change', () => { _offerlistPage = 1; loadOfferlist(); });
+  let offerlistSearchTimer = null;
+  const qInput = $('#offerlist-q');
+  if (qInput) qInput.addEventListener('input', () => {
+    clearTimeout(offerlistSearchTimer);
+    offerlistSearchTimer = setTimeout(() => { _offerlistPage = 1; loadOfferlist(); }, 400);
+  });
+}
 
 function startApPolling(taskId) {
   if (apTimer) clearInterval(apTimer);
@@ -1608,7 +2192,7 @@ function renderApCurrent(t) {
       </div>
     </div>`;
   }).join('');
-  const statusTag = { queued:'排队中', crawling:'抓取中', ai:'AI配置中', publishing:'上架中', published:'✅ 已上架', failed:'❌ 失败' }[t.status] || t.status;
+  const statusTag = { queued:'排队中', crawling:'抓取中', ai:'AI配置中', publishing:'上架中', published:'✅ 已上架', failed:'❌ 失败', stopped:'⏹ 已停止' }[t.status] || t.status;
   // publish 阶段实时细粒度进度（后端读 config.publish.log 解析出的 [N/8] 步骤）
   const pp = t.publish_progress;
   let ppHtml = '';
@@ -1760,10 +2344,11 @@ async function loadApList() {
   const totalEl = $('#ap-total');
   if (totalEl) totalEl.textContent = total ? `（共 ${total} 条）` : '';
   if (!items.length) { el.innerHTML = '<div class="empty" style="color:#94a3b8">暂无任务。</div>'; renderApPagination(); return; }
-  const statusTag = { queued:'排队', crawling:'抓取', ai:'AI配置', publishing:'上架中', published:'✅已上架', submitted:'⏳待审核', draft:'📄草稿', failed:'❌失败' };
+  const statusTag = { queued:'排队', crawling:'抓取', ai:'AI配置', publishing:'上架中', published:'✅已上架', submitted:'⏳待审核', draft:'📄草稿', failed:'❌失败', stopped:'⏹已停止' };
   el.innerHTML = items.map(t => {
     const shopName = t.shop_name || (typeof PG_SHOP !== 'undefined' && PG_SHOP[t.shop_id]) || ('店铺' + (t.shop_id || '?'));
     const canRepub = (t.status === 'failed' || t.status === 'draft');
+    const isLinkDead = /短链跳转失败|未跳转到|抓取失败（无数据）/.test(t.error || '');
     const metaTag = (icon, text, style) =>
       `<span style="display:inline-flex;align-items:center;gap:3px;font-size:11px;padding:2px 7px;border-radius:4px;font-weight:600;margin-right:6px;${style}">${icon} ${esc(text)}</span>`;
     const shopTag = metaTag('🏪', shopName, 'background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe');
@@ -1776,6 +2361,10 @@ async function loadApList() {
     const supplierTag = t.supplier_name
       ? metaTag('🏭', t.supplier_name, 'background:#faf5ff;color:#7c3aed;border:1px solid #ddd6fe')
       : '';
+    // 复制链接：优先拼多多商品链接，无则回退 1688 货源链接
+    const copyLink = t.pdd_goods_id
+      ? 'https://mobile.yangkeduo.com/goods.html?goods_id=' + t.pdd_goods_id
+      : (t.source_url || '');
     return `
     <div class="ap-task-item">
       <input type="checkbox" class="ap-task-check" value="${t.id}" ${canRepub ? '' : 'disabled'} ${canRepub && _apSelected.has(String(t.id)) ? 'checked' : ''} onclick="event.stopPropagation()" onchange="window.toggleApSelect(this)">
@@ -1785,13 +2374,201 @@ async function loadApList() {
         <div class="ap-task-sub">${shopTag}${operatorTag}${priceModeTag}${supplierTag}</div>
       </div>
       <span class="ap-task-status">${statusTag[t.status] || t.status}</span>
+      ${isLinkDead ? `<span class="ap-task-linkdead" title="${esc(t.error || '')}">🔗 链接失效</span>` : ''}
       ${canRepub ? `<button class="ap-task-repub" onclick="event.stopPropagation();republishTask(${t.id})">重新上架</button>` : ''}
       ${t.publish_progress && t.publish_progress.step ? `<span class="ap-task-progress">${esc(t.publish_progress.step_name)} ${t.publish_progress.step}/8</span>` : ''}
       ${t.pdd_goods_id ? `<span class="ap-task-gid">${esc(t.pdd_goods_id)}</span>` : ''}
+      ${copyLink ? `<button class="ap-task-copy" onclick="event.stopPropagation();copyToClip('${esc(copyLink)}','链接')" title="复制：${esc(copyLink)}">📋 复制链接</button>` : ''}
+      <button class="ap-task-del" onclick="event.stopPropagation();deleteApTask(${t.id})" title="删除任务">🗑 删除</button>
       <div class="ap-task-time">${esc((t.created_at||'').slice(5,16))}</div>
     </div>
   `;}).join('');
   renderApPagination();
+}
+
+// ===== 自动自愈面板 =====
+let _selfhealOpen = false;
+window.toggleSelfheal = function() {
+  _selfhealOpen = !_selfhealOpen;
+  const body = $('#selfheal-body');
+  const icon = $('#selfheal-toggle-icon');
+  if (body) body.style.display = _selfhealOpen ? 'block' : 'none';
+  if (icon) icon.textContent = _selfhealOpen ? '收起 ▲' : '展开 ▼';
+  if (_selfhealOpen) loadSelfheal();
+};
+
+async function loadSelfheal() {
+  const countEl = $('#selfheal-count');
+  const statsEl = $('#selfheal-stats');
+  const listEl = $('#selfheal-list');
+  if (!countEl && !statsEl && !listEl) return;
+  let d = null;
+  try { d = await api('/api/autopublish/selfheal'); } catch (e) { d = null; }
+  if (!d) return;
+  if (countEl) countEl.textContent = d.task_count ? `（${d.task_count} 个任务触发过 ${d.retry_total} 次重试）` : '';
+  if (statsEl) {
+    statsEl.innerHTML = `
+      <div class="selfheal-stat" style="background:#f0f9ff;border:1px solid #bfdbfe"><div class="num" style="color:#1e40af">${d.task_count}</div><div class="lbl">触发自愈</div></div>
+      <div class="selfheal-stat" style="background:#f5f3ff;border:1px solid #ddd6fe"><div class="num" style="color:#6d28d9">${d.retry_total}</div><div class="lbl">自动重试</div></div>
+      <div class="selfheal-stat" style="background:#f0fdf4;border:1px solid #bbf7d0"><div class="num" style="color:#16a34a">${d.success}</div><div class="lbl">自愈成功</div></div>
+      <div class="selfheal-stat" style="background:#fff7ed;border:1px solid #fed7aa"><div class="num" style="color:#ea580c">${d.retrying}</div><div class="lbl">重试中</div></div>
+      <div class="selfheal-stat" style="background:#fef2f2;border:1px solid #fecaca"><div class="num" style="color:#dc2626">${d.failed}</div><div class="lbl">自愈失败</div></div>
+    `;
+  }
+  if (listEl) {
+    const items = d.items || [];
+    if (!items.length) {
+      listEl.innerHTML = '<div class="empty" style="color:#94a3b8">暂无触发过自动重试的任务。</div>';
+      return;
+    }
+    const outcomeTag = {
+      success: '<span style="color:#16a34a;font-weight:700;font-size:12px">✅ 已自愈</span>',
+      failed: '<span style="color:#dc2626;font-weight:700;font-size:12px">❌ 仍失败</span>',
+      retrying: '<span style="color:#ea580c;font-weight:700;font-size:12px">🔄 重试中</span>',
+    };
+    listEl.innerHTML = items.map(it => `
+      <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid #e2e8f0;border-radius:10px;margin-bottom:8px;flex-wrap:wrap">
+        <span style="font-weight:700;color:#94a3b8;font-size:12px">#${it.id}</span>
+        <span style="flex:1;min-width:140px;font-size:13px;color:#1e293b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(it.title || '(无标题)')}</span>
+        <span style="font-size:11px;background:#f1f5f9;color:#475569;padding:2px 8px;border-radius:4px;font-weight:600">重试 ${it.retry_count} 次</span>
+        ${outcomeTag[it.outcome] || ''}
+        <span style="font-size:11px;color:#94a3b8;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(it.last_retry_msg)}">${esc(it.last_retry_msg)}</span>
+        <button class="btn mini" onclick="startApPolling(${it.id})" style="padding:4px 10px;font-size:12px;background:#fff;color:#2563eb;border:1px solid #bfdbfe;border-radius:6px;cursor:pointer;white-space:nowrap">详情</button>
+      </div>
+    `).join('');
+  }
+}
+
+// ===== 执行队列卡片 + 弹框详情 =====
+function apQueueDetailHtml(t) {
+  const logs = (t.log || []);
+  const steps = logs.map((l) => {
+    const stage = AP_STAGE[l.stage] || l.stage;
+    const ic = AP_STATUS[l.status] || '•';
+    const color = l.status === 'failed' ? '#dc2626' : (l.status === 'done' ? '#16a34a' : '#2563eb');
+    return `<div style="display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px solid #f1f5f9">
+      <span style="font-size:14px">${ic}</span>
+      <div style="flex:1">
+        <span style="font-weight:600;color:${color}">${esc(stage)}</span>
+        <span style="color:#94a3b8;font-size:12px;margin-left:8px">${esc(l.ts || '')}</span>
+        <div style="color:#475569;font-size:13px;margin-top:2px">${esc(l.msg)}</div>
+      </div>
+    </div>`;
+  }).join('');
+  const statusTag = { queued:'排队中', crawling:'抓取中', ai:'AI配置中', publishing:'上架中', published:'✅ 已上架', submitted:'⏳待审核', draft:'📄草稿', failed:'❌ 失败', stopped:'⏹ 已停止' }[t.status] || t.status;
+  const pp = t.publish_progress;
+  let ppHtml = '';
+  if (pp && pp.step) {
+    const pct = Math.round(pp.step / 8 * 100);
+    const ppLines = (pp.lines || []).map(l => esc(l)).join('<br>');
+    ppHtml = `
+    <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:10px;padding:12px;margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div style="font-weight:700;font-size:14px;color:#0369a1">🔄 正在${esc(pp.step_name)}</div>
+        <div style="font-size:12px;color:#0284c7;font-weight:600">${pp.step}/8</div>
+      </div>
+      <div style="height:6px;background:#e0f2fe;border-radius:3px;overflow:hidden">
+        <div style="height:100%;width:${pct}%;background:linear-gradient(90deg,#0284c7,#38bdf8);border-radius:3px;transition:width .5s"></div>
+      </div>
+      ${ppLines ? `<div style="margin-top:8px;font-size:11px;color:#475569;font-family:ui-monospace,monospace;line-height:1.7;max-height:120px;overflow-y:auto">${ppLines}</div>` : ''}
+    </div>`;
+  }
+  return `
+    <div style="margin-bottom:10px">
+      <span style="font-weight:600;color:#2563eb;font-size:13px">${statusTag}</span>
+      <span style="color:#94a3b8;font-size:12px;margin-left:8px">${esc(t.raw_title || '')}</span>
+    </div>
+    ${t.ai_title ? `<div style="background:#f0f9ff;border-radius:8px;padding:10px;margin-bottom:10px;font-size:13px;color:#075985">AI 标题：${esc(t.ai_title)}</div>` : ''}
+    ${t.pdd_goods_id ? `<div style="background:#f0fdf4;border-radius:8px;padding:10px;margin-bottom:10px;font-size:13px;color:#166534">商品ID：${esc(t.pdd_goods_id)}</div>` : ''}
+    ${t.error ? `<div style="background:#fef2f2;border-radius:8px;padding:10px;margin-bottom:10px;font-size:13px;color:#b91c1c">${esc(t.error)}</div>` : ''}
+    ${ppHtml}
+    ${steps || '<div style="color:#94a3b8">等待启动…</div>'}
+  `;
+}
+
+async function showApQueueDetail(taskId) {
+  let t;
+  try { t = await api(`/api/autopublish/${taskId}`); } catch (e) { toast('加载失败：' + (e.message || e)); return; }
+  if (!t || !t.id) { toast('任务不存在'); return; }
+  const existing = document.getElementById('ap-queue-modal');
+  if (existing) existing.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'ap-queue-modal';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:9000;display:flex;align-items:center;justify-content:center;padding:24px';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:16px;padding:20px;width:100%;max-width:640px;max-height:82vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.3)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <div style="font-weight:700;font-size:15px">任务 #${t.id}</div>
+        <button onclick="document.getElementById('ap-queue-modal').remove()" style="background:#f1f5f9;border:none;border-radius:8px;padding:5px 12px;font-size:13px;cursor:pointer;color:#475569">✕ 关闭</button>
+      </div>
+      <div id="ap-queue-modal-body"></div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const body = document.getElementById('ap-queue-modal-body');
+  body.innerHTML = apQueueDetailHtml(t);
+}
+
+async function loadApQueue() {
+  const el = $('#ap-queue-list');
+  if (!el) return;
+  let d = null;
+  try { d = await api('/api/autopublish/queue'); } catch (e) { d = null; }
+  if (!d) return;
+  const running = d.running || [];
+  const upcoming = d.upcoming || [];
+  const timeout = Number(d.timeout) || 480;
+  const statusTag = { crawling:'🔍抓取', ai:'🤖AI配置', publishing:'📤上架', queued:'⏳排队' };
+  const now = Date.now() / 1000;
+  // 倒计时：单个商品剩余超时时间（timeout - 已耗时），随数据每 3 秒刷新 + 本地每秒递减
+  const cdHtml = (t) => {
+    const started = Number(t.started_at) || 0;
+    if (!started) return '';
+    const remain = Math.round(timeout - (now - started));
+    const mm = Math.floor(Math.max(0, remain) / 60);
+    const ss = Math.max(0, remain) % 60;
+    const txt = remain <= 0 ? '⏱ 即将超时' : `⏱ ${mm}分${String(ss).padStart(2, '0')}秒`;
+    const col = remain <= 60 ? '#dc2626' : '#ea580c';
+    return `<span class="ap-cd" data-started="${started}" data-timeout="${timeout}" style="flex-shrink:0;font-size:11px;font-weight:700;color:${col};font-variant-numeric:tabular-nums;white-space:nowrap">${txt}</span>`;
+  };
+  const row = (t, text, color) => `
+    <div onclick="showApQueueDetail(${t.id})" style="display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid #e2e8f0;border-radius:8px;cursor:pointer;margin-bottom:6px;transition:background .15s" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='#fff'">
+      <span style="font-weight:700;color:#94a3b8;font-size:12px;flex-shrink:0">#${t.id}</span>
+      <span style="flex:1;min-width:0;font-size:13px;color:#1e293b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.raw_title || t.ai_title || '(无标题)')}</span>
+      <span style="flex-shrink:0;font-size:11px;background:#f1f5f9;color:#475569;padding:2px 8px;border-radius:4px">${esc(t.shop_name || '')}</span>
+      ${cdHtml(t)}
+      <span style="flex-shrink:0;font-size:11px;font-weight:600;color:${color}">${esc(text)}</span>
+    </div>`;
+  let html = '';
+  if (running.length) {
+    html += `<div style="font-size:12px;color:#64748b;font-weight:600;margin-bottom:6px">🔄 正在执行（${running.length}）</div>`;
+    html += running.map(t => row(t, statusTag[t.status] || t.status, '#2563eb')).join('');
+  }
+  if (upcoming.length) {
+    html += `<div style="font-size:12px;color:#64748b;font-weight:600;margin:10px 0 6px">⏳ 后续执行（${upcoming.length}）</div>`;
+    html += upcoming.map(t => row(t, '排队', '#ea580c')).join('');
+  }
+  if (!html) html = '<div class="empty" style="color:#94a3b8">暂无执行中的任务，也没有排队任务。</div>';
+  el.innerHTML = html;
+  ensureApCountdownTimer();
+}
+
+// 倒计时本地每秒递减（不请求后端），视图切换后 .ap-cd 元素消失自动空转
+function ensureApCountdownTimer() {
+  if (window._apCdTimer) return;
+  window._apCdTimer = setInterval(() => {
+    const now = Date.now() / 1000;
+    document.querySelectorAll('.ap-cd').forEach(el => {
+      const started = Number(el.dataset.started) || 0;
+      const timeout = Number(el.dataset.timeout) || 480;
+      if (!started) return;
+      const remain = Math.round(timeout - (now - started));
+      const mm = Math.floor(Math.max(0, remain) / 60);
+      const ss = Math.max(0, remain) % 60;
+      el.textContent = remain <= 0 ? '⏱ 即将超时' : `⏱ ${mm}分${String(ss).padStart(2, '0')}秒`;
+      el.style.color = remain <= 60 ? '#dc2626' : '#ea580c';
+    });
+  }, 1000);
 }
 
 function renderApPagination() {
@@ -1810,6 +2587,18 @@ window.gotoApPage = function(p) {
   _apPage = p;
   loadApList();
 };
+
+async function deleteApTask(taskId) {
+  if (!confirm(`确定删除任务 #${taskId}？此操作不可恢复。`)) return;
+  try {
+    await api(`/api/autopublish/${taskId}`, 'DELETE');
+    toast('✅ 已删除任务 #' + taskId);
+    _apSelected.delete(String(taskId));
+    loadApList();
+  } catch (e) {
+    toast('删除失败：' + (e.message || e));
+  }
+}
 
 async function republishTask(taskId) {
   try {
@@ -2033,7 +2822,13 @@ function renderUserAdmin() {
 
 function startApListPolling() {
   if (window._apListTimer) clearInterval(window._apListTimer);
-  window._apListTimer = setInterval(() => { if (state.view === 'autopublish') loadApList(); }, 3000);
+  window._apListTimer = setInterval(() => {
+    if (state.view === 'autopublish') {
+      loadApList();
+      loadApQueue();
+      if (_selfhealOpen) loadSelfheal();
+    }
+  }, 3000);
 }
 
 // 上架列表：已上架商品台账（存表 published_goods），一键上架成功后自动归档
@@ -2631,18 +3426,20 @@ async function renderPromoFinance() {
   const ym = (v) => (v == null || Number.isNaN(v)) ? '—' : '¥' + Number(v).toFixed(2);
   const fold = (title, content, open) => `<details class="pf-fold" ${open ? 'open' : ''} style="margin:12px 12px 0"><summary style="cursor:pointer;font-weight:600;font-size:15px;padding:12px 16px;background:#fff;border-radius:10px;border:1px solid #e2e8f0;list-style:none;user-select:none;color:#1e293b">${title}</summary><div style="margin-top:8px">${content}</div></details>`;
   el.innerHTML = '<div style="padding:24px;color:#666">加载中…</div>';
-  let items = [], bills = [], dailyBills = [];
+  let items = [], bills = [], dailyBills = [], monthlyBills = [];
   try {
-    const [resp, billResp, dailyResp] = await Promise.all([
+    const [resp, billResp, dailyResp, monthlyResp] = await Promise.all([
       api('/api/catalog/promo-finance?limit=90'),
       api('/api/catalog/promo-monthly-bill?limit=200'),
       api('/api/catalog/promo-daily-bill?limit=1000'),
+      api('/api/catalog/promo-daily-bill-monthly'),
     ]);
     items = (resp && resp.items) || [];
     bills = (billResp && billResp.items) || [];
     dailyBills = (dailyResp && dailyResp.items) || [];
+    monthlyBills = (monthlyResp && monthlyResp.items) || [];
   } catch (e) {
-    items = []; bills = []; dailyBills = [];
+    items = []; bills = []; dailyBills = []; monthlyBills = [];
   }
   if (!items.length) {
     el.innerHTML = '<div style="padding:32px;color:#999;text-align:center">暂无财务快照数据。<br>每天 22:00 定时采集（如若月下/嘉裕/欧世艺），积累后可看余额与花费趋势。</div>';
@@ -2776,7 +3573,38 @@ async function renderPromoFinance() {
         </table>
       </div>`);
   }
-  el.innerHTML = fold('💳 卡片 · 各店余额与花费', cards, true) + dailyHtml + billHtml;
+  // 按月汇总区块（各店铺 × 各月份：支出/收入/净额/笔数）
+  let monthlyHtml = '';
+  if (monthlyBills.length) {
+    const monthlyRows = monthlyBills.map(m => {
+      const net = Number(m.net) || 0;
+      return `
+        <tr style="border-top:1px solid #f1f5f9">
+          <td style="padding:6px 4px;color:#475569">${m.ym}</td>
+          <td style="padding:6px 4px">${m.shop_name || ''}</td>
+          <td style="padding:6px 4px;color:#ea580c;text-align:right">${ym(m.spend)}</td>
+          <td style="padding:6px 4px;color:#16a34a;text-align:right">${ym(m.income)}</td>
+          <td style="padding:6px 4px;font-weight:600;text-align:right;${net < 0 ? 'color:#dc2626' : 'color:#16a34a'}">${net >= 0 ? '+' : ''}${ym(m.net)}</td>
+          <td style="padding:6px 4px;color:#94a3b8;text-align:right">${m.bill_count}</td>
+        </tr>`;
+    }).join('');
+    monthlyHtml = fold(`📅 日明细 · 按月汇总（${monthlyBills.length} 行）`, `
+      <div class="panel" style="padding:16px 18px">
+        <div style="color:#94a3b8;font-size:12px">按月份 × 店铺汇总；支出=推广花费，收入=充值/红包，净额=收入−支出（负数=当月净烧钱）</div>
+        <table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:8px">
+          <tr style="color:#94a3b8;text-align:left">
+            <th style="padding:6px 4px;font-weight:500">月份</th>
+            <th style="padding:6px 4px;font-weight:500">店铺</th>
+            <th style="padding:6px 4px;font-weight:500;text-align:right">支出</th>
+            <th style="padding:6px 4px;font-weight:500;text-align:right">收入</th>
+            <th style="padding:6px 4px;font-weight:500;text-align:right">净额</th>
+            <th style="padding:6px 4px;font-weight:500;text-align:right">笔数</th>
+          </tr>
+          ${monthlyRows}
+        </table>
+      </div>`);
+  }
+  el.innerHTML = fold('💳 卡片 · 各店余额与花费', cards, true) + dailyHtml + monthlyHtml + billHtml;
 }
 
 function toggleNavGroup(name, ev) {

@@ -178,28 +178,54 @@ async function fillByType(c, selector, text){
   // 通用：搜索框选类目（普通店页面 / 旗舰店弹窗 共用，搜索框 placeholder 一致）
   async function searchAndSelectCategory(){
     const _parts=(cfg.categoryPath||'').split(' > ');
-    let searchKw=cfg.categoryKeyword;
-    if(_parts.length>=2 && _parts[1] && _parts[1].length>=2){ searchKw=_parts[1]; }
-    const _kwCands=[searchKw,cfg.categoryKeyword,_parts[_parts.length-1]].filter((v,i,a)=>v&&v.length>=1&&a.indexOf(v)===i);
+    // 搜索词只用精确词（categoryKeyword/最后一级），不用宽泛的第二级
+    // （task_539/540 教训：搜宽泛的「餐具」会匹配错到「便携/折叠餐具」；task_576 教训：二级「室内/室外清洁用具」会错误命中「抹布」）
+    const _kwCands=[cfg.categoryKeyword,_parts[_parts.length-1]].filter((v,i,a)=>v&&v.length>=1&&a.indexOf(v)===i);
     let sel='no category';
     let learnedCat='';  // 选中的真实类目文本
     let learnedKw='';   // 实际命中的搜索词
     for(let _attempt=0;_attempt<_kwCands.length&&sel!=='ok';_attempt++){
       const _kw=_kwCands[_attempt];
-      await fillByType(c,'input[placeholder="请输入关键词搜索分类"]',_kw);
+      // 类目搜索框需真实键盘输入（Input.insertText）+ Enter 才触发搜索
+      // （task_539：native setter 填值 React 不识别 → 搜索不触发 → 结果空 → 匹配失败）
+      const _focus=await ev(c,`(()=>{const inp=document.querySelector('input[placeholder*="分类"]');if(!inp)return 'no';inp.scrollIntoView({block:'center'});inp.click();inp.focus();return 'ok'})()`);
+      if(_focus==='ok'){
+        await sleep(300);
+        // Ctrl+A 全选清空残留，再真实键盘输入覆盖（连续搜多词时避免旧词残留）
+        await c.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Control',code:'ControlLeft',windowsVirtualKeyCode:17});
+        await c.send('Input.dispatchKeyEvent',{type:'keyDown',key:'a',code:'KeyA',windowsVirtualKeyCode:65});
+        await c.send('Input.dispatchKeyEvent',{type:'keyUp',key:'a',code:'KeyA',windowsVirtualKeyCode:65});
+        await c.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Control',code:'ControlLeft',windowsVirtualKeyCode:17});
+        await c.send('Input.insertText',{text:_kw});
+        await sleep(500);
+        await c.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});
+        await c.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});
+      }
       await sleep(4000);
       const r=await ev(c,`(()=>{
-        const want=${JSON.stringify(cfg.categoryPath)};
+        // 全角→半角归一化：拼多多类目页用全角 ＞／，config 用半角 >/，不归一化精确匹配永远失败（task_539）
+        const _norm=s=>String(s||'').replace(/[＞﹥]/g,'>').replace(/／/g,'/').replace(/\\s+/g,' ').trim();
+        const want=_norm(${JSON.stringify(cfg.categoryPath)});
         const parts=want.split(' > ');
         const lastWord=parts[parts.length-1]||'';
-        const midWord=parts.length>=2?parts[1]:lastWord;
-        const cands=[...document.querySelectorAll('.choose-category,[class*="searchItem"]')];
-        const norm=e=>(e.textContent||'').trim();
+        const kw=_norm(${JSON.stringify(cfg.categoryKeyword)});
+        let cands=[...document.querySelectorAll('.choose-category,[class*="searchItem"]')];
+        // 兜底：原选择器找不到（拼多多改版 class 变了），遍历可见叶子，按文本含关键词过滤
+        if(!cands.length){
+          cands=[...document.querySelectorAll('*')].filter(e=>{
+            if(e.children.length!==0) return false;
+            const r=e.getBoundingClientRect();
+            if(r.width<1||r.height<1) return false;
+            const t=_norm(e.textContent||'');
+            return t.length>=2&&t.length<=80&&(t.includes(lastWord)||t.includes(kw));
+          });
+        }
+        const norm=e=>_norm(e.textContent||'');
         let el=cands.find(e=>norm(e)===want);
-        if(!el&&midWord)el=cands.find(e=>{const lp=norm(e).split(' > ').pop();return lp===midWord||lp.includes(midWord);});
-        if(!el&&midWord)el=cands.find(e=>norm(e).includes(midWord));
+        // 只用最后一级（最具体品类词）兜底，不用二级类目兜底（task_576 教训：二级「室内/室外清洁用具」会错误命中「抹布」）
+        if(!el&&lastWord)el=cands.find(e=>{const lp=norm(e).split(' > ').pop();return lp===lastWord||lp.includes(lastWord);});
         if(!el&&lastWord)el=cands.find(e=>norm(e).includes(lastWord));
-        if(!el)el=cands.find(e=>norm(e).includes(${JSON.stringify(cfg.categoryKeyword)}));
+        if(!el&&kw)el=cands.find(e=>norm(e).includes(kw));
         if(el){el.scrollIntoView({block:'center'});el.click();return norm(el);}
         return '';
       })()`);
@@ -234,12 +260,22 @@ async function fillByType(c, selector, text){
     for(let _ui=0; _ui<4 && !_imgUp; _ui++){
       try{
         const docF=await c.send('DOM.getDocument',{depth:3});
-        const qimgF=await c.send('DOM.querySelector',{nodeId:docF.root.nodeId,selector:'input[type="file"]'});
+        const qimgF=await c.send('DOM.querySelector',{nodeId:docF.root.nodeId,selector:'[class*="uploadImgEnter"] input[type="file"][accept*="image"]'});
         if(qimgF && qimgF.nodeId){
           await c.send('DOM.setFileInputFiles',{nodeId:qimgF.nodeId,files:cfg.images.slice(0,10)});
           await sleep(8000);
+          // 2026-10 改版：上传后缩略图不再用 img/bg 渲染，改用 goodsCarousel_selected 的 (N/M) 文字计数。
+          // 旧「数 img/bg」方式永久返回 0 会误判主图为空。改为读 uploadImgEnter 容器内 (N/M) 文字。
           const _imgCnt=await ev(c, `(()=>{
-            return [...document.querySelectorAll('[class*="imageBox"]')].filter(e=>(e.getAttribute('style')||'').includes('background-image')).length;
+            const sel=document.querySelector('[class*="goodsCarousel_selected"]');
+            if(!sel)return 0;
+            const txt=(sel.innerText||sel.textContent||'').trim();
+            const a=txt.indexOf('(');
+            const slash=txt.indexOf('/');
+            const b=txt.indexOf(')');
+            if(a<0||slash<0||b<0||a>=slash||slash>=b)return 0;
+            const n=parseInt(txt.slice(a+1,slash));
+            return isNaN(n)?0:n;
           })()`);
           if(_imgCnt && _imgCnt>0){ _imgUp=true; log('  上传完成', _imgCnt, '张'); }
           else if(_ui<3){ log('  ⚠️ 图片未生效(0张)，重试上传…'); }
@@ -335,18 +371,36 @@ async function fillByType(c, selector, text){
     log('  发布页:', href);
     if(!href || !/goods_add\/index/.test(href)){ log('❌ 未跳转发布页，终止'); c.ws.close(); process.exit(1); }
 
-    // ===== 普通店：上传主图 =====
+    // ===== 普通店：上传主图（selector 精确指向主图区 + 上传后验证重试）=====
     log('[2/8] 上传主图', cfg.images.length, '张');
-    const hasMainImg=await ev(c, `(()=>{const up=[...document.querySelectorAll('input[type="file"][accept*="image"]')];return up.length})()`);
-    log('  图片 file input 数:', hasMainImg);
-    const doc=await c.send('DOM.getDocument',{depth:3});
-    const qimg=await c.send('DOM.querySelector',{nodeId:doc.root.nodeId, selector:'input[type="file"][accept*="image"]'});
-    if(qimg && qimg.nodeId){
-      await c.send('DOM.setFileInputFiles',{nodeId:qimg.nodeId, files:cfg.images.slice(0,10)});
-      await sleep(8000);
-      log('  上传完成');
-    } else {
-      log('  ⚠️ 未找到主图 file input');
+    // 主图区 file input：MaterialModalButton 容器内 accept=image 的 input。
+    // 2026-10 改版：uploadImgEnter 已被视频上传占用（accept=video），主图改用 MaterialModalButton 组件。
+    // 旧 selector 指向视频区 → 主图（轮播图）为空 → 提交被拦「轮播图不能为空」。改为 MaterialModalButton + 验证缩略图数量 + 重试。
+    const _mainImgSel='[class*="MaterialModalButton"] input[type="file"][accept*="image"]';
+    let _mUp=false;
+    for(let _mi=0; _mi<4 && !_mUp; _mi++){
+      try{
+        const _doc=await c.send('DOM.getDocument',{depth:3});
+        const _qi=await c.send('DOM.querySelector',{nodeId:_doc.root.nodeId, selector:_mainImgSel});
+        if(_qi && _qi.nodeId){
+          await c.send('DOM.setFileInputFiles',{nodeId:_qi.nodeId, files:cfg.images.slice(0,10)});
+          await sleep(8000);
+          const _cnt=await ev(c, `(()=>{
+            const sel=document.querySelector('[class*="goodsCarousel_selected"]');
+            if(sel){const t=(sel.innerText||sel.textContent||'').trim();const a=t.indexOf('(');const s=t.indexOf('/');const b=t.indexOf(')');if(a>=0&&s>a&&b>s){const n=parseInt(t.slice(a+1,s));if(!isNaN(n))return n;}}
+            let n=0;
+            const mms=[...document.querySelectorAll('[class*="MaterialModalButton"]')];
+            mms.forEach(function(mm){if(!mm.querySelectorAll)return;[...mm.querySelectorAll('[class*="imageBox"]')].forEach(function(x){const st=x.getAttribute?x.getAttribute('style')||'':'';if(st.indexOf('background-image')>=0)n++;});});
+            return n;
+          })()`);
+          if(_cnt>0){ _mUp=true; log('  上传完成', _cnt, '张'); }
+          else if(_mi<3){ log('  ⚠️ 主图未生效(0张)，重试…'); }
+          else { log('  ⚠️ 主图上传未生效(仍0张)，继续（提交前会再校验）'); }
+        } else {
+          log('  ⚠️ 未找到主图 file input，重试…');
+          await sleep(3000);
+        }
+      }catch(e){ log('  上传异常:', e.message); await sleep(3000); }
     }
 
     // ===== 普通店：填标题 =====
@@ -506,14 +560,38 @@ async function fillByType(c, selector, text){
     totalFilled += o.filled||0;
     log('  第'+round+'轮: 列数'+o.cols+' 空行'+o.rows+' 填'+o.filled+'个');
     if(totalFilled >= totalSku*3) break;
-    if(o.filled===0){ noProgress++; if(noProgress>=3) break; }
+    if(o.filled===0){ noProgress++; if(noProgress>=8) break; }
     else noProgress=0;
     // 累计已填行数（空行数 = 本轮填的行数）
     await ev(c, `window.__filledRows += ${o.rows||0};`);
-    // 单调向下滚动，触发虚拟列表渲染更多行
-    // (task_241 教训：30行SKU时表格有独立滚动容器 sh>ch，window.scrollBy 滚页面不触发表格渲染，必须滚表格容器)
-    await ev(c, `(()=>{const sku=document.querySelector('.skuModule')||document.querySelector('.sku-list')||document;const sc=[...sku.querySelectorAll('div')].find(d=>d.scrollHeight>d.clientHeight+10);if(sc){sc.scrollTop+=400;return 'sku';}window.scrollBy(0,400);return 'window';})()`);
-    await sleep(500);
+    // 分步滚动到底：一次性 sc.scrollTop=scrollHeight 不触发 IPT 虚拟列表渲染（task_559+ 教训）。
+    // 24 行 SKU 时 IPT 组件只渲染可视区附近行，最后 5 行滚动无法渲染（拼多多前端限制）。
+    // 这里尽量滚动到底，能填多少填多少；填不满由后端减半重试兜底。
+    for(let _si=0; _si<10; _si++){
+      const _sr = await ev(c, `(()=>{
+        const sku=document.querySelector('.skuModule')||document.querySelector('.sku-list')||document;
+        let sc=null;
+        for(const d of sku.querySelectorAll('div')){
+          if(d.clientHeight>0 && d.scrollHeight>d.clientHeight+10){
+            if(!sc || d.scrollHeight>sc.scrollHeight) sc=d;
+          }
+        }
+        if(!sc) return JSON.stringify({done:true});
+        const max=sc.scrollHeight-sc.clientHeight;
+        sc.scrollTop=Math.min(sc.scrollTop+300, max);
+        return JSON.stringify({done:sc.scrollTop>=max-1});
+      })()`);
+      let _sd={}; try{_sd=JSON.parse(_sr||'{}');}catch(e){}
+      await sleep(200);
+      if(_sd.done) break;
+    }
+    await ev(c, `(()=>{
+      const sku=document.querySelector('.skuModule')||document.querySelector('.sku-list')||document;
+      const empty=[...sku.querySelectorAll('input[placeholder="请输入"]')].filter(i=>(i.value||'').trim()==='');
+      if(empty.length){ empty[empty.length-1].scrollIntoView({block:'center'}); }
+      return 'scrolled';
+    })()`);
+    await sleep(600);
   }
   log('  累计填', totalFilled, '个单元格 / 目标', totalSku*3, '个');
   // 校验：价格库存必须填全，否则提交会产生「价格0/空」的错误商品
@@ -583,6 +661,49 @@ async function fillByType(c, selector, text){
     }
   }catch(e){ log('  品牌处理异常:', e.message); }
 
+  // ===== Step 7.55: 填商品属性（材质/风格等，提升搜索推荐曝光） =====
+  // task_551 教训：之前商品属性（材质/风格）完全没填，浪费流量。现从 cfg.attributes 读取（AI 提取+值映射），
+  // 匹配发布页属性字段（label 含关键词）→ 点开 select → 选精确匹配的选项。
+  log('[7.55/8] 填商品属性');
+  try{
+    const _attrs = cfg.attributes || {};
+    const _attrEntries = Object.entries(_attrs).filter(([k,v])=>v && String(v).trim());
+    if(_attrEntries.length){
+      // 字段名映射：attributes 键 → 拼多多属性 label 关键词
+      const _fieldMap = { '材质':'重要材质', '风格':'风格', '类型':'摆放类别', '使用形式':'摆放类别' };
+      for(const [_k, _v] of _attrEntries){
+        const _val = String(_v).trim();
+        const _labelKw = _fieldMap[_k] || _k;
+        // 找 label（去空格后含 labelKw）→ 关联 select → 点开
+        const _pick = await ev(c, `(()=>{
+          const lbl=[...document.querySelectorAll('label')].find(e=>{const t=(e.textContent||'').replace(/\\s+/g,'');return t.includes(${JSON.stringify(_labelKw)})&&e.getBoundingClientRect().width>0;});
+          if(!lbl) return 'no_label';
+          let item=lbl.parentElement;
+          for(let i=0;i<5&&item;i++){ if(item.querySelector('[data-testid="beast-core-select"]')) break; item=item.parentElement; }
+          const sel=item?item.querySelector('[data-testid="beast-core-select"]'):null;
+          if(!sel) return 'no_select';
+          const head=sel.querySelector('[data-testid="beast-core-select-header"]')||sel;
+          head.scrollIntoView({block:'center'});
+          head.click();
+          return 'opened';
+        })()`);
+        if(_pick!=='opened'){ log('  ['+_k+'='+_val+'] '+_pick+'，跳过'); continue; }
+        await sleep(2500);
+        // 找精确匹配选项（叶子文本 == 值），取最后一个命中（避开页面其他干扰）
+        const _sel = await ev(c, `(()=>{
+          const opts=[...document.querySelectorAll('*')].filter(e=>e.children.length===0&&(e.textContent||'').trim()===${JSON.stringify(_val)}&&e.getBoundingClientRect().width>0&&e.getBoundingClientRect().height>0);
+          if(opts.length){ opts[opts.length-1].click(); return opts[opts.length-1].textContent.trim(); }
+          return 'no_match';
+        })()`);
+        log('  ['+_k+'] '+_val+' => '+( _sel==='no_match' ? '未匹配到选项，跳过' : '已选['+_sel+']'));
+        await ev(c, `document.body.click()`);  // 关闭下拉
+        await sleep(600);
+      }
+    } else {
+      log('  无商品属性（attributes 空），跳过');
+    }
+  }catch(e){ log('  填属性异常:', e.message); }
+
   // ===== Step 7.6: 运费模板（选「多仓」开头的模板） =====
   // 运费模板字段在「服务与承诺」区块，是 beast-core select「请选择运费模板」
   // （实测闲时来/嘉裕无「推荐默认模板/其他模板」radio）。点「展开修改」展开字段 →
@@ -592,27 +713,17 @@ async function fillByType(c, selector, text){
   try{
     // 0) 点「展开修改」展开运费模板字段（默认折叠 .template-box display:none，
     //    不展开 radio 一直 rect 0，task_443 教训）
+    //    task_539+ 教训：重新登录后 dispatchMouseEvent 真实点击失效（窗口状态变化），
+    //    改用 element.click() 直接触发 React 展开。
     const _e0 = await ev(c, `(()=>{
       const el=[...document.querySelectorAll('*')].find(e=>e.children.length===0&&(e.textContent||'').trim()==='展开修改');
       if(!el) return 'no_expand';
       el.scrollIntoView({block:'center'});
-      const rc=el.getBoundingClientRect();
-      return JSON.stringify({x:Math.round(rc.x+rc.width/2), y:Math.round(rc.y+rc.height/2)});
+      el.click();
+      return 'ok';
     })()`);
     log('  运费模板-展开修改:', _e0);
     if(_e0!=='no_expand'){
-      try{
-        const _ep=JSON.parse(_e0||'{}');
-        if(_ep.x&&_ep.y){
-          await c.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:_ep.x-40,y:_ep.y});
-          await sleep(150);
-          await c.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:_ep.x,y:_ep.y});
-          await sleep(300);
-          await c.send('Input.dispatchMouseEvent',{type:'mousePressed',x:_ep.x,y:_ep.y,button:'left',clickCount:1});
-          await sleep(80);
-          await c.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:_ep.x,y:_ep.y,button:'left',clickCount:1});
-        }
-      }catch(e){}
       await sleep(2000);  // 等 .template-box 展开
     }
     // 1) 滚动到「其他模板」radio 并轮询等渲染（展开后 radio 才可见），渲染后用真实鼠标点击
@@ -640,14 +751,18 @@ async function fillByType(c, selector, text){
       if(_pt.x&&_pt.y&&_pt.w>0&&_pt.h>0){
         if(_pt.checked==='true'){ _f1ok=true; }  // 已选中，直接走后续
         else{
-          await c.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:_pt.x-40,y:_pt.y});
-          await sleep(150);
-          await c.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:_pt.x,y:_pt.y});
-          await sleep(300);
-          await c.send('Input.dispatchMouseEvent',{type:'mousePressed',x:_pt.x,y:_pt.y,button:'left',clickCount:1});
-          await sleep(80);
-          await c.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:_pt.x,y:_pt.y,button:'left',clickCount:1});
-          _f1ok=true;
+          // task_539+ 教训：dispatchMouseEvent 失效，改用 element.click() 点 radio label
+          const _clk=await ev(c, `(()=>{
+            const el=[...document.querySelectorAll('*')].find(e=>e.children.length===0&&(e.textContent||'').trim()==='其他模板'&&e.getBoundingClientRect().width>0);
+            if(!el) return 'no';
+            const label=el.closest('[data-testid="beast-core-radio"]');
+            if(!label) return 'no_label';
+            label.click();
+            const input=label.querySelector('input[type="radio"]');
+            if(input) input.click();
+            return label.getAttribute('data-checked');
+          })()`);
+          _f1ok = (_clk==='true');
         }
         break;
       }
@@ -661,11 +776,21 @@ async function fillByType(c, selector, text){
     if(!_f1ok){
       await ev(c, `(()=>{
         const box=document.querySelector('#cost_template_id');
-        if(box){ box.style.display='block'; }
+        if(box){ box.style.display='block'; box.style.height='auto'; }
         const line=document.querySelector('.goods-basic-line.template');
-        if(line){ line.style.height='auto'; }
+        if(line){ line.style.height='auto'; line.style.overflow='visible'; }
         const label=[...document.querySelectorAll('#cost_template_id [data-testid="beast-core-radio"]')].find(e=>(e.textContent||'').trim()==='其他模板');
-        if(label){ const input=label.querySelector('input[type="radio"]'); if(input){ input.click(); } }
+        if(label){
+          label.click();
+          const input=label.querySelector('input[type="radio"]');
+          if(input){
+            // native setter 设 checked + 触发 change，强制 React 受控组件切换（task_539+ 兜底）
+            const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'checked').set;
+            setter.call(input,true);
+            input.dispatchEvent(new Event('click',{bubbles:true}));
+            input.dispatchEvent(new Event('change',{bubbles:true}));
+          }
+        }
         return 'done';
       })()`);
       await sleep(2000);
@@ -696,22 +821,16 @@ async function fillByType(c, selector, text){
       if(!_selReady){
         log('  ⚠️ 运费模板 select 未渲染，保持默认（店铺默认运费模板）');
       } else {
-        // 3) 真实鼠标点击 select 展开下拉（比 JS click 更可靠，React select 需真实事件）
-        const _coord=await ev(c, `(()=>{
+        // 3) element.click() 点 select 展开下拉（task_539+ 教训：dispatchMouseEvent 失效）
+        const _clickSel=await ev(c, `(()=>{
           const sel=document.querySelector('[id="service.cost_template_id"] [data-testid="beast-core-select"], #cost_template_id [data-testid="beast-core-select"]');
+          if(!sel) return 'no_select';
           const head=sel.querySelector('[data-testid="beast-core-select-header"]')||sel;
           head.scrollIntoView({block:'center'});
-          const rc=head.getBoundingClientRect();
-          return JSON.stringify({x:Math.round(rc.x+rc.width/2),y:Math.round(rc.y+rc.height/2)});
+          head.click();
+          return 'ok';
         })()`);
-        try{
-          const _pt=JSON.parse(_coord||'{}');
-          if(_pt.x&&_pt.y){
-            await c.send('Input.dispatchMouseEvent',{type:'mousePressed',x:_pt.x,y:_pt.y,button:'left',clickCount:1});
-            await sleep(80);
-            await c.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:_pt.x,y:_pt.y,button:'left',clickCount:1});
-          }
-        }catch(e){}
+        log('  运费模板-select 点击:', _clickSel);
         await sleep(2500);
         // 3.5) 检测下拉内容（「无结果」= options 空，店铺无模板或数据未加载）
         const _dd = await ev(c, `(()=>{
@@ -783,27 +902,92 @@ async function fillByType(c, selector, text){
     }
   }catch(e){ log('  运费模板选择异常:', e.message); }
 
+  // ===== Step 7.7: 上传详情图（商详装修区，quick_decoration）=====
+  // 1688 抓的 detailImages（商品详情长图）上传到拼多多「商品详情」商详装修区。
+  // 无详情图时跳过（拼多多自动用轮播图填充商详）。
+  log('[7.7/8] 上传详情图');
+  try{
+    const _dImgs = cfg.detailImages || [];
+    if(_dImgs.length){
+      // 商详装修区 file input：位于 quick_decoration 容器内（与主图区 uploadImgEnter 区分）
+      const _detailSel='[class*="quick_decoration"] input[type="file"][accept*="image"]';
+      let _dUp=false;
+      for(let _di=0; _di<3 && !_dUp; _di++){
+        try{
+          const _qdoc = await c.send('DOM.getDocument',{depth:3});
+          const _qfi = await c.send('DOM.querySelector',{nodeId:_qdoc.root.nodeId, selector:_detailSel});
+          if(_qfi && _qfi.nodeId){
+            await c.send('DOM.setFileInputFiles',{nodeId:_qfi.nodeId, files:_dImgs});
+            await sleep(8000);
+            // task_595 教训：详情图上传后 React 可能未生效（商详装修图仍空），需验证 img/bg 数量
+            const _dcnt=await ev(c, `(()=>{
+              const box=[...document.querySelectorAll('[class*="quick_decoration"]')];
+              const imgs=box.reduce((n,e)=>n+(e.querySelectorAll?[...e.querySelectorAll('img')].length:0),0);
+              const bgs=box.filter(e=>(e.getAttribute('style')||'').includes('background-image')).length;
+              return imgs+bgs;
+            })()`);
+            if(_dcnt>0){ _dUp=true; log('  详情图上传', _dImgs.length, '张（生效', _dcnt, '）'); }
+            else if(_di<2){ log('  ⚠️ 详情图未生效(0张)，重试…'); }
+            else { log('  ⚠️ 详情图上传未生效(仍0张)，继续（提交前会再校验）'); }
+          } else {
+            log('  ⚠️ 未找到商详装修区 file input，跳过详情图');
+            break;
+          }
+        }catch(e){ log('  详情图上传异常:', e.message); break; }
+      }
+    } else {
+      log('  无详情图（detailImages 空），跳过（拼多多自动用轮播图填充商详）');
+    }
+  }catch(e){ log('  详情图上传异常:', e.message); }
+
   // ===== Step 8: 提交 =====
   log('[8/8] 提交前检查');
   const err=await ev(c,`(()=>{const m=document.body.innerText.match(/错误（(\d+)）/);return m?m[0]:'错误（0）'})()`);
   log('  错误计数:', err);
+  // 图片兜底校验（task_595/598 教训：上传日志成功但 React 未生效，提交被拦截「轮播图/商详装修图为空」）
+  // 提交前再查一次主图/详情图是否真的有图，空则重传。
+  const _imgStat=await ev(c, `(()=>{
+    const mainCnt=()=>{const sel=document.querySelector('[class*="goodsCarousel_selected"]');if(sel){const t=(sel.innerText||sel.textContent||'').trim();const a=t.indexOf('(');const s=t.indexOf('/');const b=t.indexOf(')');if(a>=0&&s>a&&b>s){const n=parseInt(t.slice(a+1,s));if(!isNaN(n))return n;}}let n=0;const mms=[...document.querySelectorAll('[class*="MaterialModalButton"]')];mms.forEach(function(mm){if(!mm.querySelectorAll)return;[...mm.querySelectorAll('[class*="imageBox"]')].forEach(function(x){const st=x.getAttribute?x.getAttribute('style')||'':'';if(st.indexOf('background-image')>=0)n++;});});return n;};
+    const detailCnt=()=>{const box=[...document.querySelectorAll('[class*="quick_decoration"]')];const imgs=box.reduce((n,e)=>n+(e.querySelectorAll?[...e.querySelectorAll('img')].length:0),0);const bgs=box.filter(e=>(e.getAttribute('style')||'').includes('background-image')).length;return imgs+bgs;};
+    return {main:mainCnt(), detail:detailCnt()};
+  })()`);
+  log('  图片兜底校验: 主图', (_imgStat&&_imgStat.main)||0, '张 / 详情图', (_imgStat&&_imgStat.detail)||0, '张');
+  if((!(_imgStat&&_imgStat.main)) && cfg.images.length){
+    log('  ⚠️ 主图为空，提交前重传…');
+    try{
+      const _doc=await c.send('DOM.getDocument',{depth:3});
+      const _qi=await c.send('DOM.querySelector',{nodeId:_doc.root.nodeId, selector:'[class*="uploadImgEnter"] input[type="file"][accept*="image"]'});
+      if(_qi&&_qi.nodeId){ await c.send('DOM.setFileInputFiles',{nodeId:_qi.nodeId, files:cfg.images.slice(0,10)}); await sleep(8000); log('  主图重传完成'); }
+    }catch(e){ log('  主图重传异常:', e.message); }
+  }
+  if((!(_imgStat&&_imgStat.detail)) && (cfg.detailImages||[]).length){
+    log('  ⚠️ 详情图为空，提交前重传…');
+    try{
+      const _doc=await c.send('DOM.getDocument',{depth:3});
+      const _qi=await c.send('DOM.querySelector',{nodeId:_doc.root.nodeId, selector:'[class*="quick_decoration"] input[type="file"][accept*="image"]'});
+      if(_qi&&_qi.nodeId){ await c.send('DOM.setFileInputFiles',{nodeId:_qi.nodeId, files:cfg.detailImages}); await sleep(8000); log('  详情图重传完成'); }
+    }catch(e){ log('  详情图重传异常:', e.message); }
+  }
   const submit=await ev(c,`(()=>{const btn=[...document.querySelectorAll('button')].find(b=>(b.textContent||'').trim().includes('提交并上架'));if(btn){btn.scrollIntoView({block:'center'});btn.click();return 'ok';}return 'no submit btn'})()`);
   log('  提交按钮:', submit);
   if(submit==='ok'){
-    let finalUrl=''; let successFlag=false; let failReason='';
+    let finalUrl=''; let successFlag=false; let failReason=''; let failCount=0;
     for(let i=0;i<120;i++){
       await sleep(1000);
       finalUrl=await ev(c,'location.href');
-      // 成功：URL 跳离 goods_add/index（success 页或商品列表页）
-      if(/goods_add\/success/.test(finalUrl) || /\/goods\/list/.test(finalUrl)){ successFlag=true; break; }
-      // 失败：只匹配「明确的拦截性错误」——缺字段/资质硬拦截。
-      // ⚠️ 教训(task_79)：提交成功前会短暂闪现「请准确填写属性…」引导提示（含"填写/必填/违规"字样），
-      //    但商品最终成功跳 success 页。宽泛匹配「请填写/必填/违规」会把引导提示误判为失败。
-      //    因此只保留硬拦截文案（请输入第N行/不能为空/必须支持假一赔十/请先选择）。
+      // 成功：跳 success 页 / 商品列表页 / 离开编辑页（提交生效后 URL 会跳离 goods_add/index）
+      if(/goods_add\/success/.test(finalUrl) || /\/goods\/list/.test(finalUrl) || !/goods_add\/index/.test(finalUrl)){ successFlag=true; break; }
+      // 失败：只匹配「明确的拦截性错误」，且需连续 3 次（3 秒）出现才判定，
+      // 避免提交成功前的瞬时引导提示（task_79）误判为失败（= 假失败导致重复上架）。
       const t=await ev(c,'document.body.innerText');
       if(t && /必须支持假一赔十|请输入第\d+行|不能为空|请先(选择|填写|上传|设置)/.test(t)){
-        failReason=(t.match(/(必须支持假一赔十[^\n]*|请输入第\d+行[^\n]*|[^\n]*(?:不能为空|请先(?:选择|填写|上传|设置))[^\n]*)/)||[''])[0].slice(0,80);
-        break;
+        failCount++;
+        if(failCount>=3){
+          failReason=(t.match(/(必须支持假一赔十[^\n]*|请输入第\d+行[^\n]*|[^\n]*(?:不能为空|请先(?:选择|填写|上传|设置))[^\n]*)/)||[''])[0].slice(0,80);
+          break;
+        }
+      } else {
+        failCount=0;
       }
     }
     log('  提交结果 URL:', finalUrl);
