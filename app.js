@@ -1129,10 +1129,15 @@ async function renderAutopublish() {
         <div style="display:flex;gap:10px;flex-wrap:wrap">
           <input id="ap-url" placeholder="https://detail.1688.com/offer/xxxxx.html 或 qr.1688.com/s/xxx 短链" style="flex:1;min-width:280px;padding:11px 14px;border:1px solid #cbd5e1;border-radius:10px;font-size:14px">
           <select id="ap-shop" style="padding:11px 12px;border:1px solid #cbd5e1;border-radius:10px;font-size:14px;background:#fff">
-            <option value="5">嘉裕工艺品(9232)</option>
-            <option value="3">如若月下(9230)</option>
-            <option value="1">闲时来(9234)</option>
-            <option value="6">欧世艺(9228)</option>
+            <optgroup label="拼多多">
+              <option value="5">嘉裕工艺品(9232)</option>
+              <option value="3">如若月下(9230)</option>
+              <option value="1">闲时来(9234)</option>
+              <option value="6">欧世艺(9228)</option>
+            </optgroup>
+            <optgroup label="淘宝">
+              <option value="12">嘉裕工艺品·淘宝(9222)</option>
+            </optgroup>
           </select>
           <button class="btn primary" id="ap-start-btn" style="padding:11px 22px;font-size:14px">开始上架</button>
         </div>

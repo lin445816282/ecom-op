@@ -3534,6 +3534,11 @@ def _autopublish_bg(task_id: int, pricing: dict = None):
         + (f" ｜ ⚠️{warning}" if warning else ""),
     )
 
+    # ---- 平台分流：淘宝走独立 Python 执行器（AI 以图发品 + 提交手动），拼多多走 publish.js ----
+    _platform = (task.get("platform") or "").strip() or "pdd"
+    if _platform == "taobao":
+        return _taobao_publish(config_wsl, task_id, shop_id, pricing)
+
     # ---- 环节3：拼多多 CDP 真实上架 ----
     if _overtime("publish"):
         return _fail_timeout("publish")
@@ -3692,6 +3697,58 @@ def _autopublish_bg(task_id: int, pricing: dict = None):
         except Exception:
             pass
         return _fail("publish", f"未确认上架成功（{tail}）")
+
+
+def _wsl_host_ip() -> str:
+    """动态获取 Windows 宿主 IP（WSL2 默认网关），供 WSL 侧访问 Windows 的淘宝 CDP。"""
+    try:
+        import subprocess as _sp
+        out = _sp.run(["ip", "route", "show", "default"], capture_output=True, text=True, timeout=5).stdout
+        for part in out.split():
+            if part.count(".") == 3:
+                return part
+    except Exception:
+        pass
+    return "172.23.128.1"
+
+
+def _taobao_publish(config_wsl: str, task_id: int, shop_id: int, pricing: dict = None):
+    """淘宝上架：调 taobao_publish.py（Python 执行器，AI 以图发品 + V2 填表，停在提交前）。
+    淘宝「提交宝贝」按钮被 React 拦截，最后点击必须人工，脚本跑到 ready_for_manual_submit 即算成功。
+    状态用 submitted + stage=manual_submit 标记「待人工点击提交」，与拼多多 submitted（真正已提交）区分。"""
+    import subprocess
+    catalog.update_autopublish_task(task_id, status="publishing", stage="publish")
+    catalog.append_autopublish_log(task_id, "publish", "running", "淘宝 AI 以图发品 + V2 填表…")
+    script_wsl = os.path.join(AUTOPUBLISH_DIR_WSL, "taobao_publish.py")
+    cdp_url = os.environ.get("TAOBAO_CDP_URL", f"http://{_wsl_host_ip()}:{TAOBAO_CDP_PORT}")
+    try:
+        res = subprocess.run(
+            [sys.executable, script_wsl, config_wsl, cdp_url],
+            capture_output=True, text=True, timeout=600,
+        )
+        stdout = (res.stdout or "")
+        stderr = (res.stderr or "")
+        if "RESULT_READY" in stdout:
+            catalog.update_autopublish_task(task_id, status="submitted", stage="manual_submit", error="")
+            catalog.append_autopublish_log(
+                task_id, "publish", "done",
+                "✅ 淘宝表单已填完，待人工在 Edge 9222 手动点击「提交宝贝」")
+            return
+        _err = ""
+        for line in stdout.splitlines():
+            if "error" in line.lower() or "失败" in line or "RESULT_FAILED" in line:
+                _err = line.strip()[-300:]
+                break
+        if not _err:
+            _err = (stderr or stdout or "淘宝上架失败（未知原因）")[-300:]
+        catalog.update_autopublish_task(task_id, status="failed", error=f"淘宝:{_err}")
+        catalog.append_autopublish_log(task_id, "publish", "failed", f"淘宝上架失败：{_err}")
+    except subprocess.TimeoutExpired:
+        catalog.update_autopublish_task(task_id, status="failed", error="淘宝上架超时（>600s）")
+        catalog.append_autopublish_log(task_id, "publish", "failed", "淘宝上架超时（>600s）")
+    except Exception as e:
+        catalog.update_autopublish_task(task_id, status="failed", error=f"淘宝执行器异常:{e}")
+        catalog.append_autopublish_log(task_id, "publish", "failed", f"淘宝执行器异常:{e}")
 
 
 def _newoffer_collect_all() -> dict:
