@@ -23,6 +23,9 @@ PROMOTION_HISTORY_PATH = os.path.expanduser("~/.hermes/pdd_promotion_history.jso
 # 店铺 → 拼多多 CDP 端口（Edge 独立 profile，详见 pdd-promotion-cdp skill）
 # 端口对齐 launch_4shops.ps1：9232=嘉裕, 9230=如若月下, 9234=闲时来, 9228=欧世艺
 SHOP_CDP_PORT = {5: 9232, 3: 9230, 1: 9234, 6: 9228}
+# 淘宝发品 CDP 端口（独立 Edge 实例 --profile-directory=Default，Python websocket-client 直连）。
+# 淘宝发品链路与拼多多完全不同（AI 以图发品 + 提交必须手动），执行器为 Python（P1 阶段接入）。
+TAOBAO_CDP_PORT = 9222
 # CDP 实例清单：端口 → {label, profile, target, role}。用于页面「CDP 实例」状态卡片 + 手动重启。
 # profile 与 C:\\tmp\\ 下 Edge user-data-dir 一一对应（登录态存 profile，重启不丢登录态）。
 CDP_INSTANCES = [

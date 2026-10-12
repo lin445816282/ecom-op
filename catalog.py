@@ -935,16 +935,31 @@ def find_duplicate_publishes(source_url: str, shop_id: int, offer_id: str = '') 
         return [dict(r) for r in rows]
 
 
+def _shop_platform_code(shop_id: int) -> str:
+    """反查店铺所属平台 code（shops JOIN platforms）。查不到返回空串。"""
+    with closing(_conn()) as c:
+        row = c.execute(
+            "SELECT p.code FROM shops s JOIN platforms p ON p.id = s.platform_id WHERE s.id=?",
+            (shop_id,),
+        ).fetchone()
+        return (row[0] if row else "") or ""
+
+
 def create_autopublish_task(source_url: str, shop_id: int = 5, operator_name: str = '',
-                            price_mode: str = 'promo', pricing: dict = None) -> dict:
+                            price_mode: str = 'promo', pricing: dict = None,
+                            platform: str = '') -> dict:
     """新建一键上架任务，初始状态 queued。price_mode: promo 推广价 / normal 平卖价。
     pricing: 首次上架时的完整定价参数（利润率/运费/投产比/物流重量等），
-    存 pricing_json 供「重新上架」恢复，避免重新上架时定价被打回默认值。"""
+    存 pricing_json 供「重新上架」恢复，避免重新上架时定价被打回默认值。
+    platform: 上架目标平台 code（pdd 拼多多 / taobao 淘宝）。留空时从 shop 反查，
+    查不到默认 'pdd'（完全兼容旧调用，不影响现有拼多多流程）。"""
+    if not platform:
+        platform = _shop_platform_code(shop_id) or 'pdd'
     pricing_json = json.dumps(pricing, ensure_ascii=False) if pricing else ""
     with closing(_conn()) as c:
         cur = c.execute(
-            "INSERT INTO autopublish_tasks(source_url, shop_id, status, operator_name, price_mode, pricing_json) VALUES(?,?,?,?,?,?)",
-            (source_url.strip(), shop_id, "queued", operator_name.strip(), price_mode or "promo", pricing_json),
+            "INSERT INTO autopublish_tasks(source_url, shop_id, status, operator_name, price_mode, pricing_json, platform) VALUES(?,?,?,?,?,?,?)",
+            (source_url.strip(), shop_id, "queued", operator_name.strip(), price_mode or "promo", pricing_json, platform),
         )
         c.commit()
         row = c.execute(
@@ -2157,6 +2172,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # autopublish_tasks 表 started_at 列（任务开始执行时间 epoch 秒，用于执行队列倒计时）
     if "started_at" not in _apmcols:
         conn.execute("ALTER TABLE autopublish_tasks ADD COLUMN started_at REAL DEFAULT 0")
+    # autopublish_tasks 表 platform 列（上架目标平台 code：pdd 拼多多 / taobao 淘宝，默认 pdd）
+    if "platform" not in _apmcols:
+        conn.execute("ALTER TABLE autopublish_tasks ADD COLUMN platform TEXT DEFAULT 'pdd'")
     # suppliers 表 prefix 列（1688 店铺前缀，用于定位新品专区 newofferlist.htm）
     supcols = {r[1] for r in conn.execute("PRAGMA table_info(suppliers)").fetchall()}
     if "prefix" not in supcols:
