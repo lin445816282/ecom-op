@@ -334,6 +334,34 @@ def ai_publish(images_win):
             pass
 
 
+# ---------------- 第 1 步：GS 注入（多件优惠 + 重量，必须先于 DOM 填写） ----------------
+def fill_v2_gs(evaluate, weight="1.0"):
+    """GS 注入多件优惠清零 + 物流重量。必须最先做（DOM 填写前）：
+    skill 验证 GS updateModels 会触发 React 重渲染清除所有 DOM 值，故「GS→DOM」是硬顺序。
+    深克隆 formValues 保留 mainImagesGroup + sku（永不碰 fv.sku，否则 SKU 30+ 字段清空）。
+    最大承重 p-5432965 是挂钩类目特定属性，待实测按需注入（值必须"5"非"5kg"）。"""
+    js = """
+    (function(){
+        try{
+            var e=__SELL_STATE__.getState().engine;
+            var fv=JSON.parse(JSON.stringify(e.getModels().formValues));
+            // 多件优惠清零（9.9折=不打折；checkbox 对 CDP 完全免疫，只能 GS 强注）
+            fv.multiDiscountPromotion={enable:true,type:'percent',value:9.9,condition:2,discountType:'PERCENT'};
+            // 物流重量
+            fv['deliver-card']=fv['deliver-card']||{};
+            fv['deliver-card'].weight=__WEIGHT__;
+            e.updateModels({formValues:fv});
+            e.getModels().formError={};
+            return 'gs_injected';
+        }catch(err){return 'gs_fail:'+err.message;}
+    })()
+    """
+    js = js.replace("__WEIGHT__", json.dumps(str(weight)))
+    r = evaluate(js)
+    log(f"GS 注入（多件优惠+重量 {weight}）：{r}")
+    return r
+
+
 # ---------------- 第 3 步：V2 填标题/导购 ----------------
 def fill_v2_title_guide(evaluate, title, guide):
     """标题/导购：宽度索引法（w≥600，第1个=标题，第2个=导购）。
@@ -604,20 +632,24 @@ def main():
     # 重连 V2 tab（AI 发品后同一 tab，但需重新握手）
     ws, send, recv_any, evaluate = ws_connect(v2_tab)
     try:
-        # 第 3 步：标题/导购
+        # 第 1 步：GS 注入（多件优惠 + 重量）—— 必须最先（GS 会清 DOM 值，skill「GS→DOM」硬顺序）
+        weight = config.get("logisticsWeight") or 1.0
+        fill_v2_gs(evaluate, weight)
+        time.sleep(1)
+        # 第 2 步：标题/导购
         fill_v2_title_guide(evaluate, title, guide)
         time.sleep(1)
-        # 第 4 步：一口价
+        # 第 3 步：一口价
         main_price = max([s["price"] for s in skus]) if skus else 0
         fill_v2_main_price(evaluate, main_price)
         time.sleep(1)
-        # 第 5 步：SKU 抽屉
+        # 第 4 步：SKU 抽屉
         fill_sku_drawer(evaluate, send, recv_any, skus)
         time.sleep(1)
-        # 第 6 步：价格/库存
+        # 第 5 步：价格/库存
         fill_sku_price_stock(evaluate, skus)
         time.sleep(1)
-        # 第 7 步：校验
+        # 第 6 步：校验
         verify = verify_form(evaluate)
 
         # 输出结果

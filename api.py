@@ -34,6 +34,7 @@ CDP_INSTANCES = [
     {"port": 9230, "label": "如若月下", "profile": r"C:\tmp\edge-cdp-ruoyue", "role": "拼多多店铺", "shop_id": 3, "target": "https://mms.pinduoduo.com"},
     {"port": 9234, "label": "闲时来工艺", "profile": r"C:\tmp\edge-cdp-xianshi", "role": "拼多多店铺", "shop_id": 1, "target": "https://mms.pinduoduo.com"},
     {"port": 9228, "label": "欧世艺", "profile": r"C:\tmp\edge-cdp-oshiyi", "role": "拼多多店铺", "shop_id": 6, "target": "https://mms.pinduoduo.com"},
+    {"port": 9222, "label": "淘宝发品", "profile": r"C:\tmp\edge-cdp-taobao", "role": "淘宝店铺", "shop_id": 12, "target": "https://myseller.taobao.com"},
 ]
 NODE_EXE = "/mnt/d/Program Files/nodejs/node.exe"
 PDD_SET_TITLE_JS = r"C:\tmp\pdd_set_titles.js"

@@ -2,7 +2,7 @@
 // 用法：node cdp_status.js [port1 port2 ...]（不传则默认全部实例端口）
 // 在 Windows 侧运行（node.exe），127.0.0.1 指向 Windows 本机 CDP 端口。
 const http = require('http');
-const DEFAULT_PORTS = [9238, 9232, 9230, 9234, 9228];
+const DEFAULT_PORTS = [9238, 9232, 9230, 9234, 9228, 9222];
 const args = process.argv.slice(2).map(Number).filter(n => n > 0);
 const ports = args.length ? args : DEFAULT_PORTS;
 
