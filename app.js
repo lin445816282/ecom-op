@@ -1120,11 +1120,12 @@ async function renderErrors() {
 
 // 一键上架：输入 1688 链接 → 抓取 → AI 配置 → CDP 上架，实时进度流
 let apTimer = null;
-// ==================== 流程树（上架全链路可视化） ====================
-let _ftTaskId = null;
+// ==================== 流程树（总树：上架全链路知识库） ====================
+let _ftTaskId = null;   // null = 总览模式
 let _ftTimer = null;
 let _ftTasks = [];
 let _ftPlatform = 'taobao';
+let _ftExpanded = {};   // 节点展开状态 {nodeId: true/false}
 
 const FT_STATUS = {
   done:    { icon: '✅', color: '#16a34a', bg: '#f0fdf4' },
@@ -1145,7 +1146,7 @@ async function renderFlowTree() {
     <div style="padding:20px;max-width:900px">
       <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin-bottom:16px">
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
-          <div style="font-weight:700;font-size:15px">🌳 上架流程树</div>
+          <div style="font-weight:700;font-size:15px">🌳 上架流程总树</div>
           <div style="display:flex;gap:8px;align-items:center">
             <div class="pill" id="ft-platform-pill">
               <button class="shop-btn ${_ftPlatform==='taobao'?'active':''}" data-ft-plat="taobao">淘宝</button>
@@ -1154,7 +1155,8 @@ async function renderFlowTree() {
             <button class="btn" id="ft-refresh-btn" style="padding:7px 14px;font-size:12px">🔄 刷新</button>
           </div>
         </div>
-        <div style="margin-top:10px">
+        <div style="margin-top:10px;font-size:12px;color:#94a3b8">每个节点可点开看「约束 + 历史问题」，新问题挂到对应节点；空节点不预填，按需生长。</div>
+        <div style="margin-top:8px">
           <select id="ft-task-select" style="width:100%;padding:8px;border:1px solid #e2e8f0;border-radius:8px;font-size:13px"></select>
         </div>
       </div>
@@ -1181,67 +1183,159 @@ async function loadFtTasks() {
   _ftTasks = _ftTasks.filter(t => _ftPlatform === 'taobao' ? (t.shop_id === 12) : (t.shop_id !== 12));
   const sel = $('#ft-task-select');
   if (!sel) return;
-  if (!_ftTasks.length) {
-    sel.innerHTML = '<option value="">暂无任务</option>';
-    $('#ft-tree-box').innerHTML = '<div class="empty" style="color:#94a3b8;padding:40px;text-align:center">该平台暂无上架任务</div>';
-    return;
-  }
-  if (!_ftTaskId || !_ftTasks.some(t => t.id === _ftTaskId)) _ftTaskId = _ftTasks[0].id;
-  sel.innerHTML = _ftTasks.map(t => {
-    const title = (t.ai_title || t.raw_title || t.source_url || '').slice(0, 30);
+  const opts = [`<option value="">📖 总览（全流程 + 问题知识库）</option>`];
+  opts.push(..._ftTasks.map(t => {
+    const title = (t.ai_title || t.raw_title || t.source_url || '').slice(0, 26);
     const st = FT_TASK_STATUS[t.status] || t.status;
     return `<option value="${t.id}" ${t.id===_ftTaskId?'selected':''}>#${t.id} [${st}] ${esc(title)}</option>`;
-  }).join('');
-  sel.onchange = () => { _ftTaskId = parseInt(sel.value); loadFtTree(); };
+  }));
+  sel.innerHTML = opts.join('');
+  sel.onchange = () => { _ftTaskId = sel.value ? parseInt(sel.value) : null; loadFtTree(); };
   loadFtTree();
 }
 
 async function loadFtTree() {
-  if (!_ftTaskId) return;
   const box = $('#ft-tree-box');
   if (!box) return;
   let d;
-  try { d = await api(`/api/autopublish/tree/${_ftTaskId}`); }
-  catch (e) { box.innerHTML = `<div style="color:#ef4444">加载失败：${esc(e.message||e)}</div>`; return; }
+  try {
+    d = (_ftTaskId == null)
+      ? await api('/api/autopublish/tree-overview?platform=' + _ftPlatform)
+      : await api(`/api/autopublish/tree/${_ftTaskId}`);
+  } catch (e) { box.innerHTML = `<div style="color:#ef4444">加载失败：${esc(e.message||e)}</div>`; return; }
   box.innerHTML = renderFtTreeHtml(d);
+  bindFtTreeEvents();
   if (_ftTimer) { clearInterval(_ftTimer); _ftTimer = null; }
   const st = d.task && d.task.status;
-  if (st === 'publishing' || st === 'queued' || st === 'crawling' || st === 'ai') {
+  if (_ftTaskId != null && (st === 'publishing' || st === 'queued' || st === 'crawling' || st === 'ai')) {
     _ftTimer = setInterval(() => loadFtTree(), 3000);
   }
 }
 
 function renderFtTreeHtml(d) {
   const ns = d.node_status || {};
+  const np = d.node_problems || {};
   const tpl = d.template || { label: '', nodes: [] };
   const task = d.task || {};
-  const taskSt = FT_TASK_STATUS[task.status] || task.status;
+  const badge = task.id
+    ? `<span style="font-size:12px;padding:2px 8px;border-radius:4px;background:#f1f5f9;color:#475569">#${task.id} ${FT_TASK_STATUS[task.status]||task.status}</span>`
+    : `<span style="font-size:12px;padding:2px 8px;border-radius:4px;background:#ecfeff;color:#0891b2">总览</span>`;
   const header = `
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;flex-wrap:wrap">
       <span style="font-size:16px;font-weight:700">${esc(tpl.label||'上架流程')}</span>
-      <span style="font-size:12px;padding:2px 8px;border-radius:4px;background:#f1f5f9;color:#475569">#${task.id} ${taskSt}</span>
-      <span style="font-size:12px;color:#94a3b8">${esc(task.ai_title||task.raw_title||'')}</span>
-    </div>`;
-  return header + renderFtNodes(tpl.nodes || [], ns, 0);
+      ${badge}
+      ${task.ai_title||task.raw_title ? `<span style="font-size:12px;color:#94a3b8">${esc(task.ai_title||task.raw_title||'')}</span>` : ''}
+    </div>
+    <div style="font-size:12px;color:#94a3b8;margin-bottom:14px">🔴红标=该环节踩过坑 · 📌约束=后续调用注意事项 · 点节点展开看详情</div>`;
+  return header + renderFtNodes(tpl.nodes || [], ns, np, 0);
 }
 
-function renderFtNodes(nodes, ns, depth) {
+function renderFtNodes(nodes, ns, np, depth) {
   return (nodes || []).map(n => {
     const st = ns[n.id] || {};
+    const problems = np[n.id] || [];
     const meta = FT_STATUS[st.status] || { icon: '⚪', color: '#cbd5e1', bg: 'transparent' };
-    const fixTag = n.fix ? `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:${n.fix==='manual'?'#fff7ed':'#ecfeff'};color:${n.fix==='manual'?'#ea580c':'#0891b2'};margin-left:6px">${FT_FIX_LABEL[n.fix]||n.fix}</span>` : '';
+    const hasProblems = problems.length > 0;
+    const expandable = n.kind === 'group' || !!n.constraint || hasProblems;
+    const expanded = (n.id in _ftExpanded) ? _ftExpanded[n.id] : (n.kind === 'group' || hasProblems);
+    if (!(n.id in _ftExpanded)) _ftExpanded[n.id] = expanded;
+    const arrow = expandable ? `<span style="width:16px;text-align:center;color:#94a3b8;font-size:11px;cursor:pointer;flex-shrink:0">${expanded?'▾':'▸'}</span>` : `<span style="width:16px;flex-shrink:0"></span>`;
+    const problemBadge = hasProblems ? `<span style="font-size:10px;font-weight:700;color:#fff;background:#dc2626;border-radius:9px;padding:0 6px;margin-left:4px">${problems.length}</span>` : '';
+    const fixTag = n.fix ? `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:${n.fix==='manual'?'#fff7ed':'#ecfeff'};color:${n.fix==='manual'?'#ea580c':'#0891b2'};margin-left:4px">${FT_FIX_LABEL[n.fix]||n.fix}</span>` : '';
+    const statusIcon = (_ftTaskId != null && st.status) ? `<span style="width:20px;text-align:center;font-size:13px;flex-shrink:0">${meta.icon}</span>` : '';
     const msg = st.msg ? `<span style="font-size:11px;color:#64748b;margin-left:6px">${esc(st.msg)}</span>` : '';
-    const ts = st.ts ? `<span style="font-size:10px;color:#cbd5e1;margin-left:6px">${st.ts}</span>` : '';
-    const indent = depth * 24;
+    const indent = depth * 22;
+    const nodeColor = hasProblems ? '#dc2626' : (n.kind==='group' ? '#17203a' : '#334155');
     const line = `
-      <div style="display:flex;align-items:center;padding:6px 0;padding-left:${indent}px;${depth>0?'border-left:2px solid #e2e8f0;margin-left:8px;':''}">
-        <span style="width:22px;text-align:center;font-size:14px;flex-shrink:0">${meta.icon}</span>
-        <span style="font-size:13px;font-weight:${n.kind==='group'?'700':'500'};color:${n.kind==='group'?'#17203a':meta.color};margin-left:4px">${esc(n.label)}</span>
-        ${fixTag}${msg}${ts}
+      <div class="ft-node" data-ft-toggle="${expandable ? n.id : ''}" style="display:flex;align-items:center;padding:5px 0;padding-left:${indent}px;${depth>0?'border-left:2px solid #e2e8f0;margin-left:8px;':''}${expandable?'cursor:pointer':''}">
+        ${arrow}${statusIcon}
+        <span style="font-size:13px;font-weight:${n.kind==='group'?'700':'500'};color:${nodeColor};margin-left:2px">${esc(n.label)}</span>
+        ${problemBadge}${fixTag}${msg}
       </div>`;
-    const children = n.children && n.children.length ? renderFtNodes(n.children, ns, depth + 1) : '';
-    return line + children;
+    let inner = '';
+    if (expanded) {
+      if (n.constraint) {
+        inner += `<div style="margin-left:${indent+22}px;margin-top:2px;padding:6px 10px;background:#fffbeb;border-left:3px solid #f59e0b;border-radius:4px;font-size:12px;color:#92400e">📌 ${esc(n.constraint)}</div>`;
+      }
+      if (hasProblems) {
+        inner += problems.map(p => renderFtProblem(p, indent+22)).join('');
+      }
+      inner += renderFtAddForm(n.id, indent+22);
+      if (n.children && n.children.length) {
+        inner += renderFtNodes(n.children, ns, np, depth + 1);
+      }
+    }
+    return line + inner;
   }).join('');
+}
+
+function renderFtProblem(p, ml) {
+  return `
+    <div style="margin-left:${ml}px;margin-top:4px;padding:8px 10px;background:#fef2f2;border-left:3px solid #ef4444;border-radius:4px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+        <span style="font-weight:600;font-size:12px;color:#991b1b">📋 ${esc(p.error_type)}</span>
+        <span style="display:flex;align-items:center;gap:8px;flex-shrink:0">
+          <span style="font-size:11px;color:#dc2626;font-weight:700">${p.count||0} 次</span>
+          <button class="btn" data-ft-hit="${p.id}" style="font-size:11px;padding:2px 8px">+1</button>
+        </span>
+      </div>
+      ${p.description?`<div style="font-size:11px;color:#64748b;margin-top:3px">现象：${esc(p.description)}</div>`:''}
+      ${p.solution?`<div style="font-size:11px;color:#0f766e;margin-top:2px">方案：${esc(p.solution)}</div>`:''}
+      ${p.skill_name?`<div style="font-size:11px;color:#4f46e5;margin-top:2px">🛠 ${esc(p.skill_name)}</div>`:''}
+      ${p.last_seen?`<div style="font-size:10px;color:#94a3b8;margin-top:3px">最近 ${esc(p.last_seen)}</div>`:''}
+    </div>`;
+}
+
+function renderFtAddForm(nodeId, ml) {
+  return `
+    <div style="margin-left:${ml}px;margin-top:6px">
+      <button class="btn" data-ft-add="${nodeId}" style="font-size:12px;padding:3px 10px">＋ 新增问题到此节点</button>
+      <div data-ft-form="${nodeId}" hidden style="margin-top:6px;padding:10px;background:#f8fafc;border:1px dashed #cbd5e1;border-radius:6px;display:grid;gap:6px">
+        <input data-ft-f-type placeholder="问题类型（如：主图空 / 类目误判）" style="padding:6px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px">
+        <input data-ft-f-desc placeholder="现象描述" style="padding:6px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px">
+        <input data-ft-f-solution placeholder="处理方案" style="padding:6px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px">
+        <div style="display:flex;gap:6px">
+          <button class="btn primary" data-ft-save="${nodeId}" style="font-size:12px;padding:4px 12px">保存</button>
+          <button class="btn" data-ft-cancel="${nodeId}" style="font-size:12px;padding:4px 12px">取消</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function bindFtTreeEvents() {
+  const box = $('#ft-tree-box');
+  if (!box) return;
+  box.querySelectorAll('[data-ft-toggle]').forEach(el => {
+    const id = el.dataset.ftToggle;
+    if (!id) return;
+    el.onclick = () => { _ftExpanded[id] = !_ftExpanded[id]; loadFtTree(); };
+  });
+  box.querySelectorAll('[data-ft-hit]').forEach(btn => btn.onclick = async () => {
+    const resp = await api('/api/errors', 'POST', { action: 'hit', id: Number(btn.dataset.ftHit) });
+    if (resp && resp.ok) { toast('已记录 +1'); loadFtTree(); } else { toast('记录失败'); }
+  });
+  box.querySelectorAll('[data-ft-add]').forEach(btn => btn.onclick = () => {
+    const form = box.querySelector(`[data-ft-form="${btn.dataset.ftAdd}"]`);
+    if (form) form.hidden = false;
+  });
+  box.querySelectorAll('[data-ft-cancel]').forEach(btn => btn.onclick = () => {
+    const form = box.querySelector(`[data-ft-form="${btn.dataset.ftCancel}"]`);
+    if (form) form.hidden = true;
+  });
+  box.querySelectorAll('[data-ft-save]').forEach(btn => btn.onclick = async () => {
+    const nodeId = btn.dataset.ftSave;
+    const form = box.querySelector(`[data-ft-form="${nodeId}"]`);
+    if (!form) return;
+    const type = form.querySelector('[data-ft-f-type]').value.trim();
+    if (!type) { toast('请填问题类型'); return; }
+    const resp = await api('/api/errors', 'POST', {
+      error_type: type,
+      description: form.querySelector('[data-ft-f-desc]').value.trim(),
+      solution: form.querySelector('[data-ft-f-solution]').value.trim(),
+      node_id: nodeId,
+    });
+    if (resp && resp.ok) { toast('已挂到节点'); loadFtTree(); } else { toast((resp&&resp.error)||'保存失败'); }
+  });
 }
 
 async function renderAutopublish() {

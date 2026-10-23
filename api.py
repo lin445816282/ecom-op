@@ -208,7 +208,8 @@ class Handler(BaseHTTPRequestHandler):
 
         # 错误知识库
         if path == "/api/errors" and self.command == "GET":
-            return _json(self, {"items": catalog.query_errors()})
+            node_id = (qs.get("node_id", [""])[0] or "").strip() or None
+            return _json(self, {"items": catalog.query_errors(node_id)})
 
         if path == "/api/errors" and self.command == "POST":
             item = self._read_body()
@@ -226,6 +227,7 @@ class Handler(BaseHTTPRequestHandler):
                 str(item.get("description") or ""),
                 str(item.get("skill_name") or ""),
                 str(item.get("solution") or ""),
+                str(item.get("node_id") or ""),
             )
             return _json(self, {"ok": True, "item": rec})
 
@@ -1974,6 +1976,11 @@ class Handler(BaseHTTPRequestHandler):
             tpl = trees.get(platform) or {"label": platform, "version": 1, "nodes": []}
             return _json(self, {"platform": platform, "template": tpl,
                                 "platforms": sorted(trees.keys())})
+
+        if path == "/api/autopublish/tree-overview" and self.command == "GET":
+            # 总树总览：流程树 + 每个节点的历史问题（不含单任务执行状态）
+            platform = (qs.get("platform", ["taobao"])[0] or "taobao").strip()
+            return _json(self, _flow_tree_overview(platform))
 
         if path.startswith("/api/autopublish/tree/") and self.command == "GET":
             # 某次任务的流程树 = 模板 + 任务 log 里的节点进度合并
@@ -3864,6 +3871,7 @@ def _flow_tree_for_task(task: dict) -> dict:
                 "msg": e.get("msg", ""),
                 "ts": e.get("ts", ""),
             }
+    node_problems = catalog.query_errors_grouped_by_node()
     return {
         "platform": platform,
         "task": {
@@ -3877,6 +3885,20 @@ def _flow_tree_for_task(task: dict) -> dict:
         },
         "template": tpl,
         "node_status": node_status,
+        "node_problems": node_problems,
+    }
+
+
+def _flow_tree_overview(platform: str) -> dict:
+    """总树总览：流程树模板 + 每个节点的历史问题（不含单任务执行状态）。"""
+    trees = _flow_tree_templates()
+    tpl = trees.get(platform) or {"label": platform or "上架", "version": 1, "nodes": []}
+    node_problems = catalog.query_errors_grouped_by_node()
+    return {
+        "platform": platform,
+        "template": tpl,
+        "node_problems": node_problems,
+        "platforms": sorted(trees.keys()),
     }
 
 

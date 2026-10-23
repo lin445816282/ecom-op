@@ -728,34 +728,70 @@ CREATE TABLE IF NOT EXISTS pricing_schemes (
 """
 
 
+_MIGRATED = {}
+
+
 def _conn() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA busy_timeout = 5000")
+    if not _MIGRATED.get("error_knowledge_node_id"):
+        try:
+            conn.execute("ALTER TABLE error_knowledge ADD COLUMN node_id TEXT DEFAULT ''")
+            conn.commit()
+        except Exception:
+            pass
+        _MIGRATED["error_knowledge_node_id"] = True
     return conn
 
 
-def query_errors() -> list[dict]:
-    """错误知识库列表，按出现次数降序。"""
+def query_errors(node_id: str = None) -> list[dict]:
+    """错误知识库列表，按出现次数降序。node_id 非空则只返回该节点的错误。"""
+    with closing(_conn()) as c:
+        if node_id:
+            rows = c.execute(
+                "SELECT * FROM error_knowledge WHERE node_id=? ORDER BY count DESC, id DESC",
+                (node_id,),
+            ).fetchall()
+        else:
+            rows = c.execute(
+                "SELECT * FROM error_knowledge ORDER BY count DESC, id DESC"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def query_errors_grouped_by_node() -> dict:
+    """按 node_id 分组返回错误知识库。key=node_id，value=问题列表（按出现次数降序）。"""
     with closing(_conn()) as c:
         rows = c.execute(
             "SELECT * FROM error_knowledge ORDER BY count DESC, id DESC"
         ).fetchall()
-        return [dict(r) for r in rows]
+    out = {}
+    for r in rows:
+        d = dict(r)
+        nid = d.get("node_id") or ""
+        if nid:
+            out.setdefault(nid, []).append(d)
+    return out
 
 
 def add_error(error_type: str, description: str = "", skill_name: str = "",
-              solution: str = "") -> dict:
-    """新增错误类型（幂等：已存在则返回现有记录，不重复插入）。"""
+              solution: str = "", node_id: str = "") -> dict:
+    """新增错误类型（幂等：已存在则返回现有记录，不重复插入）。node_id 归属流程树节点。"""
     with closing(_conn()) as c:
         c.execute(
             "INSERT OR IGNORE INTO error_knowledge "
-            "(error_type, description, skill_name, solution, first_seen, last_seen) "
-            "VALUES (?,?,?,?,datetime('now','localtime'),datetime('now','localtime'))",
-            (error_type.strip(), description, skill_name, solution),
+            "(error_type, description, skill_name, solution, node_id, first_seen, last_seen) "
+            "VALUES (?,?,?,?,?,datetime('now','localtime'),datetime('now','localtime'))",
+            (error_type.strip(), description, skill_name, solution, node_id),
         )
+        if node_id:
+            c.execute(
+                "UPDATE error_knowledge SET node_id=? WHERE error_type=? AND (node_id='' OR node_id IS NULL)",
+                (node_id, error_type.strip()),
+            )
         c.commit()
         row = c.execute(
             "SELECT * FROM error_knowledge WHERE error_type=?", (error_type.strip(),)
@@ -778,22 +814,28 @@ def hit_error(error_id: int) -> dict:
         return dict(row) if row else {}
 
 
-def hit_error_by_type(error_type: str, description: str = "") -> dict:
+def hit_error_by_type(error_type: str, description: str = "", node_id: str = "") -> dict:
     """按错误类型命中（不存在则自动创建），count+1。供编排流程自动记账。
 
     description 非空时同步更新（覆盖为最新失败线索），保证错误知识库始终带最近的根因摘要。
+    node_id 归属流程树节点（新记录直接带，旧记录缺失时补归属）。
     """
     with closing(_conn()) as c:
         c.execute(
             "INSERT OR IGNORE INTO error_knowledge "
-            "(error_type, description, first_seen, last_seen) "
-            "VALUES (?,?,datetime('now','localtime'),datetime('now','localtime'))",
-            (error_type.strip(), description),
+            "(error_type, description, node_id, first_seen, last_seen) "
+            "VALUES (?,?,?,datetime('now','localtime'),datetime('now','localtime'))",
+            (error_type.strip(), description, node_id),
         )
         if description:
             c.execute(
                 "UPDATE error_knowledge SET description=? WHERE error_type=?",
                 (description, error_type.strip()),
+            )
+        if node_id:
+            c.execute(
+                "UPDATE error_knowledge SET node_id=? WHERE error_type=? AND (node_id='' OR node_id IS NULL)",
+                (node_id, error_type.strip()),
             )
         c.execute(
             "UPDATE error_knowledge SET count=count+1, "

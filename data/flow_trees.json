@@ -1,29 +1,29 @@
 {
   "taobao": {
     "label": "淘宝上架",
-    "version": 1,
+    "version": 2,
     "nodes": [
-      {"id": "login_check", "label": "登录预检", "kind": "leaf", "fix": "manual"},
+      {"id": "login_check", "label": "登录预检", "kind": "leaf", "fix": "manual", "constraint": "优先复用已登录 myseller tab；CDP 崩溃需重启 Edge 并等 30-60s 预热；登录态失效自动填号但滑块须人工拖一次"},
       {"id": "ai_publish", "label": "AI 以图发品", "kind": "group", "children": [
-        {"id": "ai_publish.switch_tab", "label": "切换「以图发品」", "kind": "leaf"},
-        {"id": "ai_publish.upload", "label": "注入主图", "kind": "leaf"},
-        {"id": "ai_publish.n1", "label": "N1 确认", "kind": "leaf"},
-        {"id": "ai_publish.n2", "label": "N2 确认（类目识别）", "kind": "leaf"}
+        {"id": "ai_publish.switch_tab", "label": "切换「以图发品」", "kind": "leaf", "constraint": "必须 CDP 真实鼠标点击 .item-tab.switch-tab，JS .click()/dispatchEvent 对 React switch-tab 无效"},
+        {"id": "ai_publish.upload", "label": "注入主图", "kind": "leaf", "constraint": "DOM.setFileInputFiles 注入（file input 在 category.htm 主页面非 iframe）；主图可能概率性为空，须重跑 AI 发品争取另一次双通"},
+        {"id": "ai_publish.n1", "label": "N1 确认", "kind": "leaf", "constraint": "注入后「确认，下一步」不是立刻 enabled，轮询等待最多约 40s（图片上传+AI识别）"},
+        {"id": "ai_publish.n2", "label": "N2 确认（类目识别）", "kind": "leaf", "constraint": "候选类目未点选会致「下一步」disabled：retry==2 点候选类目，retry==3 点「确定」确认切类目"}
       ]},
-      {"id": "fix_category", "label": "类目修正", "kind": "leaf", "fix": "local"},
-      {"id": "fill_gs", "label": "GS 注入（多件优惠+重量）", "kind": "leaf"},
-      {"id": "fill_title", "label": "标题 / 导购", "kind": "leaf", "fix": "local"},
-      {"id": "fill_price", "label": "一口价", "kind": "leaf"},
-      {"id": "fill_sku", "label": "SKU 抽屉", "kind": "leaf", "fix": "local"},
-      {"id": "fill_sku_ps", "label": "价格 / 库存", "kind": "leaf"},
-      {"id": "fill_weight", "label": "物流重量", "kind": "leaf"},
+      {"id": "fix_category", "label": "类目修正", "kind": "leaf", "fix": "local", "constraint": "AI 类目易误判，切到 config.categoryKeyword 正确类目；须在填表前（切类目会清空已填字段）"},
+      {"id": "fill_gs", "label": "GS 注入（多件优惠+重量）", "kind": "leaf", "constraint": "必须最先（GS 会清 DOM 值，skill「GS→DOM」硬顺序）；永不碰 fv.sku（会清空 30+ 字段）；多件优惠用 CDP 点下拉选「满2件打折」"},
+      {"id": "fill_title", "label": "标题 / 导购", "kind": "leaf", "fix": "local", "constraint": "标题 nativeSetter 失效，必须 CDP 键盘法；导购标题限 10-15 字（有下限），不足补全 13 字"},
+      {"id": "fill_price", "label": "一口价", "kind": "leaf", "constraint": "CDP 键盘法填（nativeSetter 对数字字段失效），取 SKU 最高价"},
+      {"id": "fill_sku", "label": "SKU 抽屉", "kind": "leaf", "fix": "local", "constraint": "新版 SKU：先设规格类型（请选择+请输入）再填值；分层展示须取消空维度(0)prop-item；选单品用 CDP 点击"},
+      {"id": "fill_sku_ps", "label": "价格 / 库存", "kind": "leaf", "constraint": "逐行 CDP 键盘法填（td#0-skuPrice input），不 blur 库存"},
+      {"id": "fill_weight", "label": "物流重量", "kind": "leaf", "constraint": "CDP 键盘法（GS 注入 deliver-card.weight 已失效）"},
       {"id": "self_heal", "label": "局部自愈", "kind": "group", "fix": "local", "children": [
-        {"id": "self_heal.diagnose", "label": "诊断问题", "kind": "leaf"},
-        {"id": "self_heal.fix", "label": "修复问题", "kind": "leaf"}
+        {"id": "self_heal.diagnose", "label": "诊断问题", "kind": "leaf", "constraint": "diagnose_form 返回问题列表，fix∈local/republish/manual"},
+        {"id": "self_heal.fix", "label": "修复问题", "kind": "leaf", "constraint": "只修 fix=local（标题空/导购短/SKU空）；≤3 轮"}
       ]},
-      {"id": "diagnose", "label": "最终诊断", "kind": "leaf", "fix": "republish"},
-      {"id": "verify", "label": "校验", "kind": "leaf"},
-      {"id": "manual_submit", "label": "人工提交宝贝", "kind": "manual", "fix": "manual"}
+      {"id": "diagnose", "label": "最终诊断", "kind": "leaf", "fix": "republish", "constraint": "主图空→重跑 AI 发品（外层 continue，≤3 次）"},
+      {"id": "verify", "label": "校验", "kind": "leaf", "constraint": "formError={} 才是权威（body「填写助手」是建议非错误）；提交后清空是假象"},
+      {"id": "manual_submit", "label": "人工提交宝贝", "kind": "manual", "fix": "manual", "constraint": "「提交宝贝」按钮被 React 拦截，CDP/JS 无法触发真实提交，必须人工在 Edge 9222 点击"}
     ]
   },
   "pdd": {
@@ -31,8 +31,8 @@
     "version": 1,
     "note": "预留：拼多多上架环节待接入（publish.js 输出 TREE_PROGRESS 后自动点亮）",
     "nodes": [
-      {"id": "pdd.scrape", "label": "1688 抓取", "kind": "leaf"},
-      {"id": "pdd.ai", "label": "AI 生成配置", "kind": "leaf"},
+      {"id": "pdd.scrape", "label": "1688 抓取", "kind": "leaf", "constraint": "复用 3 天缓存；抓取间隔冷却防 1688 反爬"},
+      {"id": "pdd.ai", "label": "AI 生成配置", "kind": "leaf", "constraint": "DeepSeek 分析规格/定价/类目"},
       {"id": "pdd.publish", "label": "CDP 上架", "kind": "group", "children": [
         {"id": "pdd.publish.form", "label": "填表", "kind": "leaf"},
         {"id": "pdd.publish.submit", "label": "提交", "kind": "leaf"}
