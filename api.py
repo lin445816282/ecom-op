@@ -3958,6 +3958,14 @@ def _taobao_publish(config_wsl: str, task_id: int, shop_id: int, pricing: dict =
                         task_id, _p.get("node", ""), _p.get("status", ""), _p.get("msg", ""))
                 except Exception:
                     pass
+            # 捕获问题/自愈记录（TREE_PROBLEM），自动记账到 error_knowledge 挂流程树节点
+            if line.startswith("TREE_PROBLEM "):
+                try:
+                    _p = json.loads(line[len("TREE_PROBLEM "):])
+                    catalog.hit_error_by_type(
+                        _p.get("type", ""), _p.get("desc", ""), _p.get("node", ""))
+                except Exception:
+                    pass
         try:
             proc.wait(timeout=15)
         except subprocess.TimeoutExpired:

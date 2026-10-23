@@ -56,6 +56,30 @@ def progress(node, status, msg=""):
     print("TREE_PROGRESS " + json.dumps({"node": node, "status": status, "msg": msg}, ensure_ascii=False), flush=True)
 
 
+# diagnose_form 的问题 type → 流程树节点 id（自动记账：问题挂到对应环节）
+PROBLEM_NODE = {
+    "main_images_empty": "ai_publish.upload",
+    "title_empty": "fill_title",
+    "shopping_short": "fill_title",
+    "sku_empty": "fill_sku",
+    "diag_error": "diagnose",
+}
+# 问题 type → 中文问题名（error_knowledge 的 error_type，可读）
+PROBLEM_NAME = {
+    "main_images_empty": "1:1主图为空",
+    "title_empty": "标题为空",
+    "shopping_short": "导购标题少于10字",
+    "sku_empty": "SKU为空",
+    "diag_error": "诊断异常",
+}
+
+
+def problem(node, ptype, desc="", fix=""):
+    """输出问题记录行，供 api.py 捕获后 hit_error_by_type 自动记账到树节点。
+    ptype=中文问题名，desc=现象/自愈结果，fix=local/republish/manual。"""
+    print("TREE_PROBLEM " + json.dumps({"node": node, "type": ptype, "desc": desc, "fix": fix}, ensure_ascii=False), flush=True)
+
+
 # ---------------- CDP 框架 ----------------
 def cdp_req(url, method="GET"):
     """CDP HTTP 请求（/json 列表、/json/new、/json/close 等）。"""
@@ -1164,9 +1188,19 @@ def main():
             else:
                 _fixes = [x for x in heal.get("log", []) if not x.endswith(":skip")]
                 progress("self_heal", "fix", f"已修复 {len(_fixes)} 项" if _fixes else "自愈未完全解决")
+            # 记账自愈动作：产生过的问题 + 自愈结果，挂到对应节点
+            for _h in heal.get("log", []):
+                _ptype, _, _result = _h.partition(":")
+                _node = PROBLEM_NODE.get(_ptype)
+                if _node:
+                    problem(_node, PROBLEM_NAME.get(_ptype, _ptype), f"自愈结果:{_result}", "local")
 
             # 第 8 步：诊断最终状态，主图空则重跑 AI 发品
             problems = diagnose_form(evaluate)
+            # 记账最终问题（诊断到的每个问题都挂到对应节点，count 累计 = 出现次数）
+            for p in problems:
+                _node = PROBLEM_NODE.get(p["type"], "diagnose")
+                problem(_node, PROBLEM_NAME.get(p["type"], p["type"]), p.get("desc", ""), p.get("fix", ""))
             if any(p["type"] == "main_images_empty" for p in problems):
                 last_problems = problems
                 log(f"主图空，重跑 AI 发品（第 {attempt}/{HEAL_MAX_ATTEMPTS} 次）")
