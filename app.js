@@ -1125,7 +1125,8 @@ let _ftTaskId = null;   // null = 总览模式
 let _ftTimer = null;
 let _ftTasks = [];
 let _ftPlatform = 'taobao';
-let _ftExpanded = {};   // 节点展开状态 {nodeId: true/false}
+let _ftExpanded = {};   // group 节点子节点展开状态 {nodeId: true/false}
+let _ftData = null;     // 最近一次树数据（弹框取节点详情用）
 
 const FT_STATUS = {
   done:    { icon: '✅', color: '#16a34a', bg: '#f0fdf4' },
@@ -1155,12 +1156,15 @@ async function renderFlowTree() {
             <button class="btn" id="ft-refresh-btn" style="padding:7px 14px;font-size:12px">🔄 刷新</button>
           </div>
         </div>
-        <div style="margin-top:10px;font-size:12px;color:#94a3b8">每个节点可点开看「约束 + 历史问题」，新问题挂到对应节点；空节点不预填，按需生长。</div>
+        <div style="margin-top:10px;font-size:12px;color:#94a3b8">点节点弹框看「约束 + 历史问题」，新问题挂到对应节点；空节点不预填，按需生长。</div>
         <div style="margin-top:8px">
           <select id="ft-task-select" style="width:100%;padding:8px;border:1px solid #e2e8f0;border-radius:8px;font-size:13px"></select>
         </div>
       </div>
       <div id="ft-tree-box" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:20px;min-height:200px"></div>
+    </div>
+    <div id="ft-modal" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,0.45);z-index:1000;align-items:center;justify-content:center;padding:16px">
+      <div id="ft-modal-body" style="background:#fff;border-radius:14px;max-width:600px;width:100%;max-height:82vh;overflow:auto;padding:20px;box-shadow:0 20px 50px rgba(0,0,0,0.25)"></div>
     </div>`;
 
   $$('#ft-platform-pill [data-ft-plat]').forEach(b => b.addEventListener('click', () => {
@@ -1203,6 +1207,7 @@ async function loadFtTree() {
       ? await api('/api/autopublish/tree-overview?platform=' + _ftPlatform)
       : await api(`/api/autopublish/tree/${_ftTaskId}`);
   } catch (e) { box.innerHTML = `<div style="color:#ef4444">加载失败：${esc(e.message||e)}</div>`; return; }
+  _ftData = d;
   box.innerHTML = renderFtTreeHtml(d);
   bindFtTreeEvents();
   if (_ftTimer) { clearInterval(_ftTimer); _ftTimer = null; }
@@ -1226,7 +1231,7 @@ function renderFtTreeHtml(d) {
       ${badge}
       ${task.ai_title||task.raw_title ? `<span style="font-size:12px;color:#94a3b8">${esc(task.ai_title||task.raw_title||'')}</span>` : ''}
     </div>
-    <div style="font-size:12px;color:#94a3b8;margin-bottom:14px">🔴红标=该环节踩过坑 · 📌约束=后续调用注意事项 · 点节点展开看详情</div>`;
+    <div style="font-size:12px;color:#94a3b8;margin-bottom:14px">🔴红标=该环节踩过坑 · 点节点弹框看约束+问题详情</div>`;
   return header + renderFtNodes(tpl.nodes || [], ns, np, 0);
 }
 
@@ -1236,36 +1241,25 @@ function renderFtNodes(nodes, ns, np, depth) {
     const problems = np[n.id] || [];
     const meta = FT_STATUS[st.status] || { icon: '⚪', color: '#cbd5e1', bg: 'transparent' };
     const hasProblems = problems.length > 0;
-    const expandable = n.kind === 'group' || !!n.constraint || hasProblems;
-    const expanded = (n.id in _ftExpanded) ? _ftExpanded[n.id] : (n.kind === 'group' || hasProblems);
+    const isGroup = n.kind === 'group';
+    const expanded = (n.id in _ftExpanded) ? _ftExpanded[n.id] : isGroup;
     if (!(n.id in _ftExpanded)) _ftExpanded[n.id] = expanded;
-    const arrow = expandable ? `<span style="width:16px;text-align:center;color:#94a3b8;font-size:11px;cursor:pointer;flex-shrink:0">${expanded?'▾':'▸'}</span>` : `<span style="width:16px;flex-shrink:0"></span>`;
+    const arrow = isGroup
+      ? `<span data-ft-arrow="${n.id}" style="width:16px;text-align:center;color:#94a3b8;font-size:11px;cursor:pointer;flex-shrink:0">${expanded?'▾':'▸'}</span>`
+      : `<span style="width:16px;flex-shrink:0"></span>`;
     const problemBadge = hasProblems ? `<span style="font-size:10px;font-weight:700;color:#fff;background:#dc2626;border-radius:9px;padding:0 6px;margin-left:4px">${problems.length}</span>` : '';
     const fixTag = n.fix ? `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:${n.fix==='manual'?'#fff7ed':'#ecfeff'};color:${n.fix==='manual'?'#ea580c':'#0891b2'};margin-left:4px">${FT_FIX_LABEL[n.fix]||n.fix}</span>` : '';
     const statusIcon = (_ftTaskId != null && st.status) ? `<span style="width:20px;text-align:center;font-size:13px;flex-shrink:0">${meta.icon}</span>` : '';
-    const msg = st.msg ? `<span style="font-size:11px;color:#64748b;margin-left:6px">${esc(st.msg)}</span>` : '';
     const indent = depth * 22;
-    const nodeColor = hasProblems ? '#dc2626' : (n.kind==='group' ? '#17203a' : '#334155');
+    const nodeColor = hasProblems ? '#dc2626' : (isGroup ? '#17203a' : '#334155');
     const line = `
-      <div class="ft-node" data-ft-toggle="${expandable ? n.id : ''}" style="display:flex;align-items:center;padding:5px 0;padding-left:${indent}px;${depth>0?'border-left:2px solid #e2e8f0;margin-left:8px;':''}${expandable?'cursor:pointer':''}">
+      <div class="ft-node" data-ft-node="${n.id}" style="display:flex;align-items:center;padding:5px 0;padding-left:${indent}px;${depth>0?'border-left:2px solid #e2e8f0;margin-left:8px;':''}cursor:pointer">
         ${arrow}${statusIcon}
-        <span style="font-size:13px;font-weight:${n.kind==='group'?'700':'500'};color:${nodeColor};margin-left:2px">${esc(n.label)}</span>
-        ${problemBadge}${fixTag}${msg}
+        <span style="font-size:13px;font-weight:${isGroup?'700':'500'};color:${nodeColor};margin-left:2px">${esc(n.label)}</span>
+        ${problemBadge}${fixTag}
       </div>`;
-    let inner = '';
-    if (expanded) {
-      if (n.constraint) {
-        inner += `<div style="margin-left:${indent+22}px;margin-top:2px;padding:6px 10px;background:#fffbeb;border-left:3px solid #f59e0b;border-radius:4px;font-size:12px;color:#92400e">📌 ${esc(n.constraint)}</div>`;
-      }
-      if (hasProblems) {
-        inner += problems.map(p => renderFtProblem(p, indent+22)).join('');
-      }
-      inner += renderFtAddForm(n.id, indent+22);
-      if (n.children && n.children.length) {
-        inner += renderFtNodes(n.children, ns, np, depth + 1);
-      }
-    }
-    return line + inner;
+    const children = (isGroup && expanded && n.children && n.children.length) ? renderFtNodes(n.children, ns, np, depth + 1) : '';
+    return line + children;
   }).join('');
 }
 
@@ -1288,7 +1282,7 @@ function renderFtProblem(p, ml) {
 
 function renderFtAddForm(nodeId, ml) {
   return `
-    <div style="margin-left:${ml}px;margin-top:6px">
+    <div style="margin-left:${ml}px;margin-top:8px">
       <button class="btn" data-ft-add="${nodeId}" style="font-size:12px;padding:3px 10px">＋ 新增问题到此节点</button>
       <div data-ft-form="${nodeId}" hidden style="margin-top:6px;padding:10px;background:#f8fafc;border:1px dashed #cbd5e1;border-radius:6px;display:grid;gap:6px">
         <input data-ft-f-type placeholder="问题类型（如：主图空 / 类目误判）" style="padding:6px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px">
@@ -1305,26 +1299,81 @@ function renderFtAddForm(nodeId, ml) {
 function bindFtTreeEvents() {
   const box = $('#ft-tree-box');
   if (!box) return;
-  box.querySelectorAll('[data-ft-toggle]').forEach(el => {
-    const id = el.dataset.ftToggle;
-    if (!id) return;
-    el.onclick = () => { _ftExpanded[id] = !_ftExpanded[id]; loadFtTree(); };
+  box.querySelectorAll('[data-ft-node]').forEach(el => {
+    el.onclick = () => openFtModal(el.dataset.ftNode);
   });
-  box.querySelectorAll('[data-ft-hit]').forEach(btn => btn.onclick = async () => {
+  box.querySelectorAll('[data-ft-arrow]').forEach(el => {
+    el.onclick = (e) => { e.stopPropagation(); const id = el.dataset.ftArrow; _ftExpanded[id] = !_ftExpanded[id]; loadFtTree(); };
+  });
+}
+
+function findFtNode(nodes, id) {
+  for (const n of (nodes || [])) {
+    if (n.id === id) return n;
+    if (n.children) { const f = findFtNode(n.children, id); if (f) return f; }
+  }
+  return null;
+}
+
+function openFtModal(nodeId) {
+  const d = _ftData;
+  if (!d) return;
+  const tpl = d.template || {};
+  const np = d.node_problems || {};
+  const ns = d.node_status || {};
+  const node = findFtNode(tpl.nodes || [], nodeId);
+  if (!node) return;
+  const problems = np[nodeId] || [];
+  const st = ns[nodeId] || {};
+  const modal = $('#ft-modal');
+  const body = $('#ft-modal-body');
+  if (!modal || !body) return;
+  body.innerHTML = renderFtModalBody(node, problems, st);
+  modal.style.display = 'flex';
+  bindFtModalEvents(nodeId);
+}
+
+function renderFtModalBody(node, problems, st) {
+  const meta = FT_STATUS[st.status] || null;
+  const fixTag = node.fix ? `<span style="font-size:11px;padding:2px 8px;border-radius:4px;background:${node.fix==='manual'?'#fff7ed':'#ecfeff'};color:${node.fix==='manual'?'#ea580c':'#0891b2'};margin-left:8px">${FT_FIX_LABEL[node.fix]||node.fix}</span>` : '';
+  const statusLine = (_ftTaskId != null && st.status && meta) ? `<div style="font-size:12px;color:${meta.color};margin-top:4px">${meta.icon} ${esc(st.msg||'')} ${st.ts?esc(st.ts):''}</div>` : '';
+  return `
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">
+      <div>
+        <div style="font-size:17px;font-weight:700">${esc(node.label)}${fixTag}</div>
+        <div style="font-size:11px;color:#94a3b8;margin-top:2px">${esc(node.id||'')}</div>
+      </div>
+      <button class="btn" data-ft-close style="font-size:14px;padding:4px 10px">✕</button>
+    </div>
+    ${statusLine}
+    ${node.constraint ? `<div style="padding:8px 12px;background:#fffbeb;border-left:3px solid #f59e0b;border-radius:6px;font-size:13px;color:#92400e;margin-bottom:12px">📌 约束：${esc(node.constraint)}</div>` : ''}
+    <div style="font-weight:700;font-size:13px;margin-bottom:8px">📋 历史问题（${problems.length}）</div>
+    ${problems.length ? problems.map(p => renderFtProblem(p, 0)).join('') : '<div style="color:#94a3b8;font-size:12px;padding:8px 0">暂无问题记录</div>'}
+    ${renderFtAddForm(node.id, 0)}
+  `;
+}
+
+function bindFtModalEvents(nodeId) {
+  const modal = $('#ft-modal');
+  if (!modal) return;
+  const close = () => { modal.style.display = 'none'; };
+  modal.querySelectorAll('[data-ft-close]').forEach(b => b.onclick = close);
+  modal.onclick = (e) => { if (e.target === modal) close(); };
+  modal.querySelectorAll('[data-ft-hit]').forEach(btn => btn.onclick = async () => {
     const resp = await api('/api/errors', 'POST', { action: 'hit', id: Number(btn.dataset.ftHit) });
-    if (resp && resp.ok) { toast('已记录 +1'); loadFtTree(); } else { toast('记录失败'); }
+    if (resp && resp.ok) { toast('已记录 +1'); await loadFtTree(); openFtModal(nodeId); } else { toast('记录失败'); }
   });
-  box.querySelectorAll('[data-ft-add]').forEach(btn => btn.onclick = () => {
-    const form = box.querySelector(`[data-ft-form="${btn.dataset.ftAdd}"]`);
+  modal.querySelectorAll('[data-ft-add]').forEach(btn => btn.onclick = () => {
+    const form = modal.querySelector(`[data-ft-form="${btn.dataset.ftAdd}"]`);
     if (form) form.hidden = false;
   });
-  box.querySelectorAll('[data-ft-cancel]').forEach(btn => btn.onclick = () => {
-    const form = box.querySelector(`[data-ft-form="${btn.dataset.ftCancel}"]`);
+  modal.querySelectorAll('[data-ft-cancel]').forEach(btn => btn.onclick = () => {
+    const form = modal.querySelector(`[data-ft-form="${btn.dataset.ftCancel}"]`);
     if (form) form.hidden = true;
   });
-  box.querySelectorAll('[data-ft-save]').forEach(btn => btn.onclick = async () => {
-    const nodeId = btn.dataset.ftSave;
-    const form = box.querySelector(`[data-ft-form="${nodeId}"]`);
+  modal.querySelectorAll('[data-ft-save]').forEach(btn => btn.onclick = async () => {
+    const nid = btn.dataset.ftSave;
+    const form = modal.querySelector(`[data-ft-form="${nid}"]`);
     if (!form) return;
     const type = form.querySelector('[data-ft-f-type]').value.trim();
     if (!type) { toast('请填问题类型'); return; }
@@ -1332,9 +1381,9 @@ function bindFtTreeEvents() {
       error_type: type,
       description: form.querySelector('[data-ft-f-desc]').value.trim(),
       solution: form.querySelector('[data-ft-f-solution]').value.trim(),
-      node_id: nodeId,
+      node_id: nid,
     });
-    if (resp && resp.ok) { toast('已挂到节点'); loadFtTree(); } else { toast((resp&&resp.error)||'保存失败'); }
+    if (resp && resp.ok) { toast('已挂到节点'); await loadFtTree(); openFtModal(nid); } else { toast((resp&&resp.error)||'保存失败'); }
   });
 }
 
