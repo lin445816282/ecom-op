@@ -31,6 +31,7 @@ const VIEWS = {
   sale: {title:'销售看板', sub:'成交订单 SKU → 品类归类，每日/每月销量与金额汇总。'},
   errors: {title:'错误处理', sub:'上架/采集/发布踩过的坑，对应处理技能 + 出现次数，遇到一次点一次。'},
   autopublish: {title:'一键上架', sub:'输入 1688 链接 → 自动抓取 → AI 生成配置 → CDP 上架到拼多多。'},
+  flowtree: {title:'流程树', sub:'上架全链路流程树：登录→AI发品→填表→自愈→人工提交，节点状态实时刷新。'},
   publishedgoods: {title:'上架列表', sub:'已上架商品台账：主图/标题/SKU价格/店铺/类目/状态，一键上架成功后自动归档。'},
   aiboss: {title:'AI老板', sub:'AI 自主经营台账：选品 → 出单 → 用户下单填单号 → 独立利润记账，从 0 起算，不虚报。'},
   useradmin: {title:'用户与权限', sub:'管理员工账号，按模块勾选各员工可访问的功能。'},
@@ -39,6 +40,7 @@ const VIEWS = {
 // 可授权模块清单（权限赋予勾选用）。dashboard 运营总览 + 运营指南始终放行，不在此列。
 const PERM_MODULES = [
   { key:'autopublish', name:'一键上架', icon:'🚀' },
+  { key:'flowtree', name:'流程树', icon:'🌳' },
   { key:'packing', name:'打单登记', icon:'🖨' },
   { key:'products', name:'商品投产', icon:'✚' },
   { key:'catalog', name:'商品库', icon:'📦' },
@@ -606,6 +608,7 @@ function setView(view) {
   // 权限拦截：无权限的视图直接拒绝（含 useradmin 仅管理员）
   if (!canView(view)) { toast('无权限访问该模块'); return; }
   state.view = view;
+  if (view !== 'flowtree' && _ftTimer) { clearInterval(_ftTimer); _ftTimer = null; }
   setNav(view);
   $$('.view').forEach(v => v.hidden = true);
   $(`#view-${view}`).hidden = false;
@@ -635,6 +638,7 @@ function setView(view) {
   if (view === 'sale') renderSale();
   if (view === 'errors') renderErrors();
   if (view === 'autopublish') renderAutopublish();
+  if (view === 'flowtree') renderFlowTree();
   if (view === 'publishedgoods') renderPublishedGoods();
   if (view === 'aiboss') renderAiBoss();
   if (view === 'useradmin') renderUserAdmin();
@@ -751,6 +755,8 @@ async function renderNewoffer() {
   let newofferPage = 1;
   let newofferTotal = 0;
   const newofferPageSize = 50;
+  // 勾选状态记忆：上架后 loadList 重新渲染，恢复之前勾选的商品（方便继续上架到别的店）
+  const newofferChecked = new Set();
   async function loadList() {
     const status = $('#newoffer-status').value;
     const q = ($('#newoffer-q').value || '').trim();
@@ -799,10 +805,13 @@ async function renderNewoffer() {
               <div style="display:flex;justify-content:space-between;align-items:center;margin-top:auto">
                 <span style="color:#dc2626;font-weight:700;font-size:14px">¥${esc(it.price || '—')}</span>
                 <label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer;color:#475569">
-                  <input type="checkbox" class="newoffer-check" value="${it.id}" ${it.status === 'publishing' ? 'disabled' : ''}>选
+                  <input type="checkbox" class="newoffer-check" value="${it.id}" ${it.status === 'published' ? 'disabled' : ''} ${newofferChecked.has(String(it.id)) ? 'checked' : ''}>选
                 </label>
               </div>
               <div style="color:#94a3b8;font-size:11px">${esc(it.supplier_name || '')} · ${esc(it.date || '—')}</div>
+              <div style="display:flex;gap:6px">
+                <button class="newoffer-copy" data-url="${esc(it.offer_url || '')}" style="flex:1;padding:4px 8px;font-size:11px;background:#f1f5f9;color:#475569;border:1px solid #e2e8f0;border-radius:6px;cursor:pointer;text-align:center">📋 复制链接</button>
+              </div>
             </div>
           </div>`;
         }).join('')}
@@ -816,7 +825,18 @@ async function renderNewoffer() {
       </div>`;
     // 全选
     $('#newoffer-checkall').addEventListener('change', e => {
-      $$('.newoffer-check:not([disabled])').forEach(c => c.checked = e.target.checked);
+      $$('.newoffer-check:not([disabled])').forEach(c => {
+        c.checked = e.target.checked;
+        const v = String(c.value);
+        if (e.target.checked) newofferChecked.add(v); else newofferChecked.delete(v);
+      });
+    });
+    // 单个勾选同步到记忆
+    $$('.newoffer-check').forEach(c => {
+      c.addEventListener('change', () => {
+        const v = String(c.value);
+        if (c.checked) newofferChecked.add(v); else newofferChecked.delete(v);
+      });
     });
     // 缩略图点击放大（lightbox）
     $$('.newoffer-thumb').forEach(th => {
@@ -832,6 +852,13 @@ async function renderNewoffer() {
         </div>`;
         overlay.addEventListener('click', () => overlay.remove());
         document.body.appendChild(overlay);
+      });
+    });
+    // 复制链接
+    $$('.newoffer-copy').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const u = btn.getAttribute('data-url') || '';
+        if (u) copyToClip(u, '链接');
       });
     });
     // 分页
@@ -1093,6 +1120,130 @@ async function renderErrors() {
 
 // 一键上架：输入 1688 链接 → 抓取 → AI 配置 → CDP 上架，实时进度流
 let apTimer = null;
+// ==================== 流程树（上架全链路可视化） ====================
+let _ftTaskId = null;
+let _ftTimer = null;
+let _ftTasks = [];
+let _ftPlatform = 'taobao';
+
+const FT_STATUS = {
+  done:    { icon: '✅', color: '#16a34a', bg: '#f0fdf4' },
+  failed:  { icon: '❌', color: '#dc2626', bg: '#fef2f2' },
+  running: { icon: '⏳', color: '#d97706', bg: '#fffbeb' },
+  retry:   { icon: '🔁', color: '#2563eb', bg: '#eff6ff' },
+  skip:    { icon: '⏭️', color: '#94a3b8', bg: '#f8fafc' },
+  manual:  { icon: '👤', color: '#ea580c', bg: '#fff7ed' },
+  fix:     { icon: '🔧', color: '#0891b2', bg: '#ecfeff' },
+};
+const FT_TASK_STATUS = { queued: '排队', crawling: '抓取', ai: 'AI', publishing: '上架中', published: '已上架', submitted: '待审核', draft: '草稿', failed: '失败', stopped: '停止' };
+const FT_FIX_LABEL = { local: '可自愈', republish: '需重跑', manual: '需人工' };
+
+async function renderFlowTree() {
+  if (_ftTimer) { clearInterval(_ftTimer); _ftTimer = null; }
+  const el = $('#view-flowtree');
+  el.innerHTML = `
+    <div style="padding:20px;max-width:900px">
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin-bottom:16px">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+          <div style="font-weight:700;font-size:15px">🌳 上架流程树</div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <div class="pill" id="ft-platform-pill">
+              <button class="shop-btn ${_ftPlatform==='taobao'?'active':''}" data-ft-plat="taobao">淘宝</button>
+              <button class="shop-btn ${_ftPlatform==='pdd'?'active':''}" data-ft-plat="pdd">拼多多</button>
+            </div>
+            <button class="btn" id="ft-refresh-btn" style="padding:7px 14px;font-size:12px">🔄 刷新</button>
+          </div>
+        </div>
+        <div style="margin-top:10px">
+          <select id="ft-task-select" style="width:100%;padding:8px;border:1px solid #e2e8f0;border-radius:8px;font-size:13px"></select>
+        </div>
+      </div>
+      <div id="ft-tree-box" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:20px;min-height:200px"></div>
+    </div>`;
+
+  $$('#ft-platform-pill [data-ft-plat]').forEach(b => b.addEventListener('click', () => {
+    _ftPlatform = b.dataset.ftPlat;
+    $$('#ft-platform-pill [data-ft-plat]').forEach(x => x.classList.toggle('active', x === b));
+    _ftTaskId = null;
+    loadFtTasks();
+  }));
+  $('#ft-refresh-btn').addEventListener('click', () => loadFtTree());
+
+  await loadFtTasks();
+}
+
+async function loadFtTasks() {
+  try {
+    const params = new URLSearchParams({ page: '1', page_size: '100' });
+    const resp = await api('/api/autopublish?' + params.toString());
+    _ftTasks = (resp && resp.items) || [];
+  } catch (e) { _ftTasks = []; }
+  _ftTasks = _ftTasks.filter(t => _ftPlatform === 'taobao' ? (t.shop_id === 12) : (t.shop_id !== 12));
+  const sel = $('#ft-task-select');
+  if (!sel) return;
+  if (!_ftTasks.length) {
+    sel.innerHTML = '<option value="">暂无任务</option>';
+    $('#ft-tree-box').innerHTML = '<div class="empty" style="color:#94a3b8;padding:40px;text-align:center">该平台暂无上架任务</div>';
+    return;
+  }
+  if (!_ftTaskId || !_ftTasks.some(t => t.id === _ftTaskId)) _ftTaskId = _ftTasks[0].id;
+  sel.innerHTML = _ftTasks.map(t => {
+    const title = (t.ai_title || t.raw_title || t.source_url || '').slice(0, 30);
+    const st = FT_TASK_STATUS[t.status] || t.status;
+    return `<option value="${t.id}" ${t.id===_ftTaskId?'selected':''}>#${t.id} [${st}] ${esc(title)}</option>`;
+  }).join('');
+  sel.onchange = () => { _ftTaskId = parseInt(sel.value); loadFtTree(); };
+  loadFtTree();
+}
+
+async function loadFtTree() {
+  if (!_ftTaskId) return;
+  const box = $('#ft-tree-box');
+  if (!box) return;
+  let d;
+  try { d = await api(`/api/autopublish/tree/${_ftTaskId}`); }
+  catch (e) { box.innerHTML = `<div style="color:#ef4444">加载失败：${esc(e.message||e)}</div>`; return; }
+  box.innerHTML = renderFtTreeHtml(d);
+  if (_ftTimer) { clearInterval(_ftTimer); _ftTimer = null; }
+  const st = d.task && d.task.status;
+  if (st === 'publishing' || st === 'queued' || st === 'crawling' || st === 'ai') {
+    _ftTimer = setInterval(() => loadFtTree(), 3000);
+  }
+}
+
+function renderFtTreeHtml(d) {
+  const ns = d.node_status || {};
+  const tpl = d.template || { label: '', nodes: [] };
+  const task = d.task || {};
+  const taskSt = FT_TASK_STATUS[task.status] || task.status;
+  const header = `
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap">
+      <span style="font-size:16px;font-weight:700">${esc(tpl.label||'上架流程')}</span>
+      <span style="font-size:12px;padding:2px 8px;border-radius:4px;background:#f1f5f9;color:#475569">#${task.id} ${taskSt}</span>
+      <span style="font-size:12px;color:#94a3b8">${esc(task.ai_title||task.raw_title||'')}</span>
+    </div>`;
+  return header + renderFtNodes(tpl.nodes || [], ns, 0);
+}
+
+function renderFtNodes(nodes, ns, depth) {
+  return (nodes || []).map(n => {
+    const st = ns[n.id] || {};
+    const meta = FT_STATUS[st.status] || { icon: '⚪', color: '#cbd5e1', bg: 'transparent' };
+    const fixTag = n.fix ? `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:${n.fix==='manual'?'#fff7ed':'#ecfeff'};color:${n.fix==='manual'?'#ea580c':'#0891b2'};margin-left:6px">${FT_FIX_LABEL[n.fix]||n.fix}</span>` : '';
+    const msg = st.msg ? `<span style="font-size:11px;color:#64748b;margin-left:6px">${esc(st.msg)}</span>` : '';
+    const ts = st.ts ? `<span style="font-size:10px;color:#cbd5e1;margin-left:6px">${st.ts}</span>` : '';
+    const indent = depth * 24;
+    const line = `
+      <div style="display:flex;align-items:center;padding:6px 0;padding-left:${indent}px;${depth>0?'border-left:2px solid #e2e8f0;margin-left:8px;':''}">
+        <span style="width:22px;text-align:center;font-size:14px;flex-shrink:0">${meta.icon}</span>
+        <span style="font-size:13px;font-weight:${n.kind==='group'?'700':'500'};color:${n.kind==='group'?'#17203a':meta.color};margin-left:4px">${esc(n.label)}</span>
+        ${fixTag}${msg}${ts}
+      </div>`;
+    const children = n.children && n.children.length ? renderFtNodes(n.children, ns, depth + 1) : '';
+    return line + children;
+  }).join('');
+}
+
 async function renderAutopublish() {
   const el = $('#view-autopublish');
   el.innerHTML = `
@@ -1547,6 +1698,7 @@ async function renderAutopublish() {
           <div>${c.role}</div>
         </div>
         <button class="btn ${c.alive ? '' : 'primary'}" data-cdp-restart="${c.port}" style="margin-top:8px;padding:5px 12px;font-size:12px;width:100%">${c.alive ? '重启' : '启动'}</button>
+        ${c.alive ? '<button class="btn danger" data-cdp-stop="' + c.port + '" style="margin-top:6px;padding:5px 12px;font-size:12px;width:100%">关闭</button>' : ''}
       </div>`;
     }).join('');
     // 绑定重启按钮
@@ -1564,6 +1716,26 @@ async function renderAutopublish() {
           }
         } catch (e) {
           toast('重启失败: ' + e.message);
+        }
+        await loadCdpStatus();
+      };
+    });
+    // 绑定关闭按钮
+    box.querySelectorAll('[data-cdp-stop]').forEach(btn => {
+      btn.onclick = async () => {
+        const port = Number(btn.dataset.cdpStop);
+        if (!confirm(`确定关闭端口 ${port} 的 CDP 实例吗？\n关闭后自动化上架/抓取将停用，需手动点「启动」恢复。`)) return;
+        btn.disabled = true;
+        btn.textContent = '关闭中…';
+        try {
+          const resp = await api('/api/cdp/stop', 'POST', { port });
+          if (resp && resp.ok) {
+            toast(`${resp.label} 已关闭`);
+          } else {
+            toast((resp && resp.message) || '关闭失败');
+          }
+        } catch (e) {
+          toast('关闭失败: ' + e.message);
         }
         await loadCdpStatus();
       };

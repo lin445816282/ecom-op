@@ -1684,6 +1684,17 @@ class Handler(BaseHTTPRequestHandler):
             res = _cdp_restart(port)
             return _json(self, res, 200 if res.get("ok") else 400)
 
+        if path == "/api/cdp/stop" and self.command == "POST":
+            item = self._read_body()
+            try:
+                port = int(item.get("port") or 0)
+            except (TypeError, ValueError):
+                port = 0
+            if not port:
+                return _json(self, {"error": "缺少端口号"}, 400)
+            res = _cdp_stop(port)
+            return _json(self, res, 200 if res.get("ok") else 400)
+
         if path == "/api/supplier/fetchNew" and self.command == "POST":
             # 按供应商前缀采集 1688 新品专区（newofferlist.htm）最新上架商品
             item = self._read_body()
@@ -1948,13 +1959,32 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/autopublish/queue" and self.command == "GET":
             # 执行队列卡片：正在执行 + 后续排队前 3 条；附带上单个商品超时时间（前端算倒计时）
-            data = catalog.get_autopublish_queue()
+            queue = catalog.get_autopublish_queue()
             try:
                 _s = catalog.get_autopublish_settings()
-                data["timeout"] = int(float(_s.get("timeout", 480)))
+                queue["timeout"] = int(float(_s.get("timeout", 480)))
             except Exception:
-                data["timeout"] = 480
-            return _json(self, data)
+                queue["timeout"] = 480
+            return _json(self, queue)
+
+        if path == "/api/autopublish/tree-template" and self.command == "GET":
+            # 流程树模板（可主动更新：改 data/flow_trees.json 即时生效）
+            platform = (qs.get("platform", ["taobao"])[0] or "taobao").strip()
+            trees = _flow_tree_templates()
+            tpl = trees.get(platform) or {"label": platform, "version": 1, "nodes": []}
+            return _json(self, {"platform": platform, "template": tpl,
+                                "platforms": sorted(trees.keys())})
+
+        if path.startswith("/api/autopublish/tree/") and self.command == "GET":
+            # 某次任务的流程树 = 模板 + 任务 log 里的节点进度合并
+            try:
+                task_id = int(path.rsplit("/", 1)[-1])
+            except ValueError:
+                return _json(self, {"error": "非法 id"}, 400)
+            task = catalog.get_autopublish_task(task_id)
+            if not task:
+                return _json(self, {"error": "任务不存在"}, 404)
+            return _json(self, _flow_tree_for_task(task))
 
         if path.startswith("/api/autopublish/") and self.command == "GET":
             try:
@@ -3114,6 +3144,7 @@ def _cdp_restart(port: int) -> dict:
     except Exception as e:
         data = {"ok": False, "error": f"重启异常:{e}"}
 
+    _CDP_MANUAL_STOP.discard(port)  # 重启/启动后解除「手动停止」标记，恢复自愈自动管理
     return {
         "ok": bool(data.get("ok")),
         "port": port,
@@ -3121,6 +3152,45 @@ def _cdp_restart(port: int) -> dict:
         "message": ("已杀进程" if data.get("killed") else "无进程") + ("" if data.get("alive") else "（未就绪）"),
         "launched": True,
         "alive": bool(data.get("alive")),
+    }
+
+
+# 手动停止的 CDP 端口集合：用户主动「关闭」后，自愈守护线程跳过这些端口（不自动重启），
+# 直到用户点「启动/重启」解除（_cdp_restart 里 discard）。
+_CDP_MANUAL_STOP = set()
+
+
+def _cdp_stop(port: int) -> dict:
+    """关闭（停止）指定 CDP 端口：只杀进程树，不重启。加入手动停止集合，自愈不再拉起。
+
+    返回 {ok, port, label, message, alive}。
+    """
+    import subprocess, json
+    inst = next((c for c in CDP_INSTANCES if c["port"] == port), None)
+    if not inst:
+        return {"ok": False, "port": port, "message": "未知端口"}
+    label = inst["label"]
+
+    script_win = AUTOPUBLISH_DIR_WIN + "\\cdp_stop.js"
+    data = {"ok": False, "error": "停止未执行"}
+    try:
+        r = subprocess.run(
+            [NODE_EXE, script_win, str(port)],
+            capture_output=True, text=True, timeout=30,
+        )
+        lines = [l.strip() for l in (r.stdout or "").splitlines() if l.strip().startswith("{")]
+        if lines:
+            data = json.loads(lines[-1])
+    except Exception as e:
+        data = {"ok": False, "error": f"停止异常:{e}"}
+
+    _CDP_MANUAL_STOP.add(port)
+    return {
+        "ok": bool(data.get("ok")),
+        "port": port,
+        "label": label,
+        "message": ("已关闭进程" if data.get("killed") else "无进程（本就不在线）"),
+        "alive": False,
     }
 
 
@@ -3142,6 +3212,8 @@ def _cdp_autoheal_loop():
             for c in CDP_INSTANCES:
                 port = c["port"]
                 label = c["label"]
+                if port in _CDP_MANUAL_STOP:
+                    continue  # 用户手动关闭的实例，自愈不自动重启
                 if alive_map.get(port):
                     _CDP_DEAD_COUNT[port] = 0
                     continue
@@ -3451,12 +3523,14 @@ def _autopublish_bg(task_id: int, pricing: dict = None):
     except Exception:
         product = {}
     # 规范化商品图尺寸（1688 抓图 400~1500+ 且可能 WebP，不规范化会导致商详校验失败）
-    try:
-        _n = _normalize_publish_images(outdir_wsl)
-        if _n:
-            catalog.append_autopublish_log(task_id, "scrape", "done", f"图片规范化 {_n} 张（宽480-1200/高≤1500/转JPEG）")
-    except Exception:
-        pass
+    # 复用缓存时跳过：缓存保存的已是规范化后 JPEG，无需重复处理（省时 + 日志不误导为「又抓了一次」）
+    if not _reused:
+        try:
+            _n = _normalize_publish_images(outdir_wsl)
+            if _n:
+                catalog.append_autopublish_log(task_id, "scrape", "done", f"图片规范化 {_n} 张（宽480-1200/高≤1500/转JPEG）")
+        except Exception:
+            pass
     if not product.get("title"):
         product["title"] = d.get("title", "")
         product["images"] = d.get("images", [])
@@ -3473,14 +3547,17 @@ def _autopublish_bg(task_id: int, pricing: dict = None):
     if _supplier_name:
         _sid = catalog.get_or_create_supplier(_supplier_name, _supplier_prefix)
         catalog.update_autopublish_task(task_id, supplier_id=_sid)
+        if not _reused:
+            catalog.append_autopublish_log(
+                task_id, "scrape", "done",
+                f"货源店铺：{_supplier_name}" + (f"（前缀 {_supplier_prefix}）" if _supplier_prefix else ""),
+            )
+    # 复用缓存时跳过「抓取成功」日志：已有「复用缓存」日志，避免误导为「又抓了一次」
+    if not _reused:
         catalog.append_autopublish_log(
             task_id, "scrape", "done",
-            f"货源店铺：{_supplier_name}" + (f"（前缀 {_supplier_prefix}）" if _supplier_prefix else ""),
+            f"抓取成功：{product.get('title','')[:30]} ｜ 图 {len(product.get('images',[]))} 张",
         )
-    catalog.append_autopublish_log(
-        task_id, "scrape", "done",
-        f"抓取成功：{product.get('title','')[:30]} ｜ 图 {len(product.get('images',[]))} 张",
-    )
     # 抓取成功后缓存产物到共享目录（供多店铺共用 + 失败重试复用）
     if not _reused:
         try:
@@ -3503,17 +3580,50 @@ def _autopublish_bg(task_id: int, pricing: dict = None):
     # ---- 环节2：AI 生成 config.json ----
     if _overtime("ai"):
         return _fail_timeout("ai")
-    catalog.append_autopublish_log(task_id, "ai", "running", "DeepSeek 分析规格/定价/类目，生成上架配置…")
     catalog.update_autopublish_task(task_id, status="ai", stage="ai")
     shop_name = catalog.get_shop_name(shop_id)
-    ai = data.ai_generate_publish_config(product, pricing, shop_name=shop_name, shop_id=shop_id)
-    if _overtime("ai"):
-        return _fail_timeout("ai")
-    if ai.get("error"):
-        return _fail("ai", ai["error"])
-    cfg = ai.get("config") or {}
-    if not cfg:
-        return _fail("ai", "AI 未生成配置")
+    # 先查 AI config 缓存复用：offer_id + pricing + shop 三者相同 → 复用，跳过 DeepSeek（失败重试省时省 token）
+    import hashlib as _hashlib
+    _ai_reused = False
+    _ai_cfg_path = ""
+    try:
+        _pricing_key = _hashlib.md5(json.dumps(pricing or {}, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:12]
+    except Exception:
+        _pricing_key = "nopricing"
+    if _oid:
+        _ai_cfg_path = os.path.join(f"/mnt/c/tmp/pdd-publish/scraped_{_oid}", f"ai_cfg_{shop_id}_{_pricing_key}.json")
+        if os.path.exists(_ai_cfg_path):
+            try:
+                with open(_ai_cfg_path, encoding="utf-8") as _f:
+                    _cached_cfg = json.load(_f)
+                if isinstance(_cached_cfg, dict) and _cached_cfg.get("title"):
+                    cfg = _cached_cfg
+                    _ai_reused = True
+            except Exception:
+                cfg = None
+    if _ai_reused:
+        catalog.append_autopublish_log(task_id, "ai", "done",
+                                       f"♻️ 复用 AI 配置缓存（offer {_oid}，店铺 {shop_id}，定价 {_pricing_key}）")
+        warning = ""
+    else:
+        catalog.append_autopublish_log(task_id, "ai", "running", "DeepSeek 分析规格/定价/类目，生成上架配置…")
+        ai = data.ai_generate_publish_config(product, pricing, shop_name=shop_name, shop_id=shop_id)
+        if _overtime("ai"):
+            return _fail_timeout("ai")
+        if ai.get("error"):
+            return _fail("ai", ai["error"])
+        cfg = ai.get("config") or {}
+        if not cfg:
+            return _fail("ai", "AI 未生成配置")
+        warning = ai.get("warning", "")
+        # 写 AI config 缓存（供后续失败重试/同店铺同价复用）
+        if _oid and cfg:
+            try:
+                os.makedirs(os.path.dirname(_ai_cfg_path), exist_ok=True)
+                with open(_ai_cfg_path, "w", encoding="utf-8") as _f:
+                    json.dump(cfg, _f, ensure_ascii=False, indent=2)
+            except Exception as _e:
+                catalog.append_autopublish_log(task_id, "ai", "done", f"⚠️ AI 配置缓存失败:{_e}")
     catalog.update_autopublish_task(task_id, ai_title=cfg.get("title", ""))
     # 物流重量（多仓按重运费模板需要填）：优先从 1688 bodyText 提取真实重量(g)，
     # 兜底 pricing 透传，再兜底默认 1kg。保证 publish.js 永远有物流重量可填（多仓按重模板不空）。
@@ -3528,7 +3638,6 @@ def _autopublish_bg(task_id: int, pricing: dict = None):
             json.dump(cfg, f, ensure_ascii=False, indent=2)
     except Exception as e:
         return _fail("ai", f"写 config.json 失败:{e}")
-    warning = ai.get("warning", "")
     catalog.append_autopublish_log(
         task_id, "ai", "done",
         f"AI 配置完成：标题 {cfg.get('title','')[:30]} ｜ 规格 {len(cfg.get('specs',[]))} 维"
@@ -3713,6 +3822,64 @@ def _wsl_host_ip() -> str:
     return "172.23.128.1"
 
 
+def _flow_tree_templates() -> dict:
+    """读流程树模板 data/flow_trees.json，返回 {platform: {...}}。改文件即时生效（每次请求读）。"""
+    fp = os.path.join(BASE_DIR, "data", "flow_trees.json")
+    try:
+        with open(fp, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _flow_node_ids(nodes) -> set:
+    """递归收集树节点 id（含 group 子节点）。"""
+    ids = set()
+    for n in nodes or []:
+        if n.get("id"):
+            ids.add(n["id"])
+        ids.update(_flow_node_ids(n.get("children") or []))
+    return ids
+
+
+def _flow_tree_for_task(task: dict) -> dict:
+    """合并流程树模板 + 任务 log 里的节点进度，返回前端渲染所需结构。"""
+    platform = task.get("platform") or ""
+    if not platform or platform == "pdd":
+        if task.get("shop_id") == 12:
+            platform = "taobao"
+    trees = _flow_tree_templates()
+    tpl = trees.get(platform) or {"label": platform or "上架", "version": 1, "nodes": []}
+    node_ids = _flow_node_ids(tpl.get("nodes"))
+    node_status = {}
+    try:
+        logs = json.loads(task.get("log") or "[]")
+    except Exception:
+        logs = []
+    for e in logs:
+        stage = e.get("stage", "")
+        if stage in node_ids:
+            node_status[stage] = {
+                "status": e.get("status", ""),
+                "msg": e.get("msg", ""),
+                "ts": e.get("ts", ""),
+            }
+    return {
+        "platform": platform,
+        "task": {
+            "id": task.get("id"),
+            "status": task.get("status"),
+            "stage": task.get("stage"),
+            "raw_title": task.get("raw_title"),
+            "ai_title": task.get("ai_title"),
+            "shop_id": task.get("shop_id"),
+            "created_at": task.get("created_at"),
+        },
+        "template": tpl,
+        "node_status": node_status,
+    }
+
+
 def _taobao_publish(config_wsl: str, task_id: int, shop_id: int, pricing: dict = None):
     """淘宝上架：调 taobao_publish.py（Python 执行器，AI 以图发品 + V2 填表，停在提交前）。
     淘宝「提交宝贝」按钮被 React 拦截，最后点击必须人工，脚本跑到 ready_for_manual_submit 即算成功。
@@ -3725,26 +3892,80 @@ def _taobao_publish(config_wsl: str, task_id: int, shop_id: int, pricing: dict =
     script_win = AUTOPUBLISH_DIR_WIN + "\\taobao_publish.py"
     config_win = config_wsl.replace("/mnt/c/", "C:\\").replace("/mnt/d/", "D:\\").replace("/", "\\")
     cdp_url = os.environ.get("TAOBAO_CDP_URL", f"http://127.0.0.1:{TAOBAO_CDP_PORT}")
+    import time as _t
+    import threading as _th
+    import queue as _q
     try:
-        res = subprocess.run(
+        proc = subprocess.Popen(
             ["cmd.exe", "/c", "python", script_win, config_win, cdp_url],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=600,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, encoding="utf-8", errors="replace",
         )
-        stdout = (res.stdout or "")
-        stderr = (res.stderr or "")
+        _outq = _q.Queue()
+
+        def _read_stdout():
+            try:
+                for _line in proc.stdout:
+                    _outq.put(_line.rstrip("\n"))
+            except Exception:
+                pass
+            finally:
+                _outq.put(None)  # EOF 标记
+
+        _th.Thread(target=_read_stdout, daemon=True).start()
+        lines = []
+        _deadline = _t.time() + 600
+        _timed_out = False
+        while True:
+            try:
+                line = _outq.get(timeout=1)
+            except _q.Empty:
+                if _t.time() > _deadline:
+                    proc.kill()
+                    _timed_out = True
+                    break
+                continue
+            if line is None:
+                break
+            lines.append(line)
+            # 实时捕获流程树进度（TREE_PROGRESS），写任务日志驱动前端流程树
+            if line.startswith("TREE_PROGRESS "):
+                try:
+                    _p = json.loads(line[len("TREE_PROGRESS "):])
+                    catalog.append_autopublish_log(
+                        task_id, _p.get("node", ""), _p.get("status", ""), _p.get("msg", ""))
+                except Exception:
+                    pass
+        try:
+            proc.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            _timed_out = True
+        stdout = "\n".join(lines)
+        if _timed_out:
+            catalog.update_autopublish_task(task_id, status="failed", error="淘宝上架超时（>600s）")
+            catalog.append_autopublish_log(task_id, "publish", "failed", "淘宝上架超时（>600s）")
+            return
         if "RESULT_READY" in stdout:
             catalog.update_autopublish_task(task_id, status="submitted", stage="manual_submit", error="")
+            # 追加执行器关键日志（GS 注入的 deliver-card 结构 / 选单品 / 填类型名 / 价格库存），
+            # 供诊断「规格+数量消失 / 重量没填」是否修复。过滤 JSON/进度行，最多保留 30 行。
+            _detail = [l for l in lines
+                       if l.strip() and not l.strip().startswith("{")
+                       and "RESULT_READY" not in l and not l.startswith("TREE_PROGRESS")]
+            _detail = _detail[-30:]
             catalog.append_autopublish_log(
                 task_id, "publish", "done",
-                "✅ 淘宝表单已填完，待人工在 Edge 9222 手动点击「提交宝贝」")
+                "✅ 淘宝表单已填完，待人工在 Edge 9222 手动点击「提交宝贝」"
+                + ("\n" + "\n".join(_detail) if _detail else ""))
             return
         _err = ""
-        for line in stdout.splitlines():
+        for line in lines:
             if "error" in line.lower() or "失败" in line or "RESULT_FAILED" in line:
                 _err = line.strip()[-300:]
                 break
         if not _err:
-            _err = (stderr or stdout or "淘宝上架失败（未知原因）")[-300:]
+            _err = (stdout or "淘宝上架失败（未知原因）")[-300:]
         catalog.update_autopublish_task(task_id, status="failed", error=f"淘宝:{_err}")
         catalog.append_autopublish_log(task_id, "publish", "failed", f"淘宝上架失败：{_err}")
     except subprocess.TimeoutExpired:
