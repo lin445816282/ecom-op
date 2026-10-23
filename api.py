@@ -3982,7 +3982,8 @@ def _taobao_publish(config_wsl: str, task_id: int, shop_id: int, pricing: dict =
             # 供诊断「规格+数量消失 / 重量没填」是否修复。过滤 JSON/进度行，最多保留 30 行。
             _detail = [l for l in lines
                        if l.strip() and not l.strip().startswith("{")
-                       and "RESULT_READY" not in l and not l.startswith("TREE_PROGRESS")]
+                       and "RESULT_READY" not in l and not l.startswith("TREE_PROGRESS")
+                       and not l.startswith("TREE_PROBLEM")]
             _detail = _detail[-30:]
             catalog.append_autopublish_log(
                 task_id, "publish", "done",
