@@ -703,17 +703,19 @@ def fix_category(evaluate, keyword="花盆"):
     return "failed"
 
 
-def fill_v2_gs(evaluate, weight="1.0"):
-    """GS 注入多件优惠清零 + 物流重量。必须最先做（DOM 填写前）：
+def fill_v2_gs(evaluate, send, weight="1.0"):
+    """GS 注入多件优惠 + 物流重量。必须最先做（DOM 填写前）：
     skill 验证 GS updateModels 会触发 React 重渲染清除所有 DOM 值，故「GS→DOM」是硬顺序。
-    深克隆 formValues 保留 mainImagesGroup + sku（永不碰 fv.sku，否则 SKU 30+ 字段清空）。
-    最大承重 p-5432965 是挂钩类目特定属性，待实测按需注入（值必须"5"非"5kg"）。"""
+    多件优惠（2026-10-23 用户最终口径：启用 + 满2件打折 + 9.9折）：
+    ① GS 注入 enable:true + type:'percent'（checkbox 免疫，只能 GS 强注）
+    ② ⚠️ 必须 CDP 点选「满2件打折」下拉（GS 注入 type:'percent' 后 UI 显示英文 percent，不点选不生效）
+    ③ 点选后 type 变数字 1、value 清空 → GS 重设 value='9.9'。"""
     js = """
     (function(){
         try{
             var e=__SELL_STATE__.getState().engine;
             var fv=JSON.parse(JSON.stringify(e.getModels().formValues));
-            // 多件优惠：启用 + 满2件打折 + 9.9折（2026-10-23 用户最终口径：选中启用，满2件打折，9.9）
+            // 多件优惠：启用 + 满2件打折 + 9.9折
             fv.multiDiscountPromotion={enable:true,type:'percent',value:9.9,condition:2,discountType:'PERCENT'};
             // 物流重量
             fv['deliver-card']=fv['deliver-card']||{};
@@ -728,6 +730,31 @@ def fill_v2_gs(evaluate, weight="1.0"):
     js = js.replace("__WEIGHT__", json.dumps(str(weight)))
     r = evaluate(js)
     log(f"GS 注入（多件优惠+重量 {weight}）：{r}")
+
+    # CDP 点选「满2件打折」下拉（skill：GS 注入 type:'percent' 后 UI 下拉显示英文 percent，必须 CDP 真实点选）
+    try:
+        _trig = evaluate('(function(){var els=document.querySelectorAll(".next-select-trigger em, .next-select-trigger [title]");for(var i=0;i<els.length;i++){var t=(els[i].getAttribute("title")||els[i].textContent||"").trim();if(t.toLowerCase().indexOf("percent")>=0){var trig=els[i].closest(".next-select-trigger")||els[i];trig.scrollIntoView({block:"center"});var rr=trig.getBoundingClientRect();return JSON.stringify({x:rr.x+rr.width/2,y:rr.y+rr.height/2});}}return "nf";})()')
+        if _trig.startswith("{"):
+            _c = json.loads(_trig)
+            send("Input.dispatchMouseEvent", {"type": "mousePressed", "x": _c["x"], "y": _c["y"], "button": "left", "clickCount": 1})
+            send("Input.dispatchMouseEvent", {"type": "mouseReleased", "x": _c["x"], "y": _c["y"], "button": "left", "clickCount": 1})
+            time.sleep(1)
+            _item = evaluate('(function(){var its=document.querySelectorAll(".next-menu-item");for(var i=0;i<its.length;i++){var t=(its[i].textContent||"").trim();if(t.indexOf("满2件打折")>=0||t.indexOf("满2件")>=0){its[i].scrollIntoView({block:"center"});var rr=its[i].getBoundingClientRect();return JSON.stringify({x:rr.x+rr.width/2,y:rr.y+rr.height/2});}}return "nf";})()')
+            if _item.startswith("{"):
+                _c2 = json.loads(_item)
+                send("Input.dispatchMouseEvent", {"type": "mousePressed", "x": _c2["x"], "y": _c2["y"], "button": "left", "clickCount": 1})
+                send("Input.dispatchMouseEvent", {"type": "mouseReleased", "x": _c2["x"], "y": _c2["y"], "button": "left", "clickCount": 1})
+                time.sleep(1)
+                # 点选后 type 变数字 1、value 清空 → GS 重设
+                _back = evaluate('(function(){var e=__SELL_STATE__.getState().engine;var fv=e.getModels().formValues;if(fv.multiDiscountPromotion){fv.multiDiscountPromotion.type=1;fv.multiDiscountPromotion.value="9.9";e.updateModels({formValues:fv});return JSON.stringify(fv.multiDiscountPromotion);}return "nf";})()')
+                log(f"多件优惠：已点选「满2件打折」+ 重设 9.9，back={_back}")
+            else:
+                log("多件优惠：未找到「满2件打折」菜单项")
+        else:
+            log("多件优惠：未找到 percent 下拉触发器（可能已选或 UI 不同，跳过 CDP 点选）")
+    except Exception as e:
+        log(f"多件优惠 CDP 点选异常：{e}")
+
     return r
 
 
@@ -1156,7 +1183,7 @@ def main():
             else:
                 progress("fix_category", "skip", "无类目关键词，跳过")
             # 第 1 步：GS 注入（多件优惠 + 重量）—— 必须最先（GS 会清 DOM 值，skill「GS→DOM」硬顺序）
-            fill_v2_gs(evaluate, weight)
+            fill_v2_gs(evaluate, send, weight)
             progress("fill_gs", "done", "多件优惠+重量已注入")
             time.sleep(1)
             # 第 2 步：标题/导购
