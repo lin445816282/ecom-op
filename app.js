@@ -1140,6 +1140,15 @@ const FT_STATUS = {
 const FT_TASK_STATUS = { queued: '排队', crawling: '抓取', ai: 'AI', publishing: '上架中', published: '已上架', submitted: '待审核', draft: '草稿', failed: '失败', stopped: '停止' };
 const FT_FIX_LABEL = { local: '可自愈', republish: '需重跑', manual: '需人工' };
 
+// 淘宝 submitted = 待人工点击提交（还没真正提交），拼多多 submitted = 已提交待审核。
+// skill 要求两者区分，前端统一显示「待审核」会误导。
+function apSubmittedLabel(t) {
+  if (t && t.status === 'submitted' && (t.platform === 'taobao' || t.shop_id === 12)) {
+    return '待人工提交';
+  }
+  return '';
+}
+
 async function renderFlowTree() {
   if (_ftTimer) { clearInterval(_ftTimer); _ftTimer = null; }
   const el = $('#view-flowtree');
@@ -1190,7 +1199,7 @@ async function loadFtTasks() {
   const opts = [`<option value="">📖 总览（全流程 + 问题知识库）</option>`];
   opts.push(..._ftTasks.map(t => {
     const title = (t.ai_title || t.raw_title || t.source_url || '').slice(0, 26);
-    const st = FT_TASK_STATUS[t.status] || t.status;
+    const st = apSubmittedLabel(t) || FT_TASK_STATUS[t.status] || t.status;
     return `<option value="${t.id}" ${t.id===_ftTaskId?'selected':''}>#${t.id} [${st}] ${esc(title)}</option>`;
   }));
   sel.innerHTML = opts.join('');
@@ -2693,7 +2702,7 @@ async function loadApList() {
         <div class="ap-task-title">${esc(t.raw_title || t.ai_title || t.source_url || '')}</div>
         <div class="ap-task-sub">${shopTag}${operatorTag}${priceModeTag}${supplierTag}</div>
       </div>
-      <span class="ap-task-status">${statusTag[t.status] || t.status}</span>
+      <span class="ap-task-status">${apSubmittedLabel(t) || statusTag[t.status] || t.status}</span>
       ${isLinkDead ? `<span class="ap-task-linkdead" title="${esc(t.error || '')}">🔗 链接失效</span>` : ''}
       ${canRepub ? `<button class="ap-task-repub" onclick="event.stopPropagation();republishTask(${t.id})">重新上架</button>` : ''}
       ${t.publish_progress && t.publish_progress.step ? `<span class="ap-task-progress">${esc(t.publish_progress.step_name)} ${t.publish_progress.step}/8</span>` : ''}
@@ -2775,7 +2784,7 @@ function apQueueDetailHtml(t) {
       </div>
     </div>`;
   }).join('');
-  const statusTag = { queued:'排队中', crawling:'抓取中', ai:'AI配置中', publishing:'上架中', published:'✅ 已上架', submitted:'⏳待审核', draft:'📄草稿', failed:'❌ 失败', stopped:'⏹ 已停止' }[t.status] || t.status;
+  const statusTag = apSubmittedLabel(t) || ({ queued:'排队中', crawling:'抓取中', ai:'AI配置中', publishing:'上架中', published:'✅ 已上架', submitted:'⏳待审核', draft:'📄草稿', failed:'❌ 失败', stopped:'⏹ 已停止' }[t.status] || t.status);
   const pp = t.publish_progress;
   let ppHtml = '';
   if (pp && pp.step) {
@@ -2862,7 +2871,7 @@ async function loadApQueue() {
   let html = '';
   if (running.length) {
     html += `<div style="font-size:12px;color:#64748b;font-weight:600;margin-bottom:6px">🔄 正在执行（${running.length}）</div>`;
-    html += running.map(t => row(t, statusTag[t.status] || t.status, '#2563eb')).join('');
+    html += running.map(t => row(t, apSubmittedLabel(t) || statusTag[t.status] || t.status, '#2563eb')).join('');
   }
   if (upcoming.length) {
     html += `<div style="font-size:12px;color:#64748b;font-weight:600;margin:10px 0 6px">⏳ 后续执行（${upcoming.length}）</div>`;
