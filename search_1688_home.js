@@ -66,25 +66,32 @@ const sleep = ms => new Promise(r=>setTimeout(r,ms));
     }
     await sleep(1200);
 
-    // 零反斜杠提取：indexOf + 字符比较
+    // 零反斜杠提取：支持 offerId= 与 /offer/<id>.html 两种链接；标题取 [class*=title]，价格附后
     const r = await send('Runtime.evaluate',{expression:`(function(){
       var out=[]; var seen={};
-      var links = document.querySelectorAll('a[href*="offerId="]');
+      var links = document.querySelectorAll('a[href*="detail.1688.com/offer/"], a[href*="offerId="]');
       for (var i=0;i<links.length;i++){
         var href = links[i].href || '';
-        var idx = href.indexOf('offerId=');
-        if(idx < 0) continue;
-        var rest = href.slice(idx + 8);
         var oid = '';
-        for(var j=0;j<rest.length;j++){
-          var c = rest.charAt(j);
-          if(c >= '0' && c <= '9'){ oid += c; } else { break; }
+        var i1 = href.indexOf('offerId=');
+        var i2 = href.indexOf('/offer/');
+        if(i1 >= 0){
+          var s1 = href.slice(i1 + 8);
+          for(var j=0;j<s1.length;j++){ var c=s1.charAt(j); if(c>='0'&&c<='9'){ oid+=c; } else { break; } }
+        } else if(i2 >= 0){
+          var s2 = href.slice(i2 + 7);
+          for(var k=0;k<s2.length;k++){ var c=s2.charAt(k); if(c>='0'&&c<='9'){ oid+=c; } else { break; } }
         }
         if(!oid || seen[oid]) continue;
-        var txt = (links[i].textContent || '').trim();
-        if(txt.length < 10) continue;
+        var tel = links[i].querySelector('[class*="title"]');
+        var title = tel ? (tel.textContent || '').trim() : '';
+        var pm = (links[i].textContent || '').match(/¥([0-9]+(?:\.[0-9]+)?)/);
+        var txt = (title || (links[i].textContent || '').trim());
+        if(pm) txt = txt + ' ¥' + pm[1];
+        txt = txt.slice(0, 260);
+        if(txt.length < 6) continue;
         seen[oid] = 1;
-        out.push({oid: oid, url: 'https://detail.1688.com/offer/' + oid + '.html', txt: txt.slice(0, 220)});
+        out.push({oid: oid, url: 'https://detail.1688.com/offer/' + oid + '.html', txt: txt});
         if(out.length >= ${LIMIT}) break;
       }
       return JSON.stringify(out);

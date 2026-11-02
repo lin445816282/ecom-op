@@ -140,7 +140,7 @@ def collect(port: str, stat_date: str = None):
     print("字体映射:", {hex(k): v for k, v in mapping.items()})
 
     # 3.5 只保留 AI 老板自己上架的商品（published_goods 里的长 ID），排除店铺老商品（短 ID）
-    pub_ids = {str(g.get("goods_id")) for g in catalog.list_published_goods(limit=300) if g.get("goods_id")}
+    pub_ids = {str(g.get("goods_id")) for g in catalog.list_published_goods(limit=10000) if g.get("goods_id")}
 
     # 4. 解密 + 入库
     cnt = 0

@@ -260,7 +260,13 @@ async function fillByType(c, selector, text){
     for(let _ui=0; _ui<4 && !_imgUp; _ui++){
       try{
         const docF=await c.send('DOM.getDocument',{depth:3});
-        const qimgF=await c.send('DOM.querySelector',{nodeId:docF.root.nodeId,selector:'[class*="uploadImgEnter"] input[type="file"][accept*="image"]'});
+        let qimgF=null;
+        // 2026-10 改版：主图 file input 从 uploadImgEnter 迁到 MaterialModalButton（uploadImgEnter 现被视频上传占用）。
+        // 双 selector 兜底自愈：先试新版 MaterialModalButton，找不到再试旧版 uploadImgEnter。
+        for(const _sel of ['[class*="MaterialModalButton"] input[type="file"][accept*="image"]','[class*="uploadImgEnter"] input[type="file"][accept*="image"]']){
+          const _q=await c.send('DOM.querySelector',{nodeId:docF.root.nodeId,selector:_sel});
+          if(_q && _q.nodeId){ qimgF=_q; break; }
+        }
         if(qimgF && qimgF.nodeId){
           await c.send('DOM.setFileInputFiles',{nodeId:qimgF.nodeId,files:cfg.images.slice(0,10)});
           await sleep(8000);
@@ -268,14 +274,11 @@ async function fillByType(c, selector, text){
           // 旧「数 img/bg」方式永久返回 0 会误判主图为空。改为读 uploadImgEnter 容器内 (N/M) 文字。
           const _imgCnt=await ev(c, `(()=>{
             const sel=document.querySelector('[class*="goodsCarousel_selected"]');
-            if(!sel)return 0;
-            const txt=(sel.innerText||sel.textContent||'').trim();
-            const a=txt.indexOf('(');
-            const slash=txt.indexOf('/');
-            const b=txt.indexOf(')');
-            if(a<0||slash<0||b<0||a>=slash||slash>=b)return 0;
-            const n=parseInt(txt.slice(a+1,slash));
-            return isNaN(n)?0:n;
+            if(sel){const t=(sel.innerText||sel.textContent||'').trim();const a=t.indexOf('(');const s=t.indexOf('/');const b=t.indexOf(')');if(a>=0&&s>a&&b>s){const n=parseInt(t.slice(a+1,s));if(!isNaN(n)&&n>0)return n;}}
+            let n=0;
+            const mms=[...document.querySelectorAll('[class*="MaterialModalButton"]')];
+            mms.forEach(function(mm){if(!mm.querySelectorAll)return;[...mm.querySelectorAll('[class*="imageBox"]')].forEach(function(x){const st=x.getAttribute?x.getAttribute('style')||'':'';if(st.indexOf('background-image')>=0)n++;});});
+            return n;
           })()`);
           if(_imgCnt && _imgCnt>0){ _imgUp=true; log('  上传完成', _imgCnt, '张'); }
           else if(_ui<3){ log('  ⚠️ 图片未生效(0张)，重试上传…'); }
@@ -336,6 +339,7 @@ async function fillByType(c, selector, text){
     log('  点「下一步」进入详情页');
     let _jumped=false;
     for(let _ni=0; _ni<5 && !_jumped; _ni++){
+      await sleep(3000);  // 点击前等3秒：图片上传/predictCate 未就绪时点「下一步」会被前置校验静默拦截
       const nextClick=await cdpClickByText(c,'下一步');
       log('  下一步:', nextClick);
       for(let _wi=0; _wi<3; _wi++){
@@ -358,18 +362,57 @@ async function fillByType(c, selector, text){
     log('  自动预测类目:', catCheck || '(未读到)');
   } else {
     // ===== 普通店：先选类目 =====
-    log('[1/8] 选类目: ' + cfg.categoryPath);
-    const sel=await searchAndSelectCategory();
-    log('  类目选择:', sel);
-    if(sel!=='ok'){ log('❌ 类目未匹配，终止（类目路径与拼多多实际不一致，需人工确认）'); c.ws.close(); process.exit(1); }
-    await sleep(2000);
-    const confirm=await ev(c,`(()=>{const btn=[...document.querySelectorAll('button')].find(b=>(b.textContent||'').trim()==='确认发布该类商品');if(btn){btn.click();return 'ok';}return 'no confirm'})()`);
-    log('  类目确认:', confirm);
-    if(confirm!=='ok'){ log('❌ 类目确认按钮未找到，终止'); c.ws.close(); process.exit(1); }
-    await sleep(6000);
-    const href=await ev(c,'location.href');
-    log('  发布页:', href);
-    if(!href || !/goods_add\/index/.test(href)){ log('❌ 未跳转发布页，终止'); c.ws.close(); process.exit(1); }
+    // 连续点击失败后关掉页面重新发布（task_2485 教训：浮层收起偶发失败 + 点击时序问题，
+    // 页面状态已脏时重新导航能重置，比整体重跑 scrape+ai 更快更精准）。
+    let _cfJumped=false;
+    let _cfHref='';
+    for(let _round=0; _round<3 && !_cfJumped; _round++){
+      if(_round>0){
+        log('  🔄 第 '+(_round+1)+' 轮：关掉页面重新发布…');
+        await c.send('Page.navigate',{url:'about:blank'});
+        await sleep(1500);
+        await c.send('Page.navigate',{url:'https://mms.pinduoduo.com/goods/category'});
+        await sleep(6000);
+      }
+      log('[1/8] 选类目: ' + cfg.categoryPath);
+      const sel=await searchAndSelectCategory();
+      log('  类目选择:', sel);
+      if(sel!=='ok'){ log('  类目未匹配，换轮重试'); continue; }
+      await sleep(2000);
+      // 收起类目搜索下拉浮层：搜索后浮层(Portal)覆盖底部「确认发布该类商品」按钮，
+      // 直接点按钮坐标会命中搜索项(如"汽配摩托")，点击无效不跳转（task_2483/2475 教训）。
+      // 解决：点页面右上角空白让搜索框失焦、浮层收起，循环直到按钮暴露(elementFromPoint 命中按钮)。
+      for(let _bl=0; _bl<4; _bl++){
+        const _exposed = await ev(c, `(()=>{
+          const b=[...document.querySelectorAll('button')].find(x=>(x.textContent||'').trim().replace(/\\s+/g,' ').includes('确认发布该类商品'));
+          if(!b)return 'NOBTN';
+          const r=b.getBoundingClientRect();
+          const h=document.elementFromPoint(Math.round(r.x+r.width/2), Math.round(r.y+r.height/2));
+          return (h===b||b.contains(h))?'EXPOSED':'COVERED';
+        })()`);
+        if(_exposed==='EXPOSED'){ log('  确认按钮已暴露(浮层已收起)'); break; }
+        const _pt = await ev(c, `(()=>JSON.stringify({x:window.innerWidth-40, y:Math.round(window.innerHeight*0.15)}))()`);
+        let _px=0,_py=0; try{ const _p=JSON.parse(_pt); _px=_p.x; _py=_p.y; }catch(e){}
+        await c.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:_px,y:_py});
+        await sleep(120);
+        await c.send('Input.dispatchMouseEvent',{type:'mousePressed',x:_px,y:_py,button:'left',clickCount:1});
+        await c.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:_px,y:_py,button:'left',clickCount:1});
+        await sleep(1200);
+      }
+      // 真实轨迹点击（btn.click() JS 合成点击被 React 静默拦截，不跳转发布页）
+      for(let _ci=0; _ci<5 && !_cfJumped; _ci++){
+        const confirm=await cdpClickByText(c,'确认发布该类商品');
+        log('  类目确认:', confirm, '('+(_ci+1)+'/5)');
+        if(confirm!=='clicked'){ log('  类目确认按钮未找到/点击失败，换轮重试'); break; }
+        await sleep(3000);
+        _cfHref=await ev(c,'location.href');
+        if(/goods_add\/index/.test(_cfHref||'')){ _cfJumped=true; break; }
+        if(_ci<4) log('  未跳转，重试点击…');
+      }
+      if(_cfJumped) break;
+    }
+    log('  发布页:', _cfHref);
+    if(!_cfJumped){ log('❌ 未跳转发布页，终止（已重试 3 轮）'); c.ws.close(); process.exit(1); }
 
     // ===== 普通店：上传主图（selector 精确指向主图区 + 上传后验证重试）=====
     log('[2/8] 上传主图', cfg.images.length, '张');
@@ -956,7 +999,11 @@ async function fillByType(c, selector, text){
     log('  ⚠️ 主图为空，提交前重传…');
     try{
       const _doc=await c.send('DOM.getDocument',{depth:3});
-      const _qi=await c.send('DOM.querySelector',{nodeId:_doc.root.nodeId, selector:'[class*="uploadImgEnter"] input[type="file"][accept*="image"]'});
+      let _qi=null;
+      for(const _sel of ['[class*="MaterialModalButton"] input[type="file"][accept*="image"]','[class*="uploadImgEnter"] input[type="file"][accept*="image"]']){
+        const _q=await c.send('DOM.querySelector',{nodeId:_doc.root.nodeId, selector:_sel});
+        if(_q&&_q.nodeId){ _qi=_q; break; }
+      }
       if(_qi&&_qi.nodeId){ await c.send('DOM.setFileInputFiles',{nodeId:_qi.nodeId, files:cfg.images.slice(0,10)}); await sleep(8000); log('  主图重传完成'); }
     }catch(e){ log('  主图重传异常:', e.message); }
   }

@@ -1,0 +1,4 @@
+确认/创建按钮: [{"txt":"+ 创建规格","disabled":false,"visible":true,"y":345},{"txt":"确认","disabled":false,"visible":false,"y":0}]
+请输入输入框值: [{"val":"款式","w":193},{"val":"","w":232},{"val":"","w":192},{"val":"","w":232}]
+customSaleProp: [{"name":"custom_-1","value":"custom_-1","text":"商品规格","uiType":"skuUniqueTitle","showUploadImage":true,"maxPropItems":1,"maxValueItems":1000,"maxValueLength":128,"uploadConfig":{"mediaLocalUpload":false,"mediaType":"newSucaiSelector","maxUpload":"20MB","picMaxSize":"20MB"},"items":[],"asyncOverlay":{"url":"/sell/v2/asyncOpt.htm?optType=skuQualityRecommendAsyncRender&catId=50021880&itemId=1095711356038","method":"post"}}]
+DONE

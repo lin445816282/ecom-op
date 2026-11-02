@@ -1,0 +1,10 @@
+URL: https://item.upload.taobao.com/sell/v2/publish.htm?itemId=1095711356038&catId=50021880&fromSwitchCategory=true&isEdit=false&fromAIImage=true&auctionType=b&keyProps=%7B%7D&fromAIPublish=true&newRouter=1&cacheId=3031723018_1792828921243_18300495315404185&x-gpf-submit-trace-id=213e03b917928289211311149e0ccd
+=== 店铺分类相关文本 ===
+["查看店铺分类"]
+=== 确认/创建按钮 ===
+[{"txt":"+ 创建规格","disabled":false,"visible":true},{"txt":"确认","disabled":false,"visible":false}]
+=== 套餐类型元素 ===
+[]
+=== 页面/抽屉状态 ===
+{"scrollY":3492,"bodyHeight":4038,"hasDrawer":false,"drawerVisible":false}
+DONE

@@ -116,7 +116,7 @@ def select_products(n=5):
     catalog.init_db()
     # 已上架的 offerId 去重（忽略 query 参数，避免 ?spm= 等导致字符串不等）
     existing = set()
-    for g in catalog.list_published_goods(limit=500):
+    for g in catalog.list_published_goods(limit=10000):
         oid = _offer_id((g.get("source_url") or "").strip())
         if oid:
             existing.add(oid)

@@ -68,7 +68,7 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
     const data = JSON.stringify({componentKey:'Wp_pc_common_offerlist', params});
     const t = Date.now();
     const sign = md5(token + '&' + t + '&' + appKey + '&' + data);
-    const url = 'https://h5api.m.1688.com/h5/mtop.alibaba.alisite.cbu.server.ModuleAsyncService/1.0/?jsv=2.7.5&appKey='+appKey+'&t='+t+'&sign='+sign+'&api=mtop.alibaba.alisite.cbu.server.ModuleAsyncService&v=1.0&type=json&valueType=string&dataType=jsonp&timeout=10000';
+    const url = 'https://h5api.m.1688.com/h5/mtop.alibaba.alisite.cbu.server.moduleasyncservice/1.0/?jsv=2.7.5&appKey='+appKey+'&t='+t+'&sign='+sign+'&api=mtop.alibaba.alisite.cbu.server.ModuleAsyncService&v=1.0&type=json&valueType=string&dataType=jsonp&timeout=10000';
     let resp, text;
     try{
       resp = await fetch(url, {method:'POST', credentials:'include', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:'data='+encodeURIComponent(data)});

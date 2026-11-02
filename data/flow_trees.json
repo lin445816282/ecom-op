@@ -11,7 +11,8 @@
         {"id": "ai_publish.n2", "label": "N2 确认（类目识别）", "kind": "leaf", "constraint": "候选类目未点选会致「下一步」disabled：retry==2 点候选类目，retry==3 点「确定」确认切类目"}
       ]},
       {"id": "fix_category", "label": "类目修正", "kind": "leaf", "fix": "local", "constraint": "AI 类目易误判，切到 config.categoryKeyword 正确类目；须在填表前（切类目会清空已填字段）"},
-      {"id": "fill_gs", "label": "GS 注入（多件优惠+重量）", "kind": "leaf", "constraint": "必须最先（GS 会清 DOM 值，skill「GS→DOM」硬顺序）；永不碰 fv.sku（会清空 30+ 字段）；多件优惠用 CDP 点下拉选「满2件打折」"},
+      {"id": "fill_gs", "label": "GS 注入（重量）", "kind": "leaf", "constraint": "只注入 deliver-card.weight；不深克隆 formValues（丢主图）；多件优惠已拆到 fill_multi_discount 节点"},
+      {"id": "fill_multi_discount", "label": "多件优惠（满2件打折）", "kind": "leaf", "constraint": "须在一口价填好后启用（否则 checkbox/下拉 disabled 显示「无选项」）；CDP 点「启用」checkbox→点开优惠方式下拉→点「满2件打折」→nativeSetter 填 9.9"},
       {"id": "fill_title", "label": "标题 / 导购", "kind": "leaf", "fix": "local", "constraint": "标题 nativeSetter 失效，必须 CDP 键盘法；导购标题限 10-15 字（有下限），不足补全 13 字"},
       {"id": "fill_price", "label": "一口价", "kind": "leaf", "constraint": "CDP 键盘法填（nativeSetter 对数字字段失效），取 SKU 最高价"},
       {"id": "fill_sku", "label": "SKU 抽屉", "kind": "leaf", "fix": "local", "constraint": "新版 SKU：先设规格类型（请选择+请输入）再填值；分层展示须取消空维度(0)prop-item；选单品用 CDP 点击"},

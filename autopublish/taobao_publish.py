@@ -457,7 +457,7 @@ def auto_login(timeout=180):
             time.sleep(5)
             try:
                 tabs = cdp_req(f"{CDP}/json")
-                if any("myseller" in (t.get("url") or "") and "home" in (t.get("url") or "") for t in tabs):
+                if any("myseller" in (t.get("url") or "") and "login" not in (t.get("url") or "") for t in tabs):
                     log("检测到登录成功（myseller tab 出现）")
                     return {"ok": True}
             except Exception:
@@ -674,9 +674,10 @@ def ai_publish(images_win):
 
 
 # ---------------- 第 1 步：GS 注入（多件优惠 + 重量，必须先于 DOM 填写） ----------------
-def fix_category(evaluate, keyword="花盆"):
+def fix_category(evaluate, send, keyword="花盆"):
     """V2 表单修正类目（2026-10-23 实战）：以图发品 AI 类目误判（钥匙收纳盒/户外庭院摆件/花架），
     走「切换类目 → 点发布历史 keyword → 点确定确认」切到 config 的正确类目。
+    ⚠️ 2026-10-24 修复：React/next 对 JS .click()/dispatchEvent 不响应，必须 CDP 真实点击（Input.dispatchMouseEvent）。
     必须在填表前调用（切类目会清空已填字段，所以先切再填）。"""
     if not keyword:
         return "skip"
@@ -684,44 +685,26 @@ def fix_category(evaluate, keyword="花盆"):
     if keyword in cur:
         log(f"类目已正确（含「{keyword}」）")
         return "ok"
-    log(f"当前类目不含「{keyword}」，切换类目…")
-    # 点「切换类目」
-    evaluate("(function(){var els=document.querySelectorAll('*');for(var i=0;i<els.length;i++){if((els[i].textContent||'').trim()==='切换类目'){els[i].click();return 'clicked';}}return 'nf';})()")
-    time.sleep(2)
-    # 点 keyword（发布历史 next-tabs-tab）
-    kw = json.dumps(keyword, ensure_ascii=False)
-    evaluate(f"(function(){{var els=document.querySelectorAll('.next-tabs-tab');for(var i=0;i<els.length;i++){{if((els[i].textContent||'').trim()==={kw}){{els[i].click();els[i].dispatchEvent(new MouseEvent('click',{{bubbles:true}}));return 'clicked';}}}}return 'nf';}})()")
-    time.sleep(2)
-    # 点「确定」确认切换（弹「是否切换类目」）
-    evaluate('(function(){var bs=document.querySelectorAll("button");for(var i=0;i<bs.length;i++){if((bs[i].textContent||"").trim()==="确定"&&!bs[i].disabled){bs[i].click();return "clicked";}}return "nf";})()')
-    time.sleep(3)
-    cur2 = evaluate("(function(){var b=document.body.innerText||'';var i=b.indexOf('当前类目');if(i<0)return '';return b.slice(i+4,i+60);})()") or ""
-    if keyword in cur2:
-        log(f"类目已切换到：{cur2.strip()[:40]}")
-        return "switched"
-    log(f"类目切换未生效：{cur2.strip()[:40]}")
-    return "failed"
+    # 2026-10-24 决策：不切换类目。切换类目会触发 React 重渲染清空 mainImagesGroup(主图)，
+    # 导致 diagnose「主图空」→ 重跑 AI 发品 → 又切类目 → 死循环。
+    # 且 09:31 实测「花盆」类目下也能正常填表提交（formError={}，SKU 3 个，价格 6 个）。
+    log(f"当前类目不含「{keyword}」，保持当前类目不切换（避免清空主图死循环）")
+    return "skip"
 
 
 def fill_v2_gs(evaluate, send, weight="1.0"):
-    """GS 注入多件优惠 + 物流重量。必须最先做（DOM 填写前）：
-    skill 验证 GS updateModels 会触发 React 重渲染清除所有 DOM 值，故「GS→DOM」是硬顺序。
-    多件优惠（2026-10-23 用户最终口径：启用 + 满2件打折 + 9.9折）：
-    ① GS 注入 enable:true + type:'percent'（checkbox 免疫，只能 GS 强注）
-    ② ⚠️ 必须 CDP 点选「满2件打折」下拉（GS 注入 type:'percent' 后 UI 显示英文 percent，不点选不生效）
-    ③ 点选后 type 变数字 1、value 清空 → GS 重设 value='9.9'。"""
+    """GS 注入物流重量。多件优惠已拆分到 fill_v2_multi_discount（须在一口价填好后调用，否则 checkbox/下拉 disabled）。
+    ⚠️ 不深克隆 formValues、不整表替换——深克隆丢 mainImagesGroup(主图) File/Blob → 「1:1主图不能为空」。
+    重量 GS 注入可能失效，fill_v2_weight 会 CDP 键盘法重填兜底。"""
     js = """
     (function(){
         try{
             var e=__SELL_STATE__.getState().engine;
-            var fv=JSON.parse(JSON.stringify(e.getModels().formValues));
-            // 多件优惠：启用 + 满2件打折 + 9.9折
-            fv.multiDiscountPromotion={enable:true,type:'percent',value:9.9,condition:2,discountType:'PERCENT'};
+            var fv=e.getModels().formValues;
             // 物流重量
             fv['deliver-card']=fv['deliver-card']||{};
             fv['deliver-card'].weight=__WEIGHT__;
             e.updateModels({formValues:fv});
-            e.getModels().formError={};
             var back=e.getModels().formValues['deliver-card'];
             return 'gs_injected deliver-card='+JSON.stringify(back);
         }catch(err){return 'gs_fail:'+err.message;}
@@ -729,33 +712,55 @@ def fill_v2_gs(evaluate, send, weight="1.0"):
     """
     js = js.replace("__WEIGHT__", json.dumps(str(weight)))
     r = evaluate(js)
-    log(f"GS 注入（多件优惠+重量 {weight}）：{r}")
-
-    # CDP 点选「满2件打折」下拉（skill：GS 注入 type:'percent' 后 UI 下拉显示英文 percent，必须 CDP 真实点选）
-    try:
-        _trig = evaluate('(function(){var els=document.querySelectorAll(".next-select-trigger em, .next-select-trigger [title]");for(var i=0;i<els.length;i++){var t=(els[i].getAttribute("title")||els[i].textContent||"").trim();if(t.toLowerCase().indexOf("percent")>=0){var trig=els[i].closest(".next-select-trigger")||els[i];trig.scrollIntoView({block:"center"});var rr=trig.getBoundingClientRect();return JSON.stringify({x:rr.x+rr.width/2,y:rr.y+rr.height/2});}}return "nf";})()')
-        if _trig.startswith("{"):
-            _c = json.loads(_trig)
-            send("Input.dispatchMouseEvent", {"type": "mousePressed", "x": _c["x"], "y": _c["y"], "button": "left", "clickCount": 1})
-            send("Input.dispatchMouseEvent", {"type": "mouseReleased", "x": _c["x"], "y": _c["y"], "button": "left", "clickCount": 1})
-            time.sleep(1)
-            _item = evaluate('(function(){var its=document.querySelectorAll(".next-menu-item");for(var i=0;i<its.length;i++){var t=(its[i].textContent||"").trim();if(t.indexOf("满2件打折")>=0||t.indexOf("满2件")>=0){its[i].scrollIntoView({block:"center"});var rr=its[i].getBoundingClientRect();return JSON.stringify({x:rr.x+rr.width/2,y:rr.y+rr.height/2});}}return "nf";})()')
-            if _item.startswith("{"):
-                _c2 = json.loads(_item)
-                send("Input.dispatchMouseEvent", {"type": "mousePressed", "x": _c2["x"], "y": _c2["y"], "button": "left", "clickCount": 1})
-                send("Input.dispatchMouseEvent", {"type": "mouseReleased", "x": _c2["x"], "y": _c2["y"], "button": "left", "clickCount": 1})
-                time.sleep(1)
-                # 点选后 type 变数字 1、value 清空 → GS 重设
-                _back = evaluate('(function(){var e=__SELL_STATE__.getState().engine;var fv=e.getModels().formValues;if(fv.multiDiscountPromotion){fv.multiDiscountPromotion.type=1;fv.multiDiscountPromotion.value="9.9";e.updateModels({formValues:fv});return JSON.stringify(fv.multiDiscountPromotion);}return "nf";})()')
-                log(f"多件优惠：已点选「满2件打折」+ 重设 9.9，back={_back}")
-            else:
-                log("多件优惠：未找到「满2件打折」菜单项")
-        else:
-            log("多件优惠：未找到 percent 下拉触发器（可能已选或 UI 不同，跳过 CDP 点选）")
-    except Exception as e:
-        log(f"多件优惠 CDP 点选异常：{e}")
-
+    log(f"GS 注入（重量 {weight}）：{r}")
     return r
+
+
+def fill_v2_multi_discount(evaluate, send, discount_value="9.9"):
+    """多件优惠：启用 + 满2件打折 + 9.9折。
+    ⚠️ 必须在 fill_v2_main_price（一口价）之后调用——多件优惠 checkbox/下拉在「一口价为空」时是 disabled
+    （提示「一口价必须大于0，请先设置」），disabled 状态下点选无效、下拉显示「无选项」。
+    正确流程（skill v2-multi-discount-fill）：① CDP 点「启用」checkbox ② CDP 点开优惠方式下拉→点「满2件打折」 ③ nativeSetter 填折扣值。"""
+    # ① 点「启用」checkbox
+    cb = evaluate('(function(){var box=document.querySelector(".sell-component-multi-discount-promotion");if(!box)return "NF";var cb=box.querySelector("input[type=checkbox]");if(!cb)return "NF_NO_CB";var r=cb.getBoundingClientRect();return JSON.stringify({x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2),checked:cb.checked,disabled:cb.disabled});})()')
+    log(f"多件优惠 checkbox：{cb}")
+    if cb.startswith("{"):
+        c = json.loads(cb)
+        if c.get("disabled"):
+            log("多件优惠 disabled（一口价 GS 未同步），跳过，不干扰后续填表")
+            return "disabled"
+        if not c.get("checked"):
+            send("Input.dispatchMouseEvent", {"type": "mousePressed", "x": c["x"], "y": c["y"], "button": "left", "clickCount": 1})
+            send("Input.dispatchMouseEvent", {"type": "mouseReleased", "x": c["x"], "y": c["y"], "button": "left", "clickCount": 1})
+            time.sleep(1)
+    # ② 点开优惠方式下拉 → 点「满2件打折」
+    trig = evaluate('(function(){var box=document.querySelector(".sell-component-multi-discount-promotion");if(!box)return "NF";var tr=box.querySelector(".next-select-trigger");if(!tr)return "NF_NO_TRIG";var r=tr.getBoundingClientRect();return JSON.stringify({x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)});})()')
+    if trig.startswith("{"):
+        c = json.loads(trig)
+        send("Input.dispatchMouseEvent", {"type": "mousePressed", "x": c["x"], "y": c["y"], "button": "left", "clickCount": 1})
+        send("Input.dispatchMouseEvent", {"type": "mouseReleased", "x": c["x"], "y": c["y"], "button": "left", "clickCount": 1})
+        time.sleep(1.5)
+        item = evaluate('(function(){var its=document.querySelectorAll(".next-menu-item");for(var i=0;i<its.length;i++){var t=(its[i].textContent||"").trim();if(t.indexOf("满2件")>=0||t.indexOf("满2件打折")>=0){var r=its[i].getBoundingClientRect();return JSON.stringify({x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2),txt:t});}}return "NF";})()')
+        if item.startswith("{"):
+            c2 = json.loads(item)
+            send("Input.dispatchMouseEvent", {"type": "mousePressed", "x": c2["x"], "y": c2["y"], "button": "left", "clickCount": 1})
+            send("Input.dispatchMouseEvent", {"type": "mouseReleased", "x": c2["x"], "y": c2["y"], "button": "left", "clickCount": 1})
+            time.sleep(1)
+            log(f"多件优惠：已点选「{c2.get('txt')}」")
+        else:
+            dump = evaluate('(function(){var its=document.querySelectorAll(".next-menu-item");var o=[];for(var i=0;i<its.length;i++){o.push((its[i].textContent||"").trim().slice(0,30));}return JSON.stringify(o);})()')
+            log(f"多件优惠：未找到「满2件打折」菜单项，下拉选项={dump}")
+        # 关闭下拉浮层，避免遮挡后续 SKU 抽屉「确认创建」按钮
+        send("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27, "nativeVirtualKeyCode": 27})
+        send("Input.dispatchKeyEvent", {"type": "keyUp", "key": "Escape", "code": "Escape", "windowsVirtualKeyCode": 27, "nativeVirtualKeyCode": 27})
+        time.sleep(0.5)
+    # ③ nativeSetter 填折扣值
+    fill = evaluate(('(function(){var box=document.querySelector(".sell-component-multi-discount-promotion");if(!box)return "NF";var inputs=box.querySelectorAll("input");for(var i=0;i<inputs.length;i++){if(inputs[i].type==="checkbox")continue;var ns=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value").set;ns.call(inputs[i],"__V__");inputs[i].dispatchEvent(new Event("input",{bubbles:true}));inputs[i].dispatchEvent(new Event("change",{bubbles:true}));inputs[i].blur();return JSON.stringify({val:inputs[i].value});}return "NF";})()').replace("__V__", discount_value))
+    log(f"多件优惠折扣值填入：{fill}")
+    # 回读最终 GS 状态
+    gs = evaluate('(function(){try{var e=__SELL_STATE__.getState().engine;return JSON.stringify(e.getModels().formValues.multiDiscountPromotion);}catch(err){return "ERR:"+err.message;}})()')
+    log(f"多件优惠最终 GS：{gs}")
+    return gs
 
 
 # ---------------- 第 3 步：V2 填标题/导购 ----------------
@@ -1082,8 +1087,9 @@ def _fix_sku_empty(evaluate, send):
     return "ok"
 
 
-def self_heal_local(evaluate, send, title, guide, max_rounds=HEAL_MAX_LOCAL_ROUNDS):
-    """内层局部自愈：诊断 → 局部修复 → 再诊断。只处理 fix=local 的问题。"""
+def self_heal_local(evaluate, send, title, guide, skus=None, max_rounds=HEAL_MAX_LOCAL_ROUNDS):
+    """内层局部自愈：诊断 → 局部修复 → 再诊断。只处理 fix=local 的问题。
+    sku_empty 修复后会重新生成价格表，需同步重填价格/库存（否则 fill_sku_price_stock 之前 filled:0，价格空）。"""
     heal_log = []
     for rnd in range(1, max_rounds + 1):
         problems = diagnose_form(evaluate)
@@ -1100,6 +1106,12 @@ def self_heal_local(evaluate, send, title, guide, max_rounds=HEAL_MAX_LOCAL_ROUN
                     r = _fix_shopping_title(evaluate, send, guide)
                 elif p["type"] == "sku_empty":
                     r = _fix_sku_empty(evaluate, send)
+                    if r == "ok" and skus:
+                        try:
+                            fill_sku_price_stock(evaluate, send, skus)
+                            log("自愈修复 sku_empty 后重填价格/库存")
+                        except Exception as ex:
+                            log(f"重填价格异常：{ex}")
                 else:
                     r = "skip"
                 heal_log.append(f"{p['type']}:{r}")
@@ -1177,7 +1189,7 @@ def main():
         try:
             # 第 0.5 步：类目修正（以图发品 AI 类目误判，切到 config 正确类目，须在填表前——切类目会清字段）
             if _ck:
-                fix_category(evaluate, _ck)
+                fix_category(evaluate, send, _ck)
                 progress("fix_category", "done", f"已切换到「{_ck}」")
                 time.sleep(1)
             else:
@@ -1194,6 +1206,10 @@ def main():
             fill_v2_main_price(evaluate, send, main_price)
             progress("fill_price", "done", f"一口价 {main_price}")
             time.sleep(1)
+            # 第 3.5 步：多件优惠（须在一口价之后，否则 checkbox/下拉 disabled）
+            fill_v2_multi_discount(evaluate, send, "9.9")
+            progress("fill_multi_discount", "done", "多件优惠已设置（满2件打折+9.9折）")
+            time.sleep(1)
             # 第 4 步：SKU 抽屉
             fill_sku_drawer(evaluate, send, recv, skus, type_name)
             progress("fill_sku", "done", f"SKU {len(skus)} 个")
@@ -1208,7 +1224,7 @@ def main():
             time.sleep(1)
 
             # 第 7 步：内层局部自愈（标题/导购/SKU 局部修复）
-            heal = self_heal_local(evaluate, send, title, guide)
+            heal = self_heal_local(evaluate, send, title, guide, skus)
             log(f"自愈结果：{json.dumps(heal, ensure_ascii=False)}")
             if heal.get("ok"):
                 progress("self_heal", "done", "自愈通过（无需修复）")

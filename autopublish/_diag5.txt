@@ -1,0 +1,4 @@
+物流重量DOM: [{"node":"DIV","txt":"物流重量* 千克当前运费模板，按物流重量","inputVal":"2","disabled":false,"visible":{"w":198,"h":34}},{"node":"DIV","txt":"物流重量* 千克当前运费模板，按物流重量","inputVal":"2","disabled":false,"visible":{"w":198,"h":34}},{"node":"DIV","txt":"物流重量*","inputVal":"2","disabled":false,"visible":{"w":198,"h":34}},{"node":"DIV","txt":"物流重量*","inputVal":"NO_INPUT","disabled":"","visible":null},{"node":"SPAN","txt":"物流重量","inputVal":"NO_INPUT","disabled":"","visible":null}]
+库存DOM: [{"i":0,"val":"0","disabled":false}]
+折叠面板: ["展开收起项:SPAN","展开:SPAN","展开:SPAN","展开:SPAN","展开:SPAN","收起:DIV","收起:SPAN","收起:SPAN","展开:SPAN","展开:SPAN"]
+DONE

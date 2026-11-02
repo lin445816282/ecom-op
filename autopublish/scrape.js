@@ -129,13 +129,18 @@ function readJpegSize(filePath){
     return el?(el.textContent||'').trim().replace(/\\s+/g,' '):'';
   })()`) || '';
   const supplierPrefix = await ev(c, `(()=>{
-    const a=[...document.querySelectorAll('a[href]')].find(x=>{
-      const h=(x.href||'');
-      return /^https?:\\/\\/[a-z0-9-]+\\.1688\\.com\\//i.test(h) && !/detail\\.1688\\.com/i.test(h) && !/login\\.1688\\.com/i.test(h);
-    });
-    if(!a)return '';
-    const m=(a.href||'').match(/^https?:\\/\\/([^.]+)\\.1688\\.com\\//i);
-    return m?m[1]:'';
+    // ⚠️ 1688 店铺前缀识别：详情页有大量系统子域名链接（cart购物车/trade交易/air消息/www首页/login/detail等），
+    // 不能取「第一个」.1688.com 链接——会错取 cart.1688.com，导致后续按错误前缀采集全量商品失败。
+    var SYS=/^(cart|trade|air|www|s|m|login|detail|passport|member|work|h5api|wxthirdplatform|app|my|i|t|cxt|trust|seller|buyer|ad|ads|click|uland|market|goods|sm|ff|kf|support|help|security|open|api|cbu|ocs|ocms|1688)[a-z0-9-]*$/i;
+    var as=[...document.querySelectorAll('a[href]')];
+    function pick(h){ var m=(h||'').match(/^https?:\\/\\/([^.]+)\\.1688\\.com\\//i); return m?m[1]:''; }
+    // 优先级1：/page/offerlist.htm 商品列表页链接（唯一确定店铺子域名）
+    var a=as.find(function(x){ return /^https?:\\/\\/[a-z0-9-]+\\.1688\\.com\\/page\\/offerlist\\.htm/i.test(x.href||''); });
+    // 优先级2：公司/店铺名链接（text 含 公司/厂/店/商行/贸易/工艺/旗舰店），且子域名非系统域名
+    if(!a){ a=as.find(function(x){ var p=pick(x.href); if(!p||SYS.test(p))return false; var t=(x.textContent||'').trim(); return /公司|厂|店|商行|贸易|工艺|家居|旗舰店/.test(t); }); }
+    // 优先级3：任意非系统子域名
+    if(!a){ a=as.find(function(x){ var p=pick(x.href); return p && !SYS.test(p); }); }
+    return a?pick(a.href):'';
   })()`) || '';
   console.log('[scrape] 店铺:', supplierName || '(未识别)', '| 前缀:', supplierPrefix || '(无)');
 

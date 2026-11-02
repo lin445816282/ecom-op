@@ -1,0 +1,6 @@
+URL: https://item.upload.taobao.com/sell/v2/publish.htm?catId=201330101&gpfRenderTrace=213e041817929240187774282e0c98&fromAIImage=true&keyProps=%7B%7D&fromAIPublish=true&newRouter=1&paramCacheId=merge_router_cache_3031723018_1792924058019_143&x-gpf-submit-trace-id=213e041817929240579926435e0c98
+重量 input: None
+formError: None
+类目: None
+标题: None
+DONE

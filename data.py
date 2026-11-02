@@ -2746,6 +2746,100 @@ def ai_generate_publish_config(product: dict, pricing: dict = None, shop_name: s
     return {"config": cfg, "warning": warning, "error": None}
 
 
+def build_fallback_publish_config(product: dict, pricing: dict = None, shop_name: str = "", shop_id: int = 0) -> dict:
+    """AI 配置不可用时的确定性降级配置（不依赖 DeepSeek）。
+
+    沿用原商品标题（经 _clean_title 过滤违禁词，该过滤的还是要过滤），
+    规格/进价从 bodyText 确定性提取，定价用 calc_pricing 固定公式，类目按标题关键词映射。
+    保证 DeepSeek 故障/无 key/解析失败时一键上架仍能继续（而非整个任务失败）。
+    返回结构与 ai_generate_publish_config 一致：{config|None, warning, error}。
+    """
+    import re
+    pricing = pricing or {}
+    title = (product.get("title") or "").strip()
+    if not title:
+        return {"config": None, "warning": "", "error": "商品标题为空（AI 与兜底均无标题可用）"}
+    body_text = product.get("bodyText") or ""
+    images = product.get("images") or []
+    sku_images = product.get("skuImages") or []
+    detail_images = product.get("detailImages") or []
+
+    # 1. 标题：沿用原商品标题 + 违禁词过滤（该过滤的还是要过滤）
+    cfg_title = _clean_title(title)
+    if len(cfg_title) > 30:
+        cfg_title = cfg_title[:30]
+    if not cfg_title:
+        cfg_title = title[:30]
+
+    # 2. 规格 + 进价：从 bodyText 确定性提取（SKU名 / ¥价格 / 库存N 结构）
+    pairs = _extract_sku_pairs(body_text)
+    if not pairs:
+        # 提取不到结构化 SKU：从 bodyText 找最低 ¥ 价做单 SKU 兜底
+        _prices = re.findall(r"¥\s*([\d.]+)", body_text)
+        _min_price = 0.0
+        if _prices:
+            try:
+                _min_price = min(float(p) for p in _prices)
+            except Exception:
+                _min_price = 0.0
+        if _min_price <= 0:
+            return {"config": None, "warning": "", "error": "AI 不可用且无法从页面提取进价，无法降级上架"}
+        pairs = [("默认", _min_price)]
+
+    cfg = {
+        "title": cfg_title,
+        "specs": [{"type": "款式", "values": [n for n, _p in pairs]}],
+        "priceBySpec2": {n: {"cost": _p} for n, _p in pairs},
+        "stock": 500,
+        "images": images[:10],
+        "detailImages": detail_images,
+        "attributes": {},
+    }
+
+    # 3. 类目：按标题关键词映射（确定性，不依赖 AI）
+    _fix_category_by_map(cfg, cfg_title + " " + title)
+    if not cfg.get("categoryKeyword"):
+        cfg["categoryKeyword"] = "婚庆"
+    if not cfg.get("categoryPath"):
+        cfg["categoryPath"] = "家居饰品 > 摆件 > 摆件"
+
+    # 4. 定价：calc_pricing 固定公式（与 AI 路径同一套定价参数）
+    profit_rate = float(pricing.get("profit_rate", 0.2))
+    roi = float(pricing.get("roi", 2.0))
+    aftersale_rate = float(pricing.get("aftersale_rate", 0.05))
+    freight = float(pricing.get("freight", 3.0))
+    danmai_mult = float(pricing.get("danmai_mult", 1.5))
+    ref_mult = float(pricing.get("ref_mult", 1.2))
+    price_mode = str(pricing.get("price_mode", "promo") or "promo")
+    new_pb = {}
+    max_ref = 0.0
+    for spec2_val, c in cfg["priceBySpec2"].items():
+        cost = float(c.get("cost", 0) if isinstance(c, dict) else (c or 0))
+        if cost <= 0:
+            continue
+        p = calc_pricing(cost, profit_rate, roi, aftersale_rate, freight, danmai_mult, ref_mult, price_mode=price_mode)
+        new_pb[str(spec2_val)] = {"cost": cost, "pdd": p["pdd"], "danmai": p["danmai"]}
+        max_ref = max(max_ref, p["refPrice"])
+    if not new_pb:
+        return {"config": None, "warning": "", "error": "降级定价失败（进价非法）"}
+    cfg["priceBySpec2"] = new_pb
+    cfg["refPrice"] = round(max_ref, 1)
+
+    # 5. previewImages：规格1 每个值 → 对应图（优先 SKU 图，回退主图顺序）
+    _spec1_vals = cfg["specs"][0]["values"]
+    _sku_img_pool = sku_images if sku_images else (images[:10] if images else [])
+    _pv = {}
+    for _i, _val in enumerate(_spec1_vals):
+        _pv[str(_val)] = (
+            _sku_img_pool[_i] if _i < len(_sku_img_pool)
+            else (_sku_img_pool[-1] if _sku_img_pool else "")
+        )
+    cfg["previewImages"] = _pv
+
+    warning = "AI 配置不可用，已降级沿用原商品标题 + 确定性规格/定价/类目"
+    return {"config": cfg, "warning": warning, "error": None}
+
+
 def ai_fix_category(product: dict, failed_path: str = "", failed_kw: str = "") -> dict:
     """类目匹配失败后，让 DeepSeek 重新分析商品、生成拼多多真实存在的类目。
 
@@ -2835,7 +2929,8 @@ def ai_diagnose_publish_failure(title: str = "", stage: str = "", error_msg: str
         "1. can_retry=true：失败是暂时性/时序性/随机性的，重跑大概率成功。包括：CDP超时、连接中断(ECONNREFUSED)、"
         "WebSocket 参数错误(Invalid parameters)、页面加载慢导致的时序问题、图片上传偶发失败、按钮点击偶发失败。\n"
         "2. can_retry=false：失败是确定性的，重跑还是同样结果。包括：1688 货源链接失效/短链跳转失败/验证码拦截、"
-        "类目在拼多多不存在且已多次 AI 修复仍失败、资质/品牌被拦截、重复上架、类目确认按钮找不到（页面改版）。\n"
+        "类目在拼多多不存在且已多次 AI 修复仍失败、资质/品牌被拦截、重复上架、类目确认按钮找不到（页面改版）、"
+        "主图 file input 找不到或图片上传连续多轮仍 0 张（页面改版 selector 失效，重跑不会自动换 selector）。\n"
         "3. 拿不准时，宁可选 can_retry=true（重跑一次成本低，且重跑失败会自动停），但「链接失效」「验证码」「资质拦截」"
         "「重复上架」这几类确定性失败必须 can_retry=false。\n"
         "只输出 JSON，不要 markdown 代码块，不要多余文字。"

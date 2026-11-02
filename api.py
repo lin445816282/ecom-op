@@ -34,7 +34,7 @@ CDP_INSTANCES = [
     {"port": 9230, "label": "如若月下", "profile": r"C:\tmp\edge-cdp-ruoyue", "role": "拼多多店铺", "shop_id": 3, "target": "https://mms.pinduoduo.com"},
     {"port": 9234, "label": "闲时来工艺", "profile": r"C:\tmp\edge-cdp-xianshi", "role": "拼多多店铺", "shop_id": 1, "target": "https://mms.pinduoduo.com"},
     {"port": 9228, "label": "欧世艺", "profile": r"C:\tmp\edge-cdp-oshiyi", "role": "拼多多店铺", "shop_id": 6, "target": "https://mms.pinduoduo.com"},
-    {"port": 9222, "label": "淘宝发品", "profile": r"C:\tmp\edge-cdp-taobao", "role": "淘宝店铺", "shop_id": 12, "target": "https://myseller.taobao.com"},
+    {"port": 9222, "label": "淘宝发品", "profile": r"C:\tmp\edge-cdp-taobao", "role": "淘宝店铺", "shop_id": 12, "target": "https://myseller.taobao.com/sell/seller/on_sale.htm"},
 ]
 NODE_EXE = "/mnt/d/Program Files/nodejs/node.exe"
 PDD_SET_TITLE_JS = r"C:\tmp\pdd_set_titles.js"
@@ -1751,8 +1751,14 @@ class Handler(BaseHTTPRequestHandler):
             outdir_wsl = "/mnt/c/tmp/pdd-publish/offerlist"
             os.makedirs(outdir_wsl, exist_ok=True)
             res = _run_node_script("fetch_offerlist.js", [prefix, outdir_win, str(CLIENT_1688_PORT)], timeout=300)
+            # 1688 风控为间歇性：脚本遇风控/请求失败时返回 {"error":...}（无 items）。
+            # 重跑一次（每次重跑脚本会重新 Page.navigate 重置限流），失败再报错。
+            if res.get("data") and isinstance(res["data"], dict) and res["data"].get("error") and not res["data"].get("items"):
+                res = _run_node_script("fetch_offerlist.js", [prefix, outdir_win, str(CLIENT_1688_PORT)], timeout=300)
             if not res.get("data"):
                 return _json(self, {"error": res.get("error") or res.get("stderr") or "采集失败"}, 500)
+            if isinstance(res["data"], dict) and res["data"].get("error"):
+                return _json(self, {"error": "采集失败: " + str(res["data"].get("error"))[:200]}, 500)
             items = res["data"].get("items") or []
             save = catalog.insert_shop_offers(supplier_id, sup.get("name") or "", prefix, items)
             return _json(self, {"ok": True, "supplier": sup, "count": len(items),
@@ -3617,12 +3623,20 @@ def _autopublish_bg(task_id: int, pricing: dict = None):
         ai = data.ai_generate_publish_config(product, pricing, shop_name=shop_name, shop_id=shop_id)
         if _overtime("ai"):
             return _fail_timeout("ai")
-        if ai.get("error"):
-            return _fail("ai", ai["error"])
-        cfg = ai.get("config") or {}
-        if not cfg:
-            return _fail("ai", "AI 未生成配置")
-        warning = ai.get("warning", "")
+        _ai_err = ai.get("error") or ("AI 未生成配置" if not ai.get("config") else "")
+        if _ai_err:
+            # AI 配置不可用 → 降级：沿用原商品标题（含违禁词过滤）+ 确定性规格/定价/类目，保证仍能上架
+            catalog.append_autopublish_log(
+                task_id, "ai", "done",
+                f"⚠️ AI 配置不可用（{_ai_err[:80]}），降级沿用原商品标题 + 确定性规格/定价/类目")
+            _fb = data.build_fallback_publish_config(product, pricing, shop_name=shop_name, shop_id=shop_id)
+            if _fb.get("error"):
+                return _fail("ai", f"AI 失败且兜底失败：{_fb['error']}")
+            cfg = _fb.get("config") or {}
+            warning = _fb.get("warning", "")
+        else:
+            cfg = ai.get("config") or {}
+            warning = ai.get("warning", "")
         # 写 AI config 缓存（供后续失败重试/同店铺同价复用）
         if _oid and cfg:
             try:

@@ -1,0 +1,18 @@
+共 2 个 publish tab
+=== TAB: https://item.upload.taobao.com/sell/v2/publish.htm?catId=201251306&gpfRenderTrace=213e04dc17929315743905693e0a87&fromAICategory=true&keyProps=%7B%7D&f
+多件优惠GS: {"value":9.5,"type":1,"enable":true}
+多件优惠DOM: NOT_FOUND
+重量GS: {"deliverWeight":"1","deliverCard":{"weight":"1"}}
+重量DOM: {"val":"1","disabled":false}
+SKU数量: {"customSalePropItems":0,"skuArr":3,"skuNames":["undefined/undefined","undefined/undefined","undefined/undefined"]}
+价格表DOM: {"rows":3,"vals":["57.30","57.30","57.30"]}
+formError: {"tbExtractWay":{"id":"tbExtractWay"},"catProp":{"itemMessage":{},"id":"catProp"},"saleProp":{"itemMessage":null,"id":"saleProp"}}
+=== TAB: https://item.upload.taobao.com/sell/v2/publish.htm?catId=50020846&gpfRenderTrace=213e03ab17929292613584001e0c64&fromAIImage=true&keyProps=%7B%7D&fromA
+多件优惠GS: {"value":9.5,"type":1,"enable":true}
+多件优惠DOM: NOT_FOUND
+重量GS: {"deliverWeight":"2","deliverCard":{"weight":"1"}}
+重量DOM: {"val":"2","disabled":false}
+SKU数量: {"customSalePropItems":0,"skuArr":1,"skuNames":["undefined/undefined"]}
+价格表DOM: {"rows":1,"vals":["57.3"]}
+formError: {"tbExtractWay":{"id":"tbExtractWay","message":[],"itemMessage":null},"catProp":{"id":"catProp","message":[],"itemMessage":null},"saleProp":{"id":"saleProp","message":[],"itemMessage":null},"sku":{"message":[{"type":"error","code":"CHK_QUANTITY_ZERO_WITH_SKU","msg":"宝贝销售规格中数量不可以全部为0，请修改后再提交"}],"id":"sku"}}
+DONE
